@@ -267,17 +267,17 @@ export default function ReviewPage() {
                     <button
                       onClick={startRawEdit}
                       disabled={editingRaw || savingRaw}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                     >
-                      <Pencil size={12} /> 编辑 Response
+                      <Pencil size={11} /> 编辑 Response
                     </button>
                   )}
                   <button
                     onClick={handleReprocess}
                     disabled={reprocessing}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                   >
-                    {reprocessing ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
+                    {reprocessing ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />}
                     重新处理
                   </button>
                   <a
