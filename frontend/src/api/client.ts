@@ -100,8 +100,11 @@ export const scanPapers = () =>
 export const processAll = () => api.post('/process').then(r => r.data)
 export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
 export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
+export const reprocessPaper = (id: number) => api.post(`/papers/${id}/reprocess`).then(r => r.data)
 export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.data)
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
+export const updatePaperResponse = (id: number, raw_llm_response: string) =>
+  api.put<PaperDetail>(`/papers/${id}/response`, { raw_llm_response }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
 

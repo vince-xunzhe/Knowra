@@ -222,6 +222,11 @@ def _parse_json_lenient(s: str) -> dict:
         raise
 
 
+def parse_extraction_response(s: str) -> dict:
+    """Parse a model response using the same lenient rules as extraction."""
+    return _parse_json_lenient(s)
+
+
 # --- public entry point ------------------------------------------------------
 
 def extract_knowledge_from_paper(

@@ -4,7 +4,7 @@ import {
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon,
 } from 'lucide-react'
 import {
-  listPapers, processPaper, retryPaper, firstPageUrl, getStatus,
+  listPapers, processPaper, retryPaper, reprocessPaper, firstPageUrl, getStatus,
   type PaperRecord,
 } from '../api/client'
 
@@ -96,6 +96,18 @@ export default function PapersPage() {
     setPendingIds(prev => new Set(prev).add(p.id))
     try {
       await retryPaper(p.id)
+    } catch {
+      setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
+    }
+  }
+
+  const handleReprocess = async (p: PaperRecord) => {
+    const ok = confirm('确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。')
+    if (!ok) return
+
+    setPendingIds(prev => new Set(prev).add(p.id))
+    try {
+      await reprocessPaper(p.id)
     } catch {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
@@ -330,6 +342,19 @@ export default function PapersPage() {
                   <><Loader2 size={14} className="animate-spin" /> 处理中…</>
                 ) : (
                   <><RotateCw size={14} /> 重试</>
+                )}
+              </button>
+            )}
+            {selected.processed && (
+              <button
+                onClick={() => handleReprocess(selected)}
+                disabled={isPending(selected)}
+                className="w-full flex items-center justify-center gap-2 text-sm bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 py-2.5 rounded-lg transition-colors disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed font-medium"
+              >
+                {isPending(selected) ? (
+                  <><Loader2 size={14} className="animate-spin" /> 处理中…</>
+                ) : (
+                  <><RotateCw size={14} /> 重新处理</>
                 )}
               </button>
             )}

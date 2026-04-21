@@ -3,9 +3,11 @@ import {
   CheckCircle2, XCircle, Clock, Search, ExternalLink,
   BookOpen, Users, Calendar, Sparkles, Target, Lightbulb,
   Wrench, Database, Swords, Award, Flag, Hash, FileText,
+  Pencil, Save, RotateCw, Loader2, X,
 } from 'lucide-react'
 import {
-  listPapers, getPaper, pdfFileUrl, firstPageUrl,
+  listPapers, getPaper, reprocessPaper, updatePaperResponse,
+  pdfFileUrl, firstPageUrl,
   type PaperRecord, type PaperDetail,
 } from '../api/client'
 
@@ -40,6 +42,11 @@ export default function ReviewPage() {
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [showRaw, setShowRaw] = useState(false)
+  const [editingRaw, setEditingRaw] = useState(false)
+  const [rawDraft, setRawDraft] = useState('')
+  const [rawError, setRawError] = useState<string | null>(null)
+  const [savingRaw, setSavingRaw] = useState(false)
+  const [reprocessing, setReprocessing] = useState(false)
 
   useEffect(() => {
     listPapers().then(ps => {
@@ -88,8 +95,71 @@ export default function ReviewPage() {
   const rawResponse = visibleDetail?.raw_llm_response || ''
   const parsed = useMemo<PaperExtraction | null>(() => {
     if (!rawResponse) return null
-    try { return JSON.parse(rawResponse) as PaperExtraction } catch { return null }
+    return parseExtractionResponse(rawResponse)
   }, [rawResponse])
+
+  const selectPaper = (id: number) => {
+    setSelectedId(id)
+    setEditingRaw(false)
+    setRawDraft('')
+    setRawError(null)
+  }
+
+  const startRawEdit = () => {
+    if (!visibleDetail) return
+    setRawDraft(visibleDetail.raw_llm_response || '')
+    setRawError(null)
+    setEditingRaw(true)
+  }
+
+  const cancelRawEdit = () => {
+    setEditingRaw(false)
+    setRawDraft('')
+    setRawError(null)
+  }
+
+  const saveRawEdit = async () => {
+    if (!visibleDetail) return
+    setSavingRaw(true)
+    setRawError(null)
+    try {
+      const updated = await updatePaperResponse(visibleDetail.id, rawDraft)
+      setDetail(updated)
+      setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
+      setEditingRaw(false)
+      setRawDraft('')
+    } catch (error) {
+      setRawError(getApiErrorMessage(error))
+    } finally {
+      setSavingRaw(false)
+    }
+  }
+
+  const handleReprocess = async () => {
+    if (!visibleDetail) return
+    const ok = confirm('确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。')
+    if (!ok) return
+
+    setReprocessing(true)
+    try {
+      await reprocessPaper(visibleDetail.id)
+      const updated = {
+        ...visibleDetail,
+        processed: false,
+        processed_at: null,
+        raw_llm_response: null,
+        error: null,
+        knowledge_nodes: [],
+      }
+      setDetail(updated)
+      setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
+      cancelRawEdit()
+    } catch (error) {
+      setRawError(getApiErrorMessage(error))
+    } finally {
+      setReprocessing(false)
+    }
+  }
 
   return (
     <div className="flex h-full text-slate-200">
@@ -147,7 +217,7 @@ export default function ReviewPage() {
                 return (
                   <li key={p.id}>
                     <button
-                      onClick={() => setSelectedId(p.id)}
+                      onClick={() => selectPaper(p.id)}
                       className={`w-full flex flex-col gap-1.5 px-4 py-3.5 text-left border-l-2 transition-colors ${
                         active
                           ? 'bg-indigo-500/10 border-l-indigo-400'
@@ -192,14 +262,33 @@ export default function ReviewPage() {
                     于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
                   </span>
                 )}
-                <a
-                  href={pdfFileUrl(visibleDetail.id)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="ml-auto inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-                >
-                  <ExternalLink size={12} /> 打开 PDF
-                </a>
+                <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+                  {visibleDetail.raw_llm_response && (
+                    <button
+                      onClick={startRawEdit}
+                      disabled={editingRaw || savingRaw}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+                    >
+                      <Pencil size={12} /> 编辑 Response
+                    </button>
+                  )}
+                  <button
+                    onClick={handleReprocess}
+                    disabled={reprocessing}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-2.5 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+                  >
+                    {reprocessing ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
+                    重新处理
+                  </button>
+                  <a
+                    href={pdfFileUrl(visibleDetail.id)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    <ExternalLink size={12} /> 打开 PDF
+                  </a>
+                </div>
               </div>
 
               <h1 className="text-2xl font-semibold text-white leading-tight tracking-tight">
@@ -228,7 +317,16 @@ export default function ReviewPage() {
               </div>
             </header>
 
-            {visibleDetail.error ? (
+            {editingRaw ? (
+              <RawResponseEditor
+                value={rawDraft}
+                error={rawError}
+                saving={savingRaw}
+                onChange={setRawDraft}
+                onCancel={cancelRawEdit}
+                onSave={saveRawEdit}
+              />
+            ) : visibleDetail.error ? (
               <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
                 <p className="font-semibold mb-2 flex items-center gap-2">
                   <XCircle size={14} /> 处理失败
@@ -244,6 +342,12 @@ export default function ReviewPage() {
             ) : (
               <div>
                 <p className="text-sm text-amber-400 mb-2">⚠ 无法解析为 JSON，显示原文</p>
+                <button
+                  onClick={startRawEdit}
+                  className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/15"
+                >
+                  <Pencil size={13} /> 编辑并修复 Response
+                </button>
                 <pre className="text-xs text-slate-300 bg-slate-900/60 rounded-xl p-4 whitespace-pre-wrap break-words font-mono leading-relaxed">
                   {visibleDetail.raw_llm_response}
                 </pre>
@@ -306,6 +410,55 @@ export default function ReviewPage() {
         </aside>
       )}
     </div>
+  )
+}
+
+function RawResponseEditor({
+  value, error, saving, onChange, onCancel, onSave,
+}: {
+  value: string
+  error: string | null
+  saving: boolean
+  onChange: (value: string) => void
+  onCancel: () => void
+  onSave: () => void
+}) {
+  return (
+    <ReviewBlock icon={<Pencil size={14} />} title="编辑模型 Response">
+      <div className="space-y-3">
+        <p className="text-sm leading-6 text-slate-400">
+          修正 JSON 格式或字段小错误后保存，系统会重新解析这份 response，并重建当前论文的图谱节点。
+        </p>
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
+            {error}
+          </div>
+        )}
+        <textarea
+          value={value}
+          onChange={e => onChange(e.target.value)}
+          spellCheck={false}
+          className="min-h-[28rem] w-full resize-y rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60"
+        />
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+          >
+            <X size={14} /> 取消
+          </button>
+          <button
+            onClick={onSave}
+            disabled={saving || !value.trim()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            保存并重建
+          </button>
+        </div>
+      </div>
+    </ReviewBlock>
   )
 }
 
@@ -521,4 +674,34 @@ function ReviewBlock({
       <div className="px-4 py-4 text-sm">{children}</div>
     </section>
   )
+}
+
+function parseExtractionResponse(raw: string): PaperExtraction | null {
+  let text = raw.replace(/【[^】]*?†[^】]*?】/g, '').trim()
+  if (text.startsWith('```')) {
+    const lines = text.split('\n')
+    if (lines[0]?.startsWith('```')) lines.shift()
+    if (lines.at(-1)?.startsWith('```')) lines.pop()
+    text = lines.join('\n').trim()
+  }
+
+  try {
+    return JSON.parse(text) as PaperExtraction
+  } catch {
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(text.slice(start, end + 1)) as PaperExtraction
+      } catch {
+        return null
+      }
+    }
+    return null
+  }
+}
+
+function getApiErrorMessage(error: unknown): string {
+  const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
+  return apiError.response?.data?.detail || apiError.message || '操作失败'
 }

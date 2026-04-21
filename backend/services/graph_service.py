@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from models import KnowledgeNode, KnowledgeEdge
 from services.vlm_service import get_embedding, cosine_similarity
 
@@ -130,6 +130,44 @@ def _add_similarity_edges(db: Session, node: KnowledgeNode, threshold: float):
         sim = cosine_similarity(node.embedding, other.embedding)
         if sim >= threshold:
             _add_edge(db, node.id, other.id, "similar", round(sim, 4))
+
+
+def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
+    """Detach or delete graph nodes that were created from one paper.
+
+    Shared nodes stay in the graph with this paper id removed from their
+    source list. Paper-only nodes, including findings, are deleted with their
+    connected edges so a reprocess or manual repair does not duplicate them.
+    """
+    nodes_to_delete: list[KnowledgeNode] = []
+    removed = 0
+
+    for node in db.query(KnowledgeNode).all():
+        raw_ids = node.source_paper_ids or []
+        ids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
+        if not any(str(source_id) == str(paper_id) for source_id in ids):
+            continue
+
+        remaining = [source_id for source_id in ids if str(source_id) != str(paper_id)]
+        if remaining:
+            node.source_paper_ids = remaining
+        else:
+            nodes_to_delete.append(node)
+        removed += 1
+
+    delete_ids = [node.id for node in nodes_to_delete]
+    if delete_ids:
+        db.query(KnowledgeEdge).filter(
+            or_(
+                KnowledgeEdge.source_id.in_(delete_ids),
+                KnowledgeEdge.target_id.in_(delete_ids),
+            )
+        ).delete(synchronize_session=False)
+        for node in nodes_to_delete:
+            db.delete(node)
+
+    db.flush()
+    return removed
 
 
 def add_nodes_from_paper_extraction(
