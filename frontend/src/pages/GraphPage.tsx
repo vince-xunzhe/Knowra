@@ -176,13 +176,18 @@ export default function GraphPage() {
 
           {/* Search */}
           <div className="relative min-w-[17rem] flex-1 max-w-md xl:ml-2">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-500" />
+            {!searchQuery && (
+              <span className="pointer-events-none absolute left-9 top-1/2 z-10 -translate-y-1/2 text-sm leading-none text-slate-500">
+                搜索知识节点
+              </span>
+            )}
             <input
               type="text"
-              placeholder="搜索知识节点"
+              aria-label="搜索知识节点"
               value={searchQuery}
               onChange={e => handleSearch(e.target.value)}
-              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-sm text-slate-200 pl-9 pr-9 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
+              className="h-9 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 pl-9 pr-9 text-sm leading-5 text-slate-200 transition-colors focus:border-indigo-500/60 focus:bg-slate-900 focus:outline-none"
             />
             {searchQuery && (
               <button
