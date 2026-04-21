@@ -358,21 +358,13 @@ export default function ReviewPage() {
             {visibleDetail.raw_llm_response && (
               <details className="mt-10 border-t border-slate-800 pt-6" open={showRaw} onToggle={e => setShowRaw((e.target as HTMLDetailsElement).open)}>
                 <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none">
-                  查看原始模型输出 / 提取文本
+                  查看原始模型输出
                 </summary>
-                <div className="mt-4 grid gap-4 xl:grid-cols-2">
-                  <div>
-                    <p className="section-label mb-2">模型原文 JSON</p>
-                    <pre className="text-[11px] text-slate-400 bg-slate-900/60 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono leading-relaxed">
-                      {visibleDetail.raw_llm_response}
-                    </pre>
-                  </div>
-                  <div>
-                    <p className="section-label mb-2">PDF 文本（前 5000 字）</p>
-                    <pre className="text-[11px] text-slate-400 bg-slate-900/60 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono leading-relaxed">
-                      {(visibleDetail.extracted_text || '').slice(0, 5000)}
-                    </pre>
-                  </div>
+                <div className="mt-4">
+                  <p className="section-label mb-2">模型原文 JSON</p>
+                  <pre className="text-[11px] text-slate-400 bg-slate-900/60 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono leading-relaxed">
+                    {visibleDetail.raw_llm_response}
+                  </pre>
                 </div>
               </details>
             )}
