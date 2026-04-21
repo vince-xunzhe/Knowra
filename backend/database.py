@@ -21,6 +21,8 @@ def _migrate():
         existing = {row[1] for row in cols}
         if "openai_file_id" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN openai_file_id VARCHAR"))
+        if "notes" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN notes TEXT"))
 
 
 def init_db():

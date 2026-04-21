@@ -4,10 +4,12 @@
   color-scheme: dark;
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 html, body {
@@ -158,6 +160,107 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .text-safe-wrap {
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+/* Markdown notes — paper review personal notes */
+.markdown-notes {
+  overflow-wrap: anywhere;
+}
+.markdown-notes > * + * {
+  margin-top: 0.9em;
+}
+.markdown-notes h1,
+.markdown-notes h2,
+.markdown-notes h3,
+.markdown-notes h4 {
+  color: #f1f5f9;
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.4em;
+}
+.markdown-notes h1 { font-size: 1.35rem; }
+.markdown-notes h2 { font-size: 1.15rem; }
+.markdown-notes h3 { font-size: 1rem; }
+.markdown-notes h4 { font-size: 0.9rem; color: #cbd5e1; }
+.markdown-notes p {
+  line-height: 1.78;
+}
+.markdown-notes a {
+  color: #818cf8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.markdown-notes a:hover { color: #a5b4fc; }
+.markdown-notes strong { color: #f1f5f9; font-weight: 600; }
+.markdown-notes em { color: #e2e8f0; }
+.markdown-notes ul,
+.markdown-notes ol {
+  padding-left: 1.4em;
+}
+.markdown-notes ul { list-style: disc; }
+.markdown-notes ol { list-style: decimal; }
+.markdown-notes li + li { margin-top: 0.25em; }
+.markdown-notes li > ul,
+.markdown-notes li > ol { margin-top: 0.25em; }
+.markdown-notes blockquote {
+  border-left: 3px solid rgba(99, 102, 241, 0.5);
+  padding: 0.2em 0 0.2em 0.9em;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.35);
+  border-radius: 0 0.375rem 0.375rem 0;
+}
+.markdown-notes code {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 0.86em;
+  background: rgba(30, 41, 59, 0.7);
+  padding: 0.1em 0.4em;
+  border-radius: 0.3rem;
+  color: #fca5a5;
+  border: 1px solid rgba(51, 65, 85, 0.6);
+}
+.markdown-notes pre {
+  background: rgba(2, 6, 23, 0.6);
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  overflow-x: auto;
+}
+.markdown-notes pre code {
+  background: transparent;
+  padding: 0;
+  border: 0;
+  color: #e2e8f0;
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+.markdown-notes table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.86rem;
+}
+.markdown-notes th,
+.markdown-notes td {
+  border: 1px solid rgba(51, 65, 85, 0.6);
+  padding: 0.45rem 0.7rem;
+  text-align: left;
+}
+.markdown-notes th {
+  background: rgba(30, 41, 59, 0.6);
+  color: #f1f5f9;
+  font-weight: 600;
+}
+.markdown-notes hr {
+  border: 0;
+  border-top: 1px solid rgba(51, 65, 85, 0.6);
+  margin: 1.4em 0;
+}
+.markdown-notes img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(51, 65, 85, 0.5);
+}
+.markdown-notes input[type="checkbox"] {
+  margin-right: 0.4em;
 }
 
 /* Animation helpers */

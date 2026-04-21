@@ -25,6 +25,7 @@ class Paper(Base):
     processed = Column(Boolean, default=False)
     processed_at = Column(DateTime, nullable=True)
     raw_llm_response = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)
     # OpenAI Files API — cached file_id so we don't re-upload the same PDF
     openai_file_id = Column(String, nullable=True)

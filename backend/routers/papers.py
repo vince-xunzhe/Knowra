@@ -24,6 +24,10 @@ class RawResponseUpdate(BaseModel):
     raw_llm_response: str
 
 
+class NotesUpdate(BaseModel):
+    notes: str
+
+
 def _nodes_for_paper(db: Session, paper_id: int):
     nodes = db.query(KnowledgeNode).all()
     matches = []
@@ -48,6 +52,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "processed": p.processed,
         "processed_at": p.processed_at.isoformat() if p.processed_at else None,
         "raw_llm_response": p.raw_llm_response,
+        "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": bool(p.first_page_image_path),
         "knowledge_nodes": [
@@ -339,6 +344,22 @@ def update_paper_response(
         cfg.get("similarity_threshold", 0.6),
         db,
     )
+    db.commit()
+    db.refresh(p)
+    return _serialize_paper_detail(p, db)
+
+
+@router.put("/papers/{paper_id}/notes")
+def update_paper_notes(
+    paper_id: int,
+    body: NotesUpdate,
+    db: Session = Depends(get_db),
+):
+    """Save user-authored markdown notes for a paper."""
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    p.notes = body.notes
     db.commit()
     db.refresh(p)
     return _serialize_paper_detail(p, db)

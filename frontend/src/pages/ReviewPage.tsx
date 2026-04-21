@@ -1,12 +1,14 @@
 import { useEffect, useState, useMemo } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import {
   CheckCircle2, XCircle, Clock, Search, ExternalLink,
   BookOpen, Users, Calendar, Sparkles, Target, Lightbulb,
   Wrench, Database, Swords, Award, Flag, Hash, FileText,
-  Pencil, Save, RotateCw, Loader2, X,
+  Pencil, Save, RotateCw, Loader2, X, NotebookPen, Eye,
 } from 'lucide-react'
 import {
-  listPapers, getPaper, reprocessPaper, updatePaperResponse,
+  listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperNotes,
   pdfFileUrl, firstPageUrl,
   type PaperRecord, type PaperDetail,
 } from '../api/client'
@@ -174,13 +176,13 @@ export default function ReviewPage() {
             <span className="text-xs text-slate-500 tabular-nums">{filtered.length} / {papers.length}</span>
           </div>
           <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
             <input
               type="text"
               placeholder="搜索标题、作者、文件名"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-sm text-slate-200 pl-9 pr-3 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
+              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-sm text-slate-200 pl-10 pr-3 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
             />
           </div>
           <div className="flex flex-wrap gap-1.5 text-xs">
@@ -252,7 +254,7 @@ export default function ReviewPage() {
             {papers.length === 0 ? '还没有论文' : '选择左侧论文查看详情'}
           </div>
         ) : (
-          <article className="max-w-[58rem] mx-auto px-6 xl:px-10 py-10 fade-in">
+          <article className="max-w-[84rem] mx-auto px-6 xl:px-10 py-10 fade-in">
             {/* Paper header */}
             <header className="mb-8">
               <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -269,7 +271,7 @@ export default function ReviewPage() {
                       disabled={editingRaw || savingRaw}
                       className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                     >
-                      <Pencil size={11} /> 编辑 Response
+                      <Pencil size={10} /> 编辑 Response
                     </button>
                   )}
                   <button
@@ -277,7 +279,7 @@ export default function ReviewPage() {
                     disabled={reprocessing}
                     className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                   >
-                    {reprocessing ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />}
+                    {reprocessing ? <Loader2 size={10} className="animate-spin" /> : <RotateCw size={10} />}
                     重新处理
                   </button>
                   <a
@@ -326,31 +328,49 @@ export default function ReviewPage() {
                 onCancel={cancelRawEdit}
                 onSave={saveRawEdit}
               />
-            ) : visibleDetail.error ? (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
-                <p className="font-semibold mb-2 flex items-center gap-2">
-                  <XCircle size={14} /> 处理失败
-                </p>
-                <p className="break-words leading-relaxed">{visibleDetail.error}</p>
-              </div>
-            ) : !visibleDetail.raw_llm_response ? (
-              <div className="text-sm text-slate-500 py-8 text-center">
-                该论文尚未处理。回到论文库点击「立即处理」。
-              </div>
-            ) : parsed ? (
-              <StructuredBody data={parsed} detail={visibleDetail} />
             ) : (
-              <div>
-                <p className="text-sm text-amber-400 mb-2">⚠ 无法解析为 JSON，显示原文</p>
-                <button
-                  onClick={startRawEdit}
-                  className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/15"
-                >
-                  <Pencil size={13} /> 编辑并修复 Response
-                </button>
-                <pre className="text-xs text-slate-300 bg-slate-900/60 rounded-xl p-4 whitespace-pre-wrap break-words font-mono leading-relaxed">
-                  {visibleDetail.raw_llm_response}
-                </pre>
+              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] items-start">
+                <div className="min-w-0">
+                  {visibleDetail.error ? (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
+                      <p className="font-semibold mb-2 flex items-center gap-2">
+                        <XCircle size={14} /> 处理失败
+                      </p>
+                      <p className="break-words leading-relaxed">{visibleDetail.error}</p>
+                    </div>
+                  ) : !visibleDetail.raw_llm_response ? (
+                    <div className="text-sm text-slate-500 py-8 text-center">
+                      该论文尚未处理。回到论文库点击「立即处理」。
+                    </div>
+                  ) : parsed ? (
+                    <StructuredBody data={parsed} detail={visibleDetail} />
+                  ) : (
+                    <div>
+                      <p className="text-sm text-amber-400 mb-2">⚠ 无法解析为 JSON，显示原文</p>
+                      <button
+                        onClick={startRawEdit}
+                        className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/15"
+                      >
+                        <Pencil size={13} /> 编辑并修复 Response
+                      </button>
+                      <pre className="text-xs text-slate-300 bg-slate-900/60 rounded-xl p-4 whitespace-pre-wrap break-words font-mono leading-relaxed">
+                        {visibleDetail.raw_llm_response}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+
+                {/* Personal notes — markdown, side column */}
+                <div className="min-w-0 lg:sticky lg:top-6">
+                  <NotesSection
+                    key={visibleDetail.id}
+                    paper={visibleDetail}
+                    onUpdate={updated => {
+                      setDetail(updated)
+                      setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
+                    }}
+                  />
+                </div>
               </div>
             )}
 
@@ -691,6 +711,116 @@ function parseExtractionResponse(raw: string): PaperExtraction | null {
     }
     return null
   }
+}
+
+function NotesSection({
+  paper, onUpdate,
+}: {
+  paper: PaperDetail
+  onUpdate: (paper: PaperDetail) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(paper.notes || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const startEdit = () => {
+    setDraft(paper.notes || '')
+    setError(null)
+    setEditing(true)
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setError(null)
+  }
+
+  const saveEdit = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      const updated = await updatePaperNotes(paper.id, draft)
+      onUpdate(updated)
+      setEditing(false)
+    } catch (e) {
+      setError(getApiErrorMessage(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasNotes = (paper.notes || '').trim().length > 0
+
+  return (
+    <ReviewBlock icon={<NotebookPen size={14} />} title="个人笔记">
+      {editing ? (
+        <div className="space-y-3">
+          {error && (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
+              {error}
+            </div>
+          )}
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            spellCheck={false}
+            autoFocus
+            placeholder="用 Markdown 记录你对这篇论文的想法、疑问、对比与延伸阅读…"
+            className="min-h-[28rem] w-full resize-y rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
+          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              onClick={cancelEdit}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+            >
+              <X size={14} /> 取消
+            </button>
+            <button
+              onClick={saveEdit}
+              disabled={saving}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
+          </div>
+        </div>
+      ) : hasNotes ? (
+        <div className="space-y-3">
+          <MarkdownView source={paper.notes} />
+          <div className="flex justify-end">
+            <button
+              onClick={startEdit}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200"
+            >
+              <Pencil size={11} /> 编辑笔记
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col items-start gap-3">
+          <p className="text-sm text-slate-500 inline-flex items-center gap-1.5">
+            <Eye size={13} /> 还没有笔记。写下你对这篇论文的思考、复述或延伸阅读。
+          </p>
+          <button
+            onClick={startEdit}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200 transition-colors hover:bg-indigo-500/15"
+          >
+            <Pencil size={13} /> 开始撰写
+          </button>
+        </div>
+      )}
+    </ReviewBlock>
+  )
+}
+
+function MarkdownView({ source }: { source: string }) {
+  return (
+    <div className="markdown-notes text-sm leading-7 text-slate-200">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+    </div>
+  )
 }
 
 function getApiErrorMessage(error: unknown): string {

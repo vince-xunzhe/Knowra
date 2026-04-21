@@ -18,6 +18,7 @@ export interface PaperRecord {
 export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
+  notes: string
   has_first_page_image: boolean
   knowledge_nodes: { id: number; title: string; node_type: string; tags: string[] }[]
 }
@@ -105,6 +106,8 @@ export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.da
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
 export const updatePaperResponse = (id: number, raw_llm_response: string) =>
   api.put<PaperDetail>(`/papers/${id}/response`, { raw_llm_response }).then(r => r.data)
+export const updatePaperNotes = (id: number, notes: string) =>
+  api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
 
