@@ -335,7 +335,7 @@ function StatusBadge({ paper, large }: { paper: PaperRecord | PaperDetail; large
 
 function StructuredBody({ data, detail }: { data: PaperExtraction; detail: PaperDetail }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {/* TL;DR / summary */}
       {data.abstract_summary && (
         <ReviewBlock icon={<Sparkles size={14} />} title="摘要">
@@ -345,7 +345,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
 
       {/* Problem + motivation side by side */}
       {(data.problem || data.motivation) && (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-6 md:grid-cols-2">
           {data.problem && (
             <ReviewBlock icon={<Target size={14} />} title="研究问题">
               <p className="leading-7 text-slate-200">{data.problem}</p>
@@ -406,7 +406,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
       {/* Datasets + Baselines */}
       {((Array.isArray(data.datasets) && data.datasets.length) ||
         (Array.isArray(data.baselines) && data.baselines.length)) && (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-6 md:grid-cols-2">
           {Array.isArray(data.datasets) && data.datasets.length > 0 && (
             <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
               <ul className="space-y-2.5">
