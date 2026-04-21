@@ -335,68 +335,63 @@ function StatusBadge({ paper, large }: { paper: PaperRecord | PaperDetail; large
 
 function StructuredBody({ data, detail }: { data: PaperExtraction; detail: PaperDetail }) {
   return (
-    <div className="space-y-8">
+    <div className="space-y-4">
       {/* TL;DR / summary */}
       {data.abstract_summary && (
-        <section>
-          <SectionHeader icon={<Sparkles size={14} />} label="摘要" />
-          <div className="surface-card p-5">
-            <p className="prose-reading">{data.abstract_summary}</p>
-          </div>
-        </section>
+        <ReviewBlock icon={<Sparkles size={14} />} title="摘要">
+          <p className="prose-reading text-[14px]">{data.abstract_summary}</p>
+        </ReviewBlock>
       )}
 
       {/* Problem + motivation side by side */}
       {(data.problem || data.motivation) && (
-        <section className="grid md:grid-cols-2 gap-5">
+        <div className="grid gap-4 md:grid-cols-2">
           {data.problem && (
-            <Card icon={<Target size={13} />} label="研究问题">
-              <p className="text-slate-200 leading-relaxed">{data.problem}</p>
-            </Card>
+            <ReviewBlock icon={<Target size={14} />} title="研究问题">
+              <p className="leading-7 text-slate-200">{data.problem}</p>
+            </ReviewBlock>
           )}
           {data.motivation && (
-            <Card icon={<Lightbulb size={13} />} label="研究动机">
-              <p className="text-slate-200 leading-relaxed">{data.motivation}</p>
-            </Card>
+            <ReviewBlock icon={<Lightbulb size={14} />} title="研究动机">
+              <p className="leading-7 text-slate-200">{data.motivation}</p>
+            </ReviewBlock>
           )}
-        </section>
+        </div>
       )}
 
       {/* Problem area */}
       {data.problem_area && (
-        <section>
-          <SectionHeader icon={<Flag size={14} />} label="研究领域" />
-          <span className="chip bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 text-sm px-3 py-1">
+        <ReviewBlock icon={<Flag size={14} />} title="研究领域">
+          <span className="inline-flex rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-cyan-200">
             {data.problem_area}
           </span>
-        </section>
+        </ReviewBlock>
       )}
 
       {/* Techniques */}
       {Array.isArray(data.techniques) && data.techniques.length > 0 && (
-        <section>
-          <SectionHeader icon={<Wrench size={14} />} label={`技术方法 · ${data.techniques.length}`} />
+        <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
           <div className="grid md:grid-cols-2 gap-3">
             {data.techniques.map((t, i) => (
               <div
                 key={i}
-                className="bg-slate-900/60 border border-slate-800 rounded-xl p-4 hover:border-emerald-500/30 transition-colors"
+                className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3 transition-colors hover:border-slate-700"
               >
-                <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="text-emerald-300 font-semibold text-base">{t.name}</span>
-                  {t.role && <span className="text-xs text-slate-500">{t.role}</span>}
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span className="text-sm font-semibold leading-6 text-emerald-200">{t.name}</span>
+                  {t.role && <span className="text-xs leading-5 text-slate-500">{t.role}</span>}
                 </div>
                 {Array.isArray(t.aliases) && t.aliases.length > 0 && (
-                  <p className="text-xs text-slate-500 mt-1.5">
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
                     <span className="text-slate-600">别名 </span>
                     {t.aliases.join(' · ')}
                   </p>
                 )}
                 {Array.isArray(t.builds_on) && t.builds_on.length > 0 && (
-                  <p className="text-xs text-slate-400 mt-2 flex items-center gap-1.5 flex-wrap">
+                  <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
                     <span className="text-slate-600">基于</span>
                     {t.builds_on.map((b, j) => (
-                      <span key={j} className="chip bg-emerald-500/5 text-emerald-400/80 border border-emerald-500/15 text-[11px]">
+                      <span key={j} className="rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-[11px] text-emerald-200/80">
                         {b}
                       </span>
                     ))}
@@ -405,22 +400,22 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
               </div>
             ))}
           </div>
-        </section>
+        </ReviewBlock>
       )}
 
       {/* Datasets + Baselines */}
       {((Array.isArray(data.datasets) && data.datasets.length) ||
         (Array.isArray(data.baselines) && data.baselines.length)) && (
-        <section className="grid md:grid-cols-2 gap-5">
+        <div className="grid gap-4 md:grid-cols-2">
           {Array.isArray(data.datasets) && data.datasets.length > 0 && (
-            <Card icon={<Database size={13} />} label={`数据集 · ${data.datasets.length}`}>
-              <ul className="space-y-2">
+            <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
+              <ul className="space-y-2.5">
                 {data.datasets.map((d, i) => {
                   const name = typeof d === 'string' ? d : d.name
                   const purpose = typeof d === 'object' ? d.purpose || d.usage : null
                   return (
-                    <li key={i} className="flex items-baseline gap-2 flex-wrap">
-                      <span className="chip bg-amber-500/10 text-amber-300 border border-amber-500/20">
+                    <li key={i} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2">
+                      <span className="text-sm font-medium text-amber-200">
                         {name}
                       </span>
                       {purpose && <span className="text-xs text-slate-500">{purpose}</span>}
@@ -428,75 +423,72 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
                   )
                 })}
               </ul>
-            </Card>
+            </ReviewBlock>
           )}
           {Array.isArray(data.baselines) && data.baselines.length > 0 && (
-            <Card icon={<Swords size={13} />} label={`对比基线 · ${data.baselines.length}`}>
-              <div className="flex flex-wrap gap-1.5">
+            <ReviewBlock icon={<Swords size={14} />} title="对比基线" meta={`${data.baselines.length}`}>
+              <div className="flex flex-wrap gap-2">
                 {data.baselines.map((b, i) => (
-                  <span key={i} className="chip bg-pink-500/10 text-pink-300 border border-pink-500/20">
+                  <span key={i} className="rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-pink-200">
                     {typeof b === 'string' ? b : b.name}
                   </span>
                 ))}
               </div>
-            </Card>
+            </ReviewBlock>
           )}
-        </section>
+        </div>
       )}
 
       {/* Contributions */}
       {Array.isArray(data.contributions) && data.contributions.length > 0 && (
-        <section>
-          <SectionHeader icon={<Award size={14} />} label="主要贡献" />
+        <ReviewBlock icon={<Award size={14} />} title="主要贡献" meta={`${data.contributions.length}`}>
           <ol className="space-y-2.5">
             {data.contributions.map((c, i) => {
               const text = typeof c === 'string' ? c : (c.short || c.detail || JSON.stringify(c))
               return (
-                <li key={i} className="flex gap-3">
-                  <span className="shrink-0 w-6 h-6 rounded-full bg-indigo-500/15 text-indigo-300 text-xs font-semibold flex items-center justify-center mt-0.5">
+                <li key={i} className="flex gap-3 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700/70 bg-slate-900 text-xs font-semibold text-indigo-200">
                     {i + 1}
                   </span>
-                  <p className="text-slate-200 leading-relaxed pt-0.5">{text}</p>
+                  <p className="pt-0.5 leading-7 text-slate-200">{text}</p>
                 </li>
               )
             })}
           </ol>
-        </section>
+        </ReviewBlock>
       )}
 
       {/* Key findings */}
       {Array.isArray(data.key_findings) && data.key_findings.length > 0 && (
-        <section>
-          <SectionHeader icon={<Lightbulb size={14} />} label={`关键发现 · ${data.key_findings.length}`} />
-          <div className="space-y-3">
+        <ReviewBlock icon={<Lightbulb size={14} />} title="关键发现" meta={`${data.key_findings.length}`}>
+          <div className="space-y-2.5">
             {data.key_findings.map((f, i) => (
               <div
                 key={i}
-                className="bg-gradient-to-br from-amber-500/5 to-transparent border border-amber-500/20 rounded-xl p-4"
+                className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3"
               >
                 {typeof f === 'string' ? (
-                  <p className="text-slate-200 leading-relaxed">{f}</p>
+                  <p className="leading-7 text-slate-200">{f}</p>
                 ) : (
                   <>
-                    {f.short && <p className="text-amber-200 font-medium leading-snug">{f.short}</p>}
-                    {f.detail && <p className="text-slate-400 text-sm mt-2 leading-relaxed">{f.detail}</p>}
+                    {f.short && <p className="font-medium leading-6 text-amber-100">{f.short}</p>}
+                    {f.detail && <p className="mt-1.5 text-sm leading-7 text-slate-400">{f.detail}</p>}
                   </>
                 )}
               </div>
             ))}
           </div>
-        </section>
+        </ReviewBlock>
       )}
 
       {/* Generated nodes */}
       {detail.knowledge_nodes.length > 0 && (
-        <section>
-          <SectionHeader icon={<BookOpen size={14} />} label={`生成的图谱节点 · ${detail.knowledge_nodes.length}`} />
-          <div className="flex flex-wrap gap-1.5">
+        <ReviewBlock icon={<BookOpen size={14} />} title="生成的图谱节点" meta={`${detail.knowledge_nodes.length}`}>
+          <div className="flex flex-wrap gap-2">
             {detail.knowledge_nodes.map(n => (
               <span
                 key={n.id}
-                className="chip bg-slate-800/80 text-slate-300 border border-slate-700/40 text-xs"
+                className="inline-flex items-center gap-1 rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm text-slate-300"
                 title={n.node_type}
               >
                 {n.title}
@@ -504,31 +496,29 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
               </span>
             ))}
           </div>
-        </section>
+        </ReviewBlock>
       )}
     </div>
   )
 }
 
-function SectionHeader({ icon, label }: { icon: React.ReactNode; label: string }) {
+function ReviewBlock({
+  icon, title, meta, children,
+}: { icon: React.ReactNode; title: string; meta?: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 mb-3.5 text-slate-400">
-      <span className="text-slate-500">{icon}</span>
-      <h3 className="text-base font-semibold tracking-tight text-slate-100">{label}</h3>
-    </div>
-  )
-}
-
-function Card({
-  icon, label, children,
-}: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
-  return (
-    <div className="surface-card p-4">
-      <div className="flex items-center gap-1.5 mb-2.5 text-slate-500">
-        {icon}
-        <span className="panel-title">{label}</span>
+    <section className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/35 shadow-[0_12px_28px_rgba(2,6,23,0.16)]">
+      <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-4 py-2.5">
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
+          {icon}
+        </span>
+        <h3 className="text-sm font-semibold tracking-tight text-slate-100">{title}</h3>
+        {meta && (
+          <span className="ml-auto rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+            {meta}
+          </span>
+        )}
       </div>
-      <div className="text-sm">{children}</div>
-    </div>
+      <div className="px-4 py-4 text-sm">{children}</div>
+    </section>
   )
 }
