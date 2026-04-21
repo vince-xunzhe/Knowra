@@ -4,7 +4,17 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地论文知识图
 
 ## 界面预览
 
-![Knowledge Wiki 页面预览](docs/assets/knowledge-wiki-preview.png)
+### 知识图谱
+
+![Knowledge Wiki 知识图谱页面](docs/assets/knowledge-wiki-preview.png)
+
+### 论文库
+
+![Knowledge Wiki 论文库页面](docs/assets/knowledge-wiki-papers.png)
+
+### 论文回顾
+
+![Knowledge Wiki 论文回顾页面](docs/assets/knowledge-wiki-review.png)
 
 ## 功能概览
 
