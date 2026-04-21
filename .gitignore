@@ -1,0 +1,47 @@
+# macOS / editor noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+.claude/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+data/config.json
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+backend/.venv/
+
+# Node / Vite
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+*.tsbuildinfo
+
+# Runtime data
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/knowledge.db
+data/artifacts/*
+!data/artifacts/.gitkeep
+data/papers/*
+!data/papers/.gitkeep
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
