@@ -222,9 +222,194 @@ def _parse_json_lenient(s: str) -> dict:
         raise
 
 
+# --- extraction schema normalization ---------------------------------------
+#
+# Real-world observation: even with an explicit English-key schema, the model
+# sometimes returns Chinese keys ("核心贡献"), half-translated variants
+# ("principle_explanation", "background_position", "pytorch_code"), nests the
+# whole thing under a "报告" wrapper, or returns code as a string array.
+# The normalizer below canonicalizes whatever the model produced into the
+# shape the downstream graph + UI expect. Prompt + normalizer are defense in
+# depth — either alone would still leave paper reviews looking empty.
+
+_TOP_KEY_MAP = {
+    # identity
+    "标题": "title", "title": "title",
+    "作者": "authors", "authors": "authors",
+    "会议": "venue", "发表": "venue", "venue": "venue",
+    "年份": "year", "year": "year",
+    # classification
+    "研究领域": "problem_area", "problem_area": "problem_area",
+    "大模型技术栈位置": "tech_stack_position",
+    "技术栈位置": "tech_stack_position",
+    "tech_stack_position": "tech_stack_position",
+    "关键词": "keywords", "keywords": "keywords",
+    # narrative
+    "核心贡献": "core_contribution", "core_contribution": "core_contribution",
+    "摘要": "abstract_summary", "abstract_summary": "abstract_summary", "abstract": "abstract_summary",
+    "研究问题": "problem", "problem": "problem",
+    "研究动机": "motivation", "motivation": "motivation",
+    "原理解析": "principle", "核心原理": "principle",
+    "principle": "principle", "principle_explanation": "principle",
+    "关键创新点": "innovations", "创新点": "innovations",
+    "innovations": "innovations", "key_innovations": "innovations",
+    "关键结论": "experimental_gains", "实验效果": "experimental_gains",
+    "experimental_gains": "experimental_gains", "key_results": "experimental_gains",
+    "key_conclusions": "experimental_gains",
+    "背景地位": "historical_position", "historical_position": "historical_position",
+    "background_position": "historical_position", "background_status": "historical_position",
+    "background": "historical_position",
+    "局限性": "limitations", "这里的坑": "limitations", "limitations": "limitations",
+    "pitfalls": "limitations", "drawbacks": "limitations",
+    "pytorch实现": "pytorch_snippet", "pytorch代码": "pytorch_snippet",
+    "代码": "pytorch_snippet", "pytorch_snippet": "pytorch_snippet",
+    "pytorch_code": "pytorch_snippet", "torch_code": "pytorch_snippet",
+    "code_snippet": "pytorch_snippet", "implementation": "pytorch_snippet",
+    # graph
+    "技术方法": "techniques", "技术": "techniques", "techniques": "techniques",
+    "数据集": "datasets", "datasets": "datasets",
+    "对比基线": "baselines", "基线": "baselines", "baselines": "baselines",
+    "贡献": "contributions", "contributions": "contributions",
+    "关键发现": "key_findings", "key_findings": "key_findings", "findings": "key_findings",
+}
+
+_FLATTEN_WRAPPERS = {
+    "报告", "report", "论文身份卡", "身份卡",
+    "identity_card", "paper_identity_card", "paper_identity", "identity",
+}
+
+_PRINCIPLE_SUB = {
+    "比喻": "analogy", "通俗比喻": "analogy", "analogy": "analogy",
+    "数据流": "architecture_flow", "数据流动": "architecture_flow",
+    "架构流程": "architecture_flow", "架构流动": "architecture_flow",
+    "architecture_flow": "architecture_flow",
+    "关键公式": "key_formulas", "key_formulas": "key_formulas",
+}
+
+_INNOVATIONS_SUB = {
+    "以前": "previous_work", "之前": "previous_work",
+    "以前是怎么做的": "previous_work",
+    "以前的做法": "previous_work", "previous": "previous_work",
+    "previous_work": "previous_work", "prior_work": "previous_work",
+    "previous_method": "previous_work", "previous_approach": "previous_work",
+    "before": "previous_work",
+    "这篇论文": "this_work", "这篇论文怎么做": "this_work",
+    "这篇论文是怎么做的": "this_work", "本文": "this_work", "本文做法": "this_work",
+    "this_work": "this_work", "this": "this_work", "current": "this_work",
+    "current_method": "this_work", "current_approach": "this_work",
+    "new_method": "this_work", "proposed_method": "this_work",
+    "为什么更好": "why_better", "为什么现在的更好": "why_better",
+    "改进": "why_better", "优势": "why_better",
+    "why_better": "why_better", "why": "why_better", "improvement": "why_better",
+    "why_is_now_better": "why_better", "why_is_better": "why_better",
+    "advantage": "why_better", "advantages": "why_better",
+}
+
+_POSITION_SUB = {
+    "站在谁的肩上": "builds_on", "基于": "builds_on", "继承": "builds_on",
+    "builds_on": "builds_on",
+    "启发了谁": "inspired", "启发": "inspired", "inspired": "inspired",
+    "综合评价": "overall", "总体评价": "overall", "总评": "overall",
+    "overall": "overall",
+}
+
+_PYTORCH_SUB = {
+    "模块名": "module_name", "module_name": "module_name",
+    "代码": "code", "code": "code",
+    "注释": "notes", "笔记": "notes", "说明": "notes", "notes": "notes",
+}
+
+
+def _strip_code_fence(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    s = s.strip()
+    if s.startswith("```"):
+        lines = s.split("\n")
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        s = "\n".join(lines)
+    return s
+
+
+def _coerce_code(v):
+    """pytorch code may arrive as str, list[str], or dict. Return a string."""
+    if isinstance(v, list):
+        return _strip_code_fence("\n".join(str(x) for x in v))
+    if isinstance(v, str):
+        return _strip_code_fence(v)
+    return ""
+
+
+def _remap_keys(d, mapping):
+    if not isinstance(d, dict):
+        return d
+    return {mapping.get(str(k).strip().lower(), k): v for k, v in d.items()}
+
+
+def _normalize_extraction(raw) -> dict:
+    """Canonicalize the model's JSON into the English-keyed schema."""
+    if not isinstance(raw, dict):
+        return {}
+
+    # Step 1: flatten wrappers like "报告" / "论文身份卡" into the parent dict
+    # before remapping top-level keys.
+    flattened: dict = {}
+    for k, v in raw.items():
+        key_l = str(k).strip().lower()
+        if key_l in _FLATTEN_WRAPPERS and isinstance(v, dict):
+            for sk, sv in v.items():
+                flattened.setdefault(sk, sv)
+            continue
+        flattened[k] = v
+
+    # Step 2: remap top-level keys to the canonical English schema.
+    out = {_TOP_KEY_MAP.get(str(k).strip().lower(), k): v for k, v in flattened.items()}
+
+    # Step 3: coerce nested blocks that the model sometimes returns as plain
+    # strings, and remap their sub-keys.
+    if "principle" in out:
+        p = out["principle"]
+        if isinstance(p, str):
+            out["principle"] = {"analogy": p}
+        elif isinstance(p, dict):
+            out["principle"] = _remap_keys(p, _PRINCIPLE_SUB)
+
+    if "innovations" in out and isinstance(out["innovations"], dict):
+        out["innovations"] = _remap_keys(out["innovations"], _INNOVATIONS_SUB)
+
+    if "historical_position" in out:
+        hp = out["historical_position"]
+        if isinstance(hp, str):
+            out["historical_position"] = {"overall": hp}
+        elif isinstance(hp, dict):
+            out["historical_position"] = _remap_keys(hp, _POSITION_SUB)
+
+    # pytorch_snippet: accept string, list[str], or dict (possibly with sub-keys
+    # in Chinese). Always end up with {module_name?, code, notes?}.
+    if "pytorch_snippet" in out:
+        ps = out["pytorch_snippet"]
+        if isinstance(ps, str) or isinstance(ps, list):
+            out["pytorch_snippet"] = {"code": _coerce_code(ps)}
+        elif isinstance(ps, dict):
+            ps = _remap_keys(ps, _PYTORCH_SUB)
+            if "code" in ps:
+                ps["code"] = _coerce_code(ps["code"])
+            out["pytorch_snippet"] = ps
+
+    return out
+
+
 def parse_extraction_response(s: str) -> dict:
-    """Parse a model response using the same lenient rules as extraction."""
-    return _parse_json_lenient(s)
+    """Parse + normalize a model response.
+
+    Runs the lenient JSON parser, then canonicalizes keys so downstream code
+    (graph builder + frontend renderer) can rely on the English schema
+    regardless of how the model spelled its keys this time.
+    """
+    return _normalize_extraction(_parse_json_lenient(s))
 
 
 # --- public entry point ------------------------------------------------------
@@ -251,7 +436,7 @@ def extract_knowledge_from_paper(
     raw = ""
     try:
         raw = _run_and_collect(client, assistant_id, file_id, prompt)
-        parsed = _parse_json_lenient(raw)
+        parsed = _normalize_extraction(_parse_json_lenient(raw))
     except PaperExtractionError:
         raise
     except Exception as e:

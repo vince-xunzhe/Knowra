@@ -13,6 +13,15 @@ from services.vlm_service import (
     parse_extraction_response,
     PaperExtractionError,
 )
+
+
+def _safe_parse(raw):
+    if not raw:
+        return None
+    try:
+        return parse_extraction_response(raw)
+    except Exception:
+        return None
 from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
 
 router = APIRouter(prefix="/api", tags=["papers"])
@@ -52,6 +61,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "processed": p.processed,
         "processed_at": p.processed_at.isoformat() if p.processed_at else None,
         "raw_llm_response": p.raw_llm_response,
+        "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": bool(p.first_page_image_path),

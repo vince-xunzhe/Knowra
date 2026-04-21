@@ -18,6 +18,7 @@ export interface PaperRecord {
 export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
+  extraction: Record<string, unknown> | null
   notes: string
   has_first_page_image: boolean
   knowledge_nodes: { id: number; title: string; node_type: string; tags: string[] }[]

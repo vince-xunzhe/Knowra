@@ -6,6 +6,8 @@ import {
   BookOpen, Users, Calendar, Sparkles, Target, Lightbulb,
   Wrench, Database, Swords, Award, Flag, Hash, FileText,
   Pencil, Save, RotateCw, Loader2, X, NotebookPen, Eye,
+  Zap, Layers, GitBranch, History, AlertTriangle, Code2,
+  Copy, Check, ArrowRight, Plus, Trash2,
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperNotes,
@@ -19,6 +21,30 @@ type DatasetValue = string | { name?: string; purpose?: string; usage?: string }
 type NamedValue = string | { name?: string }
 type TextValue = string | { short?: string; detail?: string }
 
+interface PrincipleBlock {
+  analogy?: string
+  architecture_flow?: string
+  key_formulas?: { name?: string; plain?: string }[]
+}
+
+interface InnovationsBlock {
+  previous_work?: string
+  this_work?: string
+  why_better?: string
+}
+
+interface HistoricalPosition {
+  builds_on?: string
+  inspired?: string
+  overall?: string
+}
+
+interface PytorchSnippet {
+  module_name?: string
+  code?: string
+  notes?: string
+}
+
 interface PaperExtraction {
   title?: string
   authors?: string[]
@@ -28,6 +54,14 @@ interface PaperExtraction {
   problem?: string
   motivation?: string
   problem_area?: string
+  tech_stack_position?: string
+  core_contribution?: string
+  principle?: PrincipleBlock | string
+  innovations?: InnovationsBlock
+  experimental_gains?: string
+  historical_position?: HistoricalPosition
+  limitations?: string
+  pytorch_snippet?: PytorchSnippet
   techniques?: Technique[]
   datasets?: DatasetValue[]
   baselines?: NamedValue[]
@@ -96,9 +130,11 @@ export default function ReviewPage() {
   const visibleDetail = selectedId !== null && detail?.id === selectedId ? detail : null
   const rawResponse = visibleDetail?.raw_llm_response || ''
   const parsed = useMemo<PaperExtraction | null>(() => {
+    // Backend already canonicalized the JSON (keys + nesting). Prefer that.
+    if (visibleDetail?.extraction) return visibleDetail.extraction as PaperExtraction
     if (!rawResponse) return null
     return parseExtractionResponse(rawResponse)
-  }, [rawResponse])
+  }, [visibleDetail, rawResponse])
 
   const selectPaper = (id: number) => {
     setSelectedId(id)
@@ -182,7 +218,7 @@ export default function ReviewPage() {
               placeholder="搜索标题、作者、文件名"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-sm text-slate-200 pl-10 pr-3 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
+              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg text-sm leading-tight text-slate-200 pl-10 pr-3 py-1 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
             />
           </div>
           <div className="flex flex-wrap gap-1.5 text-xs">
@@ -499,8 +535,40 @@ function StatusBadge({ paper, large }: { paper: PaperRecord | PaperDetail; large
 }
 
 function StructuredBody({ data, detail }: { data: PaperExtraction; detail: PaperDetail }) {
+  const principle: PrincipleBlock | null = typeof data.principle === 'string'
+    ? { analogy: data.principle }
+    : data.principle || null
+
   return (
     <div className="space-y-8">
+      {/* Core contribution — prominent TL;DR */}
+      {data.core_contribution && (
+        <section className="relative overflow-hidden rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/15 via-slate-900/40 to-slate-900/30 px-5 py-4 shadow-[0_18px_40px_rgba(49,46,129,0.2)]">
+          <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.18em] uppercase text-indigo-300">
+            <Zap size={13} /> 核心贡献
+          </div>
+          <p className="mt-2.5 text-[15px] leading-8 text-slate-100">
+            {data.core_contribution}
+          </p>
+        </section>
+      )}
+
+      {/* Problem area + tech stack position */}
+      {(data.problem_area || data.tech_stack_position) && (
+        <div className="flex flex-wrap items-center gap-2">
+          {data.tech_stack_position && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-sm font-medium text-emerald-200">
+              <Layers size={13} /> {data.tech_stack_position}
+            </span>
+          )}
+          {data.problem_area && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-sm font-medium text-cyan-200">
+              <Flag size={13} /> {data.problem_area}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* TL;DR / summary */}
       {data.abstract_summary && (
         <ReviewBlock icon={<Sparkles size={14} />} title="摘要">
@@ -524,12 +592,79 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
         </div>
       )}
 
-      {/* Problem area */}
-      {data.problem_area && (
-        <ReviewBlock icon={<Flag size={14} />} title="研究领域">
-          <span className="inline-flex rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-cyan-200">
-            {data.problem_area}
-          </span>
+      {/* Principle — Feynman-style analogy + data flow */}
+      {principle && (principle.analogy || principle.architecture_flow || (principle.key_formulas?.length ?? 0) > 0) && (
+        <ReviewBlock icon={<Lightbulb size={14} />} title="原理解析（费曼式）">
+          <div className="space-y-4">
+            {principle.analogy && (
+              <div>
+                <p className="section-label mb-1.5 text-amber-300/80">通俗比喻</p>
+                <p className="prose-reading text-[14px] text-slate-200">{principle.analogy}</p>
+              </div>
+            )}
+            {principle.architecture_flow && (
+              <div>
+                <p className="section-label mb-1.5 text-sky-300/80">数据流动</p>
+                <p className="prose-reading text-[14px] text-slate-200">{principle.architecture_flow}</p>
+              </div>
+            )}
+            {Array.isArray(principle.key_formulas) && principle.key_formulas.length > 0 && (
+              <div>
+                <p className="section-label mb-2 text-indigo-300/80">关键公式（白话）</p>
+                <ul className="space-y-2">
+                  {principle.key_formulas.map((f, i) => (
+                    <li key={i} className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
+                      {f.name && <p className="text-xs font-semibold text-indigo-200">{f.name}</p>}
+                      {f.plain && <p className="mt-1 text-sm leading-7 text-slate-300">{f.plain}</p>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </ReviewBlock>
+      )}
+
+      {/* Innovations — vs previous work */}
+      {data.innovations && (data.innovations.previous_work || data.innovations.this_work || data.innovations.why_better) && (
+        <ReviewBlock icon={<GitBranch size={14} />} title="关键创新点">
+          <div className="grid gap-3 md:grid-cols-3">
+            {data.innovations.previous_work && (
+              <InnovationCard
+                tone="slate"
+                label="以前是怎么做的"
+                text={data.innovations.previous_work}
+              />
+            )}
+            {data.innovations.this_work && (
+              <InnovationCard
+                tone="indigo"
+                label="这篇论文怎么做"
+                text={data.innovations.this_work}
+              />
+            )}
+            {data.innovations.why_better && (
+              <InnovationCard
+                tone="emerald"
+                label="为什么更好"
+                text={data.innovations.why_better}
+              />
+            )}
+          </div>
+          <div className="mt-3 hidden md:flex items-center justify-center gap-2 text-slate-600">
+            <span className="text-[10px] tracking-widest uppercase">Previous</span>
+            <ArrowRight size={12} />
+            <span className="text-[10px] tracking-widest uppercase text-indigo-400/80">This Work</span>
+            <ArrowRight size={12} />
+            <span className="text-[10px] tracking-widest uppercase text-emerald-400/80">Better</span>
+          </div>
+        </ReviewBlock>
+      )}
+
+      {/* Experimental gains */}
+      {data.experimental_gains && (
+        <ReviewBlock icon={<Award size={14} />} title="实验效果比前人好在哪">
+          <p className="prose-reading text-[14px]">{data.experimental_gains}</p>
         </ReviewBlock>
       )}
 
@@ -646,6 +781,57 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
         </ReviewBlock>
       )}
 
+      {/* Historical position */}
+      {data.historical_position && (data.historical_position.builds_on || data.historical_position.inspired || data.historical_position.overall) && (
+        <ReviewBlock icon={<History size={14} />} title="背景地位">
+          <div className="space-y-3">
+            {data.historical_position.overall && (
+              <p className="prose-reading text-[14px] text-slate-200">{data.historical_position.overall}</p>
+            )}
+            <div className="grid gap-3 md:grid-cols-2">
+              {data.historical_position.builds_on && (
+                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
+                  <p className="section-label mb-1.5 text-slate-400">站在谁的肩上</p>
+                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.builds_on}</p>
+                </div>
+              )}
+              {data.historical_position.inspired && (
+                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
+                  <p className="section-label mb-1.5 text-fuchsia-300/80">启发了谁</p>
+                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.inspired}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </ReviewBlock>
+      )}
+
+      {/* Limitations */}
+      {data.limitations && (
+        <ReviewBlock icon={<AlertTriangle size={14} />} title="这里的坑（局限性）">
+          <p className="prose-reading text-[14px] text-amber-100/90">{data.limitations}</p>
+        </ReviewBlock>
+      )}
+
+      {/* PyTorch minimal implementation */}
+      {data.pytorch_snippet && data.pytorch_snippet.code && (
+        <ReviewBlock
+          icon={<Code2 size={14} />}
+          title="PyTorch 最简实现"
+          meta={data.pytorch_snippet.module_name}
+        >
+          <div className="space-y-3">
+            <CodeBlock code={data.pytorch_snippet.code} />
+            {data.pytorch_snippet.notes && (
+              <p className="text-xs leading-6 text-slate-500">
+                <span className="text-slate-400">笔记：</span>
+                {data.pytorch_snippet.notes}
+              </p>
+            )}
+          </div>
+        </ReviewBlock>
+      )}
+
       {/* Generated nodes */}
       {detail.knowledge_nodes.length > 0 && (
         <ReviewBlock icon={<BookOpen size={14} />} title="生成的图谱节点" meta={`${detail.knowledge_nodes.length}`}>
@@ -663,6 +849,54 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
           </div>
         </ReviewBlock>
       )}
+    </div>
+  )
+}
+
+function InnovationCard({
+  tone, label, text,
+}: { tone: 'slate' | 'indigo' | 'emerald'; label: string; text: string }) {
+  const styles = {
+    slate:   'border-slate-700/70 bg-slate-950/40 text-slate-300',
+    indigo:  'border-indigo-500/30 bg-indigo-500/10 text-indigo-100',
+    emerald: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100',
+  }[tone]
+  const labelTone = {
+    slate:   'text-slate-500',
+    indigo:  'text-indigo-300/90',
+    emerald: 'text-emerald-300/90',
+  }[tone]
+  return (
+    <div className={`rounded-lg border px-3.5 py-3 ${styles}`}>
+      <p className={`section-label mb-1.5 ${labelTone}`}>{label}</p>
+      <p className="text-sm leading-7">{text}</p>
+    </div>
+  )
+}
+
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      // ignore
+    }
+  }
+  return (
+    <div className="relative">
+      <button
+        onClick={onCopy}
+        className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/80 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
+      >
+        {copied ? <Check size={11} /> : <Copy size={11} />}
+        {copied ? '已复制' : '复制'}
+      </button>
+      <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 pr-20 text-[12px] leading-6 font-mono text-slate-200">
+        <code>{code}</code>
+      </pre>
     </div>
   )
 }
@@ -713,105 +947,262 @@ function parseExtractionResponse(raw: string): PaperExtraction | null {
   }
 }
 
+type NoteBlockData = { id: string; title: string; content: string }
+
+const NOTES_V2_MARKER = '<!--notes-v2-->'
+
+function parseNoteBlocks(raw: string | null | undefined): NoteBlockData[] {
+  const text = (raw || '').trim()
+  if (!text) return []
+  if (text.startsWith(NOTES_V2_MARKER)) {
+    try {
+      const parsed = JSON.parse(text.slice(NOTES_V2_MARKER.length).trim())
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((b): b is Record<string, unknown> => !!b && typeof b === 'object')
+          .map((b, i) => ({
+            id: typeof b.id === 'string' && b.id ? b.id : `b-${i}-${Date.now()}`,
+            title: typeof b.title === 'string' ? b.title : '',
+            content: typeof b.content === 'string' ? b.content : '',
+          }))
+      }
+    } catch {
+      // fall through to legacy
+    }
+  }
+  return [{ id: 'legacy', title: '', content: raw || '' }]
+}
+
+function serializeNoteBlocks(blocks: NoteBlockData[]): string {
+  if (blocks.length === 0) return ''
+  return `${NOTES_V2_MARKER}\n${JSON.stringify(blocks)}`
+}
+
+function newBlockId(): string {
+  return `b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 function NotesSection({
   paper, onUpdate,
 }: {
   paper: PaperDetail
   onUpdate: (paper: PaperDetail) => void
 }) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(paper.notes || '')
+  const [blocks, setBlocks] = useState<NoteBlockData[]>(() => parseNoteBlocks(paper.notes))
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [draftContent, setDraftContent] = useState('')
+  const [isNewBlock, setIsNewBlock] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const startEdit = () => {
-    setDraft(paper.notes || '')
-    setError(null)
-    setEditing(true)
-  }
-
-  const cancelEdit = () => {
-    setEditing(false)
-    setError(null)
-  }
-
-  const saveEdit = async () => {
+  const persist = async (nextBlocks: NoteBlockData[]) => {
     setSaving(true)
     setError(null)
     try {
-      const updated = await updatePaperNotes(paper.id, draft)
+      const updated = await updatePaperNotes(paper.id, serializeNoteBlocks(nextBlocks))
       onUpdate(updated)
-      setEditing(false)
+      setBlocks(nextBlocks)
+      return true
     } catch (e) {
       setError(getApiErrorMessage(e))
+      return false
     } finally {
       setSaving(false)
     }
   }
 
-  const hasNotes = (paper.notes || '').trim().length > 0
+  const startEdit = (block: NoteBlockData) => {
+    setEditingId(block.id)
+    setDraftTitle(block.title)
+    setDraftContent(block.content)
+    setIsNewBlock(false)
+    setError(null)
+  }
+
+  const startNew = () => {
+    const id = newBlockId()
+    setBlocks(prev => [...prev, { id, title: '', content: '' }])
+    setEditingId(id)
+    setDraftTitle('')
+    setDraftContent('')
+    setIsNewBlock(true)
+    setError(null)
+  }
+
+  const cancelEdit = () => {
+    if (isNewBlock && editingId) {
+      setBlocks(prev => prev.filter(b => b.id !== editingId))
+    }
+    setEditingId(null)
+    setIsNewBlock(false)
+    setError(null)
+  }
+
+  const saveEdit = async () => {
+    if (!editingId) return
+    const next = blocks.map(b =>
+      b.id === editingId ? { ...b, title: draftTitle.trim(), content: draftContent } : b
+    )
+    const ok = await persist(next)
+    if (ok) {
+      setEditingId(null)
+      setIsNewBlock(false)
+    }
+  }
+
+  const deleteBlock = async (id: string) => {
+    if (!confirm('确定删除这个笔记块吗？')) return
+    const next = blocks.filter(b => b.id !== id)
+    const ok = await persist(next)
+    if (ok && editingId === id) {
+      setEditingId(null)
+      setIsNewBlock(false)
+    }
+  }
 
   return (
-    <ReviewBlock icon={<NotebookPen size={14} />} title="个人笔记">
-      {editing ? (
-        <div className="space-y-3">
-          {error && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
-              {error}
-            </div>
-          )}
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            spellCheck={false}
-            autoFocus
-            placeholder="用 Markdown 记录你对这篇论文的想法、疑问、对比与延伸阅读…"
-            className="min-h-[28rem] w-full resize-y rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
-          />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <button
-              onClick={cancelEdit}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
-            >
-              <X size={14} /> 取消
-            </button>
-            <button
-              onClick={saveEdit}
-              disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-            >
-              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-              保存
-            </button>
-          </div>
-        </div>
-      ) : hasNotes ? (
-        <div className="space-y-3">
-          <MarkdownView source={paper.notes} />
-          <div className="flex justify-end">
-            <button
-              onClick={startEdit}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200"
-            >
-              <Pencil size={11} /> 编辑笔记
-            </button>
-          </div>
-        </div>
-      ) : (
-        <div className="flex flex-col items-start gap-3">
-          <p className="text-sm text-slate-500 inline-flex items-center gap-1.5">
-            <Eye size={13} /> 还没有笔记。写下你对这篇论文的思考、复述或延伸阅读。
+    <ReviewBlock
+      icon={<NotebookPen size={14} />}
+      title="个人笔记"
+      meta={blocks.length > 0 ? `${blocks.length}` : undefined}
+    >
+      <div className="space-y-3">
+        {blocks.length === 0 && (
+          <p className="inline-flex items-center gap-1.5 text-sm text-slate-500">
+            <Eye size={13} /> 还没有笔记。可以按主题分块，每块只聚焦一个想法。
           </p>
+        )}
+
+        {blocks.map(block => (
+          <NoteBlockCard
+            key={block.id}
+            block={block}
+            editing={editingId === block.id}
+            draftTitle={draftTitle}
+            draftContent={draftContent}
+            error={editingId === block.id ? error : null}
+            saving={saving && editingId === block.id}
+            locked={editingId !== null && editingId !== block.id}
+            onDraftTitleChange={setDraftTitle}
+            onDraftContentChange={setDraftContent}
+            onStartEdit={() => startEdit(block)}
+            onCancel={cancelEdit}
+            onSave={saveEdit}
+            onDelete={() => deleteBlock(block.id)}
+          />
+        ))}
+
+        <button
+          onClick={startNew}
+          disabled={editingId !== null || saving}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-700/70 bg-slate-950/30 px-3 py-2 text-sm text-slate-400 transition-colors hover:border-indigo-500/50 hover:bg-indigo-500/5 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-700/70 disabled:hover:bg-slate-950/30 disabled:hover:text-slate-400"
+        >
+          <Plus size={13} /> 新增笔记块
+        </button>
+      </div>
+    </ReviewBlock>
+  )
+}
+
+function NoteBlockCard({
+  block, editing, draftTitle, draftContent, error, saving, locked,
+  onDraftTitleChange, onDraftContentChange,
+  onStartEdit, onCancel, onSave, onDelete,
+}: {
+  block: NoteBlockData
+  editing: boolean
+  draftTitle: string
+  draftContent: string
+  error: string | null
+  saving: boolean
+  locked: boolean
+  onDraftTitleChange: (value: string) => void
+  onDraftContentChange: (value: string) => void
+  onStartEdit: () => void
+  onCancel: () => void
+  onSave: () => void
+  onDelete: () => void
+}) {
+  if (editing) {
+    return (
+      <div className="space-y-3 rounded-lg border border-indigo-500/30 bg-slate-950/40 px-3 py-3 shadow-[0_8px_24px_rgba(49,46,129,0.16)]">
+        {error && (
+          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
+            {error}
+          </div>
+        )}
+        <input
+          type="text"
+          value={draftTitle}
+          onChange={e => onDraftTitleChange(e.target.value)}
+          placeholder="标题（可选）"
+          className="w-full rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
+        />
+        <textarea
+          value={draftContent}
+          onChange={e => onDraftContentChange(e.target.value)}
+          spellCheck={false}
+          autoFocus
+          placeholder="用 Markdown 写下这块笔记的内容…"
+          className="min-h-[14rem] w-full resize-y rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2.5 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
+        />
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
-            onClick={startEdit}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200 transition-colors hover:bg-indigo-500/15"
+            onClick={onCancel}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
           >
-            <Pencil size={13} /> 开始撰写
+            <X size={13} /> 取消
+          </button>
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+          >
+            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+            保存
           </button>
         </div>
+      </div>
+    )
+  }
+
+  const hasContent = (block.content || '').trim().length > 0
+
+  return (
+    <div className={`group rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3 transition-colors hover:border-slate-700/80 ${locked ? 'opacity-60' : ''}`}>
+      <div className="mb-2 flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          {block.title ? (
+            <h4 className="text-sm font-semibold leading-6 text-slate-100">{block.title}</h4>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <button
+            onClick={onStartEdit}
+            disabled={locked}
+            title="编辑"
+            className="rounded-md border border-slate-800 bg-slate-950/50 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Pencil size={11} />
+          </button>
+          <button
+            onClick={onDelete}
+            disabled={locked}
+            title="删除"
+            className="rounded-md border border-slate-800 bg-slate-950/50 p-1 text-slate-400 transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Trash2 size={11} />
+          </button>
+        </div>
+      </div>
+      {hasContent ? (
+        <MarkdownView source={block.content} />
+      ) : (
+        <p className="text-sm italic text-slate-600">（空白笔记）</p>
       )}
-    </ReviewBlock>
+    </div>
   )
 }
 
