@@ -335,7 +335,7 @@ function StatusBadge({ paper, large }: { paper: PaperRecord | PaperDetail; large
 
 function StructuredBody({ data, detail }: { data: PaperExtraction; detail: PaperDetail }) {
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* TL;DR / summary */}
       {data.abstract_summary && (
         <ReviewBlock icon={<Sparkles size={14} />} title="摘要">
