@@ -4,13 +4,26 @@
 
 ## 本地开发
 
-一键启动：
+推荐一键启动：
 
 ```bash
 ./start.sh
 ```
 
-分别启动：
+默认会优先使用 Docker Compose，以固定 Python/Node 运行环境。如果使用 Colima 作为 Docker runtime，`start.sh` 会在需要时自动启动 Colima。需要指定模式时：
+
+```bash
+KNOWLEDGE_WIKI_MODE=docker ./start.sh
+KNOWLEDGE_WIKI_MODE=native ./start.sh
+```
+
+容器模式手动启动：
+
+```bash
+docker compose up --build
+```
+
+本机模式分别启动：
 
 ```bash
 cd backend
@@ -32,6 +45,16 @@ npm run dev
 ```bash
 npm install package-name
 ```
+
+如果使用容器模式，依赖会在镜像构建或容器启动时自动安装。前端 `node_modules` 使用 Docker volume 隔离，避免和不同宿主机的原生依赖混用。
+
+机器本地配置可以放在根目录 `.env` 中：
+
+```bash
+cp .env.example .env
+```
+
+`.env` 会被 `start.sh` 和 Docker Compose 读取，适合放 API Key、端口和运行模式。
 
 ## 基础校验
 

@@ -6,6 +6,11 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Paper, KnowledgeNode
 from config import load_config, save_config
+from path_utils import (
+    portable_data_path,
+    resolve_artifact_path,
+    resolve_paper_path,
+)
 from services.scanner_service import scan_directory
 from services.pdf_service import extract_text, render_first_page
 from services.vlm_service import (
@@ -13,6 +18,7 @@ from services.vlm_service import (
     parse_extraction_response,
     PaperExtractionError,
 )
+from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
 
 
 def _safe_parse(raw):
@@ -22,7 +28,7 @@ def _safe_parse(raw):
         return parse_extraction_response(raw)
     except Exception:
         return None
-from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
+
 
 router = APIRouter(prefix="/api", tags=["papers"])
 
@@ -50,6 +56,10 @@ def _nodes_for_paper(db: Session, paper_id: int):
 
 def _serialize_paper_detail(p: Paper, db: Session) -> dict:
     nodes = _nodes_for_paper(db, p.id)
+    has_first_page_image = bool(
+        p.first_page_image_path
+        and resolve_artifact_path(p.first_page_image_path).exists()
+    )
     return {
         "id": p.id,
         "filename": p.filename,
@@ -64,7 +74,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
         "error": p.error,
-        "has_first_page_image": bool(p.first_page_image_path),
+        "has_first_page_image": has_first_page_image,
         "knowledge_nodes": [
             {"id": n.id, "title": n.title, "node_type": n.node_type, "tags": n.tags or []}
             for n in nodes
@@ -114,7 +124,10 @@ def serve_pdf(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    return FileResponse(p.filepath, media_type="application/pdf")
+    pdf_path = resolve_paper_path(p.filepath)
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail=f"PDF not found: {pdf_path}")
+    return FileResponse(str(pdf_path), media_type="application/pdf", filename=p.filename)
 
 
 @router.get("/papers/{paper_id}/first_page")
@@ -122,7 +135,10 @@ def serve_first_page(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p or not p.first_page_image_path:
         raise HTTPException(status_code=404, detail="First page image not found")
-    return FileResponse(p.first_page_image_path, media_type="image/png")
+    image_path = resolve_artifact_path(p.first_page_image_path)
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail="First page image not found")
+    return FileResponse(str(image_path), media_type="image/png")
 
 
 def _process_single(paper_id: int):
@@ -140,13 +156,24 @@ def _process_single(paper_id: int):
             return
 
         processing_state["current"] = p.filename
+        pdf_path = resolve_paper_path(p.filepath)
+        if not pdf_path.exists():
+            raise FileNotFoundError(f"PDF not found: {pdf_path}")
+        portable_filepath = portable_data_path(pdf_path)
+        path_conflict = db.query(Paper).filter(
+            Paper.filepath == portable_filepath,
+            Paper.id != p.id,
+        ).first()
+        if p.filepath != portable_filepath and not path_conflict:
+            p.filepath = portable_filepath
+            db.commit()
 
         # Local preprocessing — no longer fed to the LLM, but still useful:
         #   - extracted_text: shown in the frontend debug drawer, fallback search
         #   - first_page_image: UI thumbnails (papers grid, node detail cards)
         if not p.extracted_text or not p.num_pages:
             try:
-                text, num_pages = extract_text(p.filepath)
+                text, num_pages = extract_text(str(pdf_path))
                 p.extracted_text = text
                 p.num_pages = num_pages
                 db.commit()
@@ -154,7 +181,7 @@ def _process_single(paper_id: int):
                 pass
 
         if not p.first_page_image_path:
-            img_path = render_first_page(p.filepath, p.file_hash)
+            img_path = render_first_page(str(pdf_path), p.file_hash)
             if img_path:
                 p.first_page_image_path = img_path
                 db.commit()
@@ -165,7 +192,7 @@ def _process_single(paper_id: int):
         cached_assistant_id = cfg.get("openai_assistant_id") or None
 
         extraction, raw, new_file_id, new_assistant_id = extract_knowledge_from_paper(
-            pdf_filepath=p.filepath,
+            pdf_filepath=str(pdf_path),
             prompt=cfg["extraction_prompt"],
             api_key=cfg["openai_api_key"],
             model=cfg["vlm_model"],

@@ -2,6 +2,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from pathlib import Path
 from models import Base
+from path_utils import portable_data_path, resolve_paper_path
 
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
@@ -23,6 +24,45 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN openai_file_id VARCHAR"))
         if "notes" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN notes TEXT"))
+
+        rows = conn.execute(
+            text("SELECT id, filepath, first_page_image_path, error FROM papers")
+        ).mappings().all()
+        for row in rows:
+            updates = {}
+
+            portable_filepath = portable_data_path(row["filepath"])
+            if portable_filepath != row["filepath"]:
+                conflict = conn.execute(
+                    text(
+                        "SELECT id FROM papers "
+                        "WHERE filepath = :filepath AND id != :id LIMIT 1"
+                    ),
+                    {"filepath": portable_filepath, "id": row["id"]},
+                ).fetchone()
+                if not conflict:
+                    updates["filepath"] = portable_filepath
+
+            first_page_image_path = row["first_page_image_path"]
+            if first_page_image_path:
+                portable_image_path = portable_data_path(first_page_image_path)
+                if portable_image_path != first_page_image_path:
+                    updates["first_page_image_path"] = portable_image_path
+
+            error = row["error"] or ""
+            effective_filepath = updates.get("filepath", row["filepath"])
+            if (
+                error.startswith("PDF not found:")
+                and resolve_paper_path(effective_filepath).exists()
+            ):
+                updates["error"] = None
+
+            if updates:
+                assignments = ", ".join(f"{key} = :{key}" for key in updates)
+                conn.execute(
+                    text(f"UPDATE papers SET {assignments} WHERE id = :id"),
+                    {**updates, "id": row["id"]},
+                )
 
 
 def init_db():

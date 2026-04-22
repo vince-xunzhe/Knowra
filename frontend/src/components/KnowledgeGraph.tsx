@@ -176,7 +176,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     if (!cy) return
     cy.nodes().removeClass('highlighted')
     if (selectedNodeId) {
-      cy.$(`#${selectedNodeId}`).addClass('highlighted')
+      cy.getElementById(selectedNodeId).addClass('highlighted')
     }
   }, [selectedNodeId])
 

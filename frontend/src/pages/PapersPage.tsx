@@ -28,6 +28,7 @@ export default function PapersPage() {
   const [view, setView] = useState<ViewMode>('grid')
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
   const wasRunningRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -69,6 +70,7 @@ export default function PapersPage() {
         setStatus(s)
         if (wasRunningRef.current && !s.running) {
           setPendingIds(new Set())
+          setActionMessage(s.errors > 0 ? `处理结束，${s.errors} 个失败。` : '处理完成。')
           load()
         } else if (s.running && s.current) {
           load()
@@ -76,6 +78,8 @@ export default function PapersPage() {
         wasRunningRef.current = s.running
       } catch (error) {
         console.error('Failed to poll processing status', error)
+        setPendingIds(new Set())
+        setActionMessage('无法获取处理状态: ' + getErrorMessage(error))
       }
     }
     void poll()
@@ -85,18 +89,26 @@ export default function PapersPage() {
 
   const handleProcessOne = async (p: PaperRecord) => {
     setPendingIds(prev => new Set(prev).add(p.id))
+    setActionMessage(null)
     try {
       await processPaper(p.id)
-    } catch {
+      setActionMessage(`已提交处理: ${p.filename}`)
+    } catch (error) {
+      setActionMessage('处理启动失败: ' + getErrorMessage(error))
+    } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
   }
 
   const handleRetry = async (p: PaperRecord) => {
     setPendingIds(prev => new Set(prev).add(p.id))
+    setActionMessage(null)
     try {
       await retryPaper(p.id)
-    } catch {
+      setActionMessage(`已提交重试: ${p.filename}`)
+    } catch (error) {
+      setActionMessage('重试启动失败: ' + getErrorMessage(error))
+    } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
   }
@@ -106,9 +118,13 @@ export default function PapersPage() {
     if (!ok) return
 
     setPendingIds(prev => new Set(prev).add(p.id))
+    setActionMessage(null)
     try {
       await reprocessPaper(p.id)
-    } catch {
+      setActionMessage(`已提交重新处理: ${p.filename}`)
+    } catch (error) {
+      setActionMessage('重新处理启动失败: ' + getErrorMessage(error))
+    } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
   }
@@ -158,6 +174,11 @@ export default function PapersPage() {
             </div>
 
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+              {actionMessage && (
+                <span className="max-w-sm rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 leading-relaxed text-safe-wrap">
+                  {actionMessage}
+                </span>
+              )}
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
@@ -492,4 +513,10 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
       <dd className="flex-1 min-w-0 text-sm">{children}</dd>
     </div>
   )
+}
+
+function getErrorMessage(error: unknown): string {
+  const apiError = error as { response?: { data?: { detail?: string } }; message?: string; code?: string }
+  if (apiError.code === 'ECONNABORTED') return '请求超时，后端没有在 30 秒内响应。'
+  return apiError.response?.data?.detail || apiError.message || '未知错误'
 }
