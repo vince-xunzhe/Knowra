@@ -35,6 +35,8 @@ export default function GraphPage() {
   const [starting, setStarting] = useState(false)
   const [status, setStatus] = useState<ProcStatus | null>(null)
   const [scanResult, setScanResult] = useState<string | null>(null)
+  const [processResult, setProcessResult] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
   const wasRunningRef = useRef(false)
 
   const loadGraph = useCallback(async () => {
@@ -70,14 +72,20 @@ export default function GraphPage() {
       try {
         const s = await getStatus()
         if (cancelled) return
+        setStatusError(null)
         setStatus(s)
         if (wasRunningRef.current && !s.running) {
+          setProcessResult(s.errors > 0 ? `处理结束，${s.errors} 个失败。` : '处理完成。')
           loadGraph()
         }
         wasRunningRef.current = s.running
         if (s.running) setStarting(false)
       } catch (error) {
         console.error('Failed to poll processing status', error)
+        if (!cancelled) {
+          setStatusError('无法获取处理状态: ' + getErrorMessage(error))
+          setStarting(false)
+        }
       }
     }
     void poll()
@@ -124,9 +132,13 @@ export default function GraphPage() {
 
   const handleProcess = async () => {
     setStarting(true)
+    setProcessResult(null)
     try {
       await processAll()
-    } catch {
+      setProcessResult('已提交处理任务，正在等待后端状态更新。')
+    } catch (error) {
+      setProcessResult('处理启动失败: ' + getErrorMessage(error))
+    } finally {
       setStarting(false)
     }
   }
@@ -216,9 +228,9 @@ export default function GraphPage() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            {scanResult && (
+            {(scanResult || processResult || statusError) && (
               <span className="max-w-sm rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 leading-relaxed text-safe-wrap">
-                {scanResult}
+                {statusError || processResult || scanResult}
               </span>
             )}
 
@@ -369,6 +381,7 @@ export default function GraphPage() {
 }
 
 function getErrorMessage(error: unknown): string {
-  const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
+  const apiError = error as { response?: { data?: { detail?: string } }; message?: string; code?: string }
+  if (apiError.code === 'ECONNABORTED') return '请求超时，后端没有在 30 秒内响应。'
   return apiError.response?.data?.detail || apiError.message || '未知错误'
 }

@@ -2,10 +2,10 @@ import os
 import json
 from pathlib import Path
 from prompts import DEFAULT_PAPER_PROMPT
+from path_utils import PAPERS_DIR, portable_data_path, resolve_papers_directory
 
 CONFIG_FILE = Path(__file__).parent.parent / "data" / "config.json"
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
-PAPERS_DIR = Path(__file__).parent.parent / "data" / "papers"
 
 # Exposed OpenAI models for the frontend dropdown.
 # Only file_search-compatible models. Reasoning models (o1/o3) removed because
@@ -37,12 +37,23 @@ def load_config() -> dict:
             defaults.update(saved)
         except Exception:
             pass
+    if defaults.get("scan_directory"):
+        defaults["scan_directory"] = str(
+            resolve_papers_directory(defaults["scan_directory"])
+        )
     return defaults
 
 
 def save_config(updates: dict) -> dict:
+    if "scan_directory" in updates:
+        updates = {
+            **updates,
+            "scan_directory": portable_data_path(updates["scan_directory"]),
+        }
     current = load_config()
     current.update(updates)
+    if current.get("scan_directory"):
+        current["scan_directory"] = portable_data_path(current["scan_directory"])
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(current, f, indent=2, ensure_ascii=False)

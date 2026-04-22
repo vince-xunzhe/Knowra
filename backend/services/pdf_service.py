@@ -4,6 +4,7 @@ from typing import Optional
 
 import pypdf
 import pypdfium2
+from path_utils import portable_data_path
 
 # Artifact directory for rendered first pages
 ARTIFACT_DIR = Path(__file__).parent.parent.parent / "data" / "artifacts"
@@ -43,7 +44,7 @@ def render_first_page(filepath: str, file_hash: str, dpi: int = 150) -> Optional
     """
     output_path = ARTIFACT_DIR / f"{file_hash}_page1.png"
     if output_path.exists():
-        return str(output_path)
+        return portable_data_path(output_path)
 
     try:
         pdf = pypdfium2.PdfDocument(filepath)
@@ -55,7 +56,7 @@ def render_first_page(filepath: str, file_hash: str, dpi: int = 150) -> Optional
         image.save(str(output_path), "PNG")
         page.close()
         pdf.close()
-        return str(output_path)
+        return portable_data_path(output_path)
     except Exception:
         return None
 

@@ -29,7 +29,7 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地论文知识图
 
 - 后端：FastAPI、SQLAlchemy、SQLite、OpenAI Python SDK、pypdf、pypdfium2。
 - 前端：React、TypeScript、Vite、Tailwind CSS、Cytoscape、Axios、Lucide React。
-- 运行脚本：`start.sh` 会创建后端虚拟环境、安装依赖，并同时启动前后端开发服务。
+- 运行脚本：`start.sh` 默认优先使用 Docker Compose 固定运行环境；没有 Docker 时自动回退到本机 Python/Node。
 
 ## 目录结构
 
@@ -56,12 +56,16 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地论文知识图
 
 ### 1. 准备环境
 
-需要本机已安装：
+推荐本机安装：
+
+- Docker Desktop，或 Docker CLI + Colima + Docker Compose。
+- 一个可用的 OpenAI API Key。
+
+有 Docker runtime 时，项目不依赖宿主机的 Python、Node 或 npm 版本。没有 Docker 时，`start.sh` 会回退到本机模式，此时需要：
 
 - Python 3.10 或更新版本。
 - Node.js 20 或更新版本。
 - npm。
-- 一个可用的 OpenAI API Key。
 
 ### 2. 启动应用
 
@@ -71,11 +75,20 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地论文知识图
 
 脚本会自动：
 
-1. 在 `backend/.venv` 创建 Python 虚拟环境。
-2. 安装后端依赖。
-3. 在 `frontend/` 安装 npm 依赖。
-4. 启动后端 `http://localhost:8000`。
-5. 启动前端 `http://localhost:5173` 并打开浏览器。
+1. 检测 Docker Compose 是否可用。
+2. Docker 可用时，构建并启动固定版本的后端和前端容器；如果检测到 Colima 但 runtime 未启动，会自动启动 Colima。
+3. Docker 不可用时，创建本机 Python 虚拟环境并安装前后端依赖。
+4. 自动避开已占用端口，从 `8000` / `5173` 向后寻找可用端口。
+5. 启动前端并打开浏览器。
+
+可选运行模式：
+
+```bash
+KNOWLEDGE_WIKI_MODE=docker ./start.sh   # 强制容器模式
+KNOWLEDGE_WIKI_MODE=native ./start.sh   # 强制本机模式
+OPEN_BROWSER=0 ./start.sh               # 不自动打开浏览器
+BACKEND_PORT=8000 FRONTEND_PORT=5173 ./start.sh
+```
 
 ### 3. 配置论文处理
 
@@ -94,6 +107,14 @@ export OPENAI_API_KEY="sk-..."
 ./start.sh
 ```
 
+多机器部署时，也可以复制配置模板：
+
+```bash
+cp .env.example .env
+```
+
+然后在 `.env` 中填写 `OPENAI_API_KEY`。`.env` 会被 Docker Compose 和本机 fallback 共同读取，且不会提交到仓库。
+
 ### 4. 添加和处理论文
 
 1. 将 PDF 放入 `data/papers/`，或在设置中改成其他论文目录。
@@ -103,6 +124,14 @@ export OPENAI_API_KEY="sk-..."
 5. 在「回顾」页查看原始抽取结果，必要时调整 Prompt 后重跑。
 
 ## 手动运行
+
+容器模式：
+
+```bash
+docker compose up --build
+```
+
+本机模式：
 
 后端：
 
