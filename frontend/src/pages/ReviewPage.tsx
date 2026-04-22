@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -8,11 +8,14 @@ import {
   Pencil, Save, RotateCw, Loader2, X, NotebookPen, Eye,
   Zap, Layers, GitBranch, History, AlertTriangle, Code2,
   Copy, Check, ArrowRight, Plus, Trash2,
+  MessageCircle, Maximize2, Send, RefreshCw, Timer,
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperNotes,
   pdfFileUrl, firstPageUrl,
+  sendPaperChat, resetPaperChat,
   type PaperRecord, type PaperDetail,
+  type ChatState, type ChatMessage,
 } from '../api/client'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
@@ -456,29 +459,396 @@ function FirstPagePreview({
   keywords: string[]
 }) {
   return (
-    <ReviewBlock icon={<FileText size={14} />} title="首页预览">
-      <div className="space-y-4">
-        <a href={pdfFileUrl(paper.id)} target="_blank" rel="noreferrer" className="block">
-          <img
-            src={firstPageUrl(paper.id)}
-            alt="first page"
-            className="max-h-[44vh] w-full rounded-lg border border-slate-800 object-contain shadow-xl transition-colors hover:border-indigo-500/60"
-          />
-        </a>
-        {keywords.length > 0 && (
-          <div>
-            <p className="section-label mb-2">关键词</p>
-            <div className="flex flex-wrap gap-1">
-              {keywords.map((k: string, i: number) => (
-                <span key={i} className="chip border border-slate-700/40 bg-slate-800/80 text-slate-400">
-                  <Hash size={10} />{k}
-                </span>
-              ))}
+    <div className="space-y-5">
+      <PaperChatBox key={paper.id} paper={paper} />
+      <ReviewBlock icon={<FileText size={14} />} title="首页预览">
+        <div className="space-y-4">
+          <a href={pdfFileUrl(paper.id)} target="_blank" rel="noreferrer" className="block">
+            <img
+              src={firstPageUrl(paper.id)}
+              alt="first page"
+              className="max-h-[44vh] w-full rounded-lg border border-slate-800 object-contain shadow-xl transition-colors hover:border-indigo-500/60"
+            />
+          </a>
+          {keywords.length > 0 && (
+            <div>
+              <p className="section-label mb-2">关键词</p>
+              <div className="flex flex-wrap gap-1">
+                {keywords.map((k: string, i: number) => (
+                  <span key={i} className="chip border border-slate-700/40 bg-slate-800/80 text-slate-400">
+                    <Hash size={10} />{k}
+                  </span>
+                ))}
+              </div>
             </div>
+          )}
+        </div>
+      </ReviewBlock>
+    </div>
+  )
+}
+
+function formatRelativeTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const diff = Date.now() - d.getTime()
+  const min = Math.floor(diff / 60000)
+  if (min < 1) return '刚刚'
+  if (min < 60) return `${min} 分钟前`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} 小时前`
+  return d.toLocaleString()
+}
+
+function countdownTone(days: number | null | undefined): {
+  className: string
+  label: string
+} {
+  if (days === null || days === undefined) {
+    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: '尚未开始会话' }
+  }
+  if (days <= 0) {
+    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: '会话已过期' }
+  }
+  if (days <= 7) {
+    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: `${days} 天后过期` }
+  }
+  if (days <= 14) {
+    return { className: 'border-amber-500/40 bg-amber-500/10 text-amber-200', label: `${days} 天后过期` }
+  }
+  return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: `会话有效 ${days} 天` }
+}
+
+function latestExchange(messages: ChatMessage[]): { user: ChatMessage | null; assistant: ChatMessage | null } {
+  // Find the most recent assistant message and the user message that triggered it.
+  let assistant: ChatMessage | null = null
+  let user: ChatMessage | null = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!assistant && messages[i].role === 'assistant') {
+      assistant = messages[i]
+      continue
+    }
+    if (assistant && messages[i].role === 'user') {
+      user = messages[i]
+      break
+    }
+  }
+  if (!assistant) {
+    // No assistant reply yet — surface the last user turn alone (e.g. if send failed).
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'user') { user = messages[i]; break }
+    }
+  }
+  return { user, assistant }
+}
+
+function PaperChatBox({ paper }: { paper: PaperDetail }) {
+  const [chat, setChat] = useState<ChatState>(paper.chat)
+  const [input, setInput] = useState('')
+  const [sending, setSending] = useState(false)
+  const [expanded, setExpanded] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Re-derive countdown every minute without refetching.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = window.setInterval(() => setTick(t => t + 1), 60000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const send = async (text: string) => {
+    const message = text.trim()
+    if (!message || sending) return
+    setSending(true)
+    setError(null)
+    try {
+      const next = await sendPaperChat(paper.id, message)
+      setChat(next)
+      setInput('')
+    } catch (e) {
+      setError(getApiErrorMessage(e))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const reset = async () => {
+    if (!confirm('清空本地对话记录并开启新会话？')) return
+    try {
+      const next = await resetPaperChat(paper.id)
+      setChat(next)
+      setError(null)
+    } catch (e) {
+      setError(getApiErrorMessage(e))
+    }
+  }
+
+  const tone = countdownTone(chat.days_remaining)
+  const { user, assistant } = latestExchange(chat.messages)
+  const canChat = chat.ready
+
+  return (
+    <>
+      <section className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/35 shadow-[0_12px_28px_rgba(2,6,23,0.16)]">
+        <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-3 py-2.5 sm:px-4">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
+            <MessageCircle size={14} />
+          </span>
+          <h3 className="min-w-0 text-sm font-semibold tracking-tight text-slate-100">追问这篇论文</h3>
+          <div className="ml-auto flex items-center gap-1.5">
+            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${tone.className}`} title={chat.expires_at ? `过期时间 ${new Date(chat.expires_at).toLocaleString()}` : undefined}>
+              <Timer size={10} /> {tone.label}
+            </span>
+            <button
+              onClick={() => setExpanded(true)}
+              disabled={!canChat}
+              title="展开完整对话"
+              className="rounded-md border border-slate-800 bg-slate-950/30 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Maximize2 size={12} />
+            </button>
+          </div>
+        </div>
+        <div className="px-3 py-3 text-sm sm:px-4">
+          {!canChat ? (
+            <p className="py-3 text-center text-xs text-slate-500">
+              论文尚未完成处理，处理完成后即可追问。
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {user || assistant ? (
+                <div className="space-y-2">
+                  {user && (
+                    <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-3 py-2">
+                      <p className="mb-1 text-[10px] uppercase tracking-widest text-indigo-300/70">You</p>
+                      <p className="line-clamp-3 text-xs leading-6 text-slate-200 text-safe-wrap">{user.content}</p>
+                    </div>
+                  )}
+                  {assistant && (
+                    <div className="rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
+                      <p className="mb-1 text-[10px] uppercase tracking-widest text-slate-400">Assistant</p>
+                      <p className="line-clamp-4 text-xs leading-6 text-slate-300 text-safe-wrap">{assistant.content}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="py-3 text-center text-xs text-slate-500">
+                  问我任何关于这篇论文的问题。
+                </p>
+              )}
+
+              {error && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                  {error}
+                </div>
+              )}
+
+              <form
+                onSubmit={e => { e.preventDefault(); void send(input) }}
+                className="flex items-center gap-1.5"
+              >
+                <input
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  placeholder="例如：第 3 节的推导为什么成立？"
+                  disabled={sending}
+                  className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600 disabled:opacity-60"
+                />
+                <button
+                  type="submit"
+                  disabled={sending || !input.trim()}
+                  className="inline-flex items-center gap-1 rounded-md bg-indigo-500 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                >
+                  {sending ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />}
+                </button>
+              </form>
+
+              {chat.messages.length > 2 && (
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="w-full text-center text-[11px] text-slate-500 transition-colors hover:text-slate-300"
+                >
+                  查看全部 {chat.messages.filter(m => m.role !== 'system').length} 条消息 →
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+
+      {expanded && (
+        <ChatModal
+          chat={chat}
+          sending={sending}
+          error={error}
+          onSend={send}
+          onReset={reset}
+          onClose={() => setExpanded(false)}
+        />
+      )}
+    </>
+  )
+}
+
+function ChatModal({
+  chat, sending, error, onSend, onReset, onClose,
+}: {
+  chat: ChatState
+  sending: boolean
+  error: string | null
+  onSend: (text: string) => void
+  onReset: () => void
+  onClose: () => void
+}) {
+  const [input, setInput] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const tone = countdownTone(chat.days_remaining)
+
+  useEffect(() => {
+    // Auto-scroll to bottom on new messages and on mount.
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [chat.messages.length, sending])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  const submit = () => {
+    const text = input.trim()
+    if (!text || sending) return
+    onSend(text)
+    setInput('')
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      submit()
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0f1117] shadow-2xl"
+      >
+        <header className="flex items-center gap-2.5 border-b border-slate-800/80 bg-slate-950/40 px-4 py-3">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
+            <MessageCircle size={14} />
+          </span>
+          <h3 className="text-sm font-semibold text-slate-100">追问这篇论文</h3>
+          <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${tone.className}`}>
+            <Timer size={10} /> {tone.label}
+          </span>
+          <div className="ml-auto flex items-center gap-1">
+            <button
+              onClick={onReset}
+              title="清空本地记录并开启新会话"
+              className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
+            >
+              <RefreshCw size={11} /> 重置会话
+            </button>
+            <button
+              onClick={onClose}
+              title="关闭"
+              className="rounded-md border border-slate-800 bg-slate-950/30 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </header>
+
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          {chat.messages.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-sm text-slate-500">
+              还没有对话。下面输入问题开始追问这篇论文。
+            </div>
+          ) : (
+            <ul className="space-y-3">
+              {chat.messages.map((m, i) => (
+                <ChatBubble key={i} message={m} />
+              ))}
+              {sending && (
+                <li className="flex justify-start">
+                  <div className="inline-flex items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
+                    <Loader2 size={12} className="animate-spin" /> 正在思考…
+                  </div>
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
+
+        {error && (
+          <div className="border-t border-red-500/30 bg-red-500/10 px-4 py-2 text-xs text-red-200">
+            {error}
           </div>
         )}
+
+        <div className="border-t border-slate-800/80 bg-slate-950/40 px-4 py-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="Enter 发送，Shift+Enter 换行"
+              rows={2}
+              disabled={sending}
+              className="min-h-[2.5rem] w-full flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600 disabled:opacity-60"
+            />
+            <button
+              onClick={submit}
+              disabled={sending || !input.trim()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              发送
+            </button>
+          </div>
+        </div>
       </div>
-    </ReviewBlock>
+    </div>
+  )
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  if (message.role === 'system') {
+    return (
+      <li className="flex justify-center">
+        <div className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1 text-[11px] text-amber-200/80">
+          <AlertTriangle size={10} /> {message.content}
+        </div>
+      </li>
+    )
+  }
+  const isUser = message.role === 'user'
+  return (
+    <li className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div className={`max-w-[85%] min-w-0 rounded-lg border px-3 py-2 shadow-sm ${
+        isUser
+          ? 'border-indigo-500/30 bg-indigo-500/10'
+          : 'border-slate-800/80 bg-slate-950/40'
+      }`}>
+        <div className={`mb-1 flex items-center gap-2 text-[10px] uppercase tracking-widest ${
+          isUser ? 'text-indigo-300/80' : 'text-slate-500'
+        }`}>
+          <span>{isUser ? 'You' : 'Assistant'}</span>
+          <span className="normal-case tracking-normal text-slate-600">· {formatRelativeTime(message.ts)}</span>
+        </div>
+        {isUser ? (
+          <p className="whitespace-pre-wrap text-sm leading-7 text-slate-100 text-safe-wrap">{message.content}</p>
+        ) : (
+          <MarkdownView source={message.content} />
+        )}
+      </div>
+    </li>
   )
 }
 

@@ -15,12 +15,28 @@ export interface PaperRecord {
   created_at: string | null
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  ts: string
+}
+
+export interface ChatState {
+  messages: ChatMessage[]
+  thread_created_at: string | null
+  expires_at: string | null
+  days_remaining: number | null
+  ttl_days: number
+  ready: boolean
+}
+
 export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
   extraction: Record<string, unknown> | null
   notes: string
   has_first_page_image: boolean
+  chat: ChatState
   knowledge_nodes: { id: number; title: string; node_type: string; tags: string[] }[]
 }
 
@@ -111,6 +127,14 @@ export const updatePaperNotes = (id: number, notes: string) =>
   api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
+
+// Chat — follow-up Q&A against the same Assistants thread used for extraction.
+export const getPaperChat = (id: number) =>
+  api.get<ChatState>(`/papers/${id}/chat`).then(r => r.data)
+export const sendPaperChat = (id: number, message: string) =>
+  api.post<ChatState>(`/papers/${id}/chat`, { message }, { timeout: 300000 }).then(r => r.data)
+export const resetPaperChat = (id: number) =>
+  api.delete<ChatState>(`/papers/${id}/chat`).then(r => r.data)
 
 // Graph
 export const getGraph = () => api.get<GraphData>('/graph').then(r => r.data)

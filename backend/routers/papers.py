@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -16,6 +16,7 @@ from services.pdf_service import extract_text, render_first_page
 from services.vlm_service import (
     extract_knowledge_from_paper,
     parse_extraction_response,
+    run_chat_turn,
     PaperExtractionError,
 )
 from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
@@ -43,6 +44,15 @@ class NotesUpdate(BaseModel):
     notes: str
 
 
+class ChatMessageInput(BaseModel):
+    message: str
+
+
+# OpenAI Assistants threads expire ~60 days after last activity. Mirror that in
+# the UI countdown so the user knows when follow-up chat stops working.
+THREAD_TTL_DAYS = 60
+
+
 def _nodes_for_paper(db: Session, paper_id: int):
     nodes = db.query(KnowledgeNode).all()
     matches = []
@@ -52,6 +62,31 @@ def _nodes_for_paper(db: Session, paper_id: int):
         if any(str(source_id) == str(paper_id) for source_id in ids):
             matches.append(node)
     return matches
+
+
+def _chat_state(p: Paper) -> dict:
+    """Chat-related fields surfaced to the frontend. `days_remaining` and
+    `expires_at` are derived from `thread_created_at` so the UI can show a
+    countdown without guessing the TTL."""
+    created = p.thread_created_at
+    expires_at = None
+    days_remaining = None
+    if created is not None:
+        # Treat naive datetimes as UTC (SQLite round-trips lose tzinfo).
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        expires = created + timedelta(days=THREAD_TTL_DAYS)
+        expires_at = expires.isoformat()
+        delta = expires - datetime.now(timezone.utc)
+        days_remaining = max(0, delta.days + (1 if delta.seconds > 0 else 0))
+    return {
+        "messages": list(p.chat_history or []),
+        "thread_created_at": created.isoformat() if created else None,
+        "expires_at": expires_at,
+        "days_remaining": days_remaining,
+        "ttl_days": THREAD_TTL_DAYS,
+        "ready": bool(p.openai_file_id) and p.processed,
+    }
 
 
 def _serialize_paper_detail(p: Paper, db: Session) -> dict:
@@ -75,6 +110,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": has_first_page_image,
+        "chat": _chat_state(p),
         "knowledge_nodes": [
             {"id": n.id, "title": n.title, "node_type": n.node_type, "tags": n.tags or []}
             for n in nodes
@@ -191,7 +227,7 @@ def _process_single(paper_id: int):
         cached_file_id = p.openai_file_id
         cached_assistant_id = cfg.get("openai_assistant_id") or None
 
-        extraction, raw, new_file_id, new_assistant_id = extract_knowledge_from_paper(
+        extraction, raw, new_file_id, new_assistant_id, new_thread_id = extract_knowledge_from_paper(
             pdf_filepath=str(pdf_path),
             prompt=cfg["extraction_prompt"],
             api_key=cfg["openai_api_key"],
@@ -206,6 +242,12 @@ def _process_single(paper_id: int):
             p.openai_file_id = new_file_id
         if new_assistant_id and new_assistant_id != cached_assistant_id:
             save_config({"openai_assistant_id": new_assistant_id})
+        # Keep the thread so follow-up chat can reuse it. Reset history since
+        # a reprocess implicitly starts a fresh conversation.
+        if new_thread_id:
+            p.openai_thread_id = new_thread_id
+            p.thread_created_at = datetime.now(timezone.utc)
+            p.chat_history = []
 
         p.raw_llm_response = raw
         p.title = (extraction.get("title") or p.filename)[:200]
@@ -400,6 +442,77 @@ def update_paper_notes(
     db.commit()
     db.refresh(p)
     return _serialize_paper_detail(p, db)
+
+
+@router.get("/papers/{paper_id}/chat")
+def get_chat(paper_id: int, db: Session = Depends(get_db)):
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    return _chat_state(p)
+
+
+@router.post("/papers/{paper_id}/chat")
+def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_db)):
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if not p.processed or not p.openai_file_id:
+        raise HTTPException(status_code=400, detail="论文尚未完成处理，无法追问")
+
+    cfg = load_config()
+    api_key = cfg.get("openai_api_key")
+    assistant_id = cfg.get("openai_assistant_id")
+    if not api_key or not assistant_id:
+        raise HTTPException(status_code=400, detail="OpenAI 未配置或 assistant 未创建")
+
+    user_text = (body.message or "").strip()
+    if not user_text:
+        raise HTTPException(status_code=400, detail="消息不能为空")
+
+    try:
+        reply, thread_id, was_recreated = run_chat_turn(
+            api_key=api_key,
+            assistant_id=assistant_id,
+            file_id=p.openai_file_id,
+            user_message=user_text,
+            cached_thread_id=p.openai_thread_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"对话失败: {e}")
+
+    now = datetime.now(timezone.utc)
+    history = list(p.chat_history or [])
+    if was_recreated:
+        # Old thread lost — server-side memory reset. Flag it in history so
+        # the UI can render a divider.
+        history.append({"role": "system", "content": "会话已过期，已开启新会话。", "ts": now.isoformat()})
+        p.thread_created_at = now
+    history.append({"role": "user", "content": user_text, "ts": now.isoformat()})
+    history.append({"role": "assistant", "content": reply, "ts": datetime.now(timezone.utc).isoformat()})
+
+    p.openai_thread_id = thread_id
+    p.chat_history = history
+    if p.thread_created_at is None:
+        p.thread_created_at = now
+    db.commit()
+    db.refresh(p)
+    return _chat_state(p)
+
+
+@router.delete("/papers/{paper_id}/chat")
+def reset_chat(paper_id: int, db: Session = Depends(get_db)):
+    """Drop the local history and forget the thread id. A fresh thread will
+    be created on the next chat turn."""
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    p.openai_thread_id = None
+    p.thread_created_at = None
+    p.chat_history = []
+    db.commit()
+    db.refresh(p)
+    return _chat_state(p)
 
 
 @router.get("/status")

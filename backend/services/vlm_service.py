@@ -145,52 +145,48 @@ def _run_and_collect(
     file_id: str,
     prompt: str,
     timeout_s: int = 300,
-) -> str:
-    """Create a throwaway thread, attach the PDF, run the assistant, and
-    return the raw assistant response text. Deletes the thread on exit."""
+) -> tuple[str, str]:
+    """Create a thread, attach the PDF, run the assistant, and return
+    `(raw_response_text, thread_id)`. The thread is kept alive so the
+    caller can reuse it for follow-up chat turns; it will expire on
+    OpenAI's side after ~60 days."""
     thread = client.beta.threads.create()
     _log(f"thread={thread.id} assistant={assistant_id} file={file_id} — running")
-    try:
-        client.beta.threads.messages.create(
-            thread_id=thread.id,
-            role="user",
-            content=prompt,
-            attachments=[
-                {"file_id": file_id, "tools": [{"type": "file_search"}]},
-            ],
+    client.beta.threads.messages.create(
+        thread_id=thread.id,
+        role="user",
+        content=prompt,
+        attachments=[
+            {"file_id": file_id, "tools": [{"type": "file_search"}]},
+        ],
+    )
+    run = client.beta.threads.runs.create_and_poll(
+        thread_id=thread.id,
+        assistant_id=assistant_id,
+        poll_interval_ms=1500,
+        response_format={"type": "json_object"},
+    )
+    # Edge case: create_and_poll returns when terminal, but guard anyway.
+    deadline = time.time() + timeout_s
+    while run.status in ("queued", "in_progress") and time.time() < deadline:
+        time.sleep(2)
+        run = client.beta.threads.runs.retrieve(
+            thread_id=thread.id, run_id=run.id
         )
-        run = client.beta.threads.runs.create_and_poll(
-            thread_id=thread.id,
-            assistant_id=assistant_id,
-            poll_interval_ms=1500,
-            response_format={"type": "json_object"},
-        )
-        # Edge case: create_and_poll returns when terminal, but guard anyway.
-        deadline = time.time() + timeout_s
-        while run.status in ("queued", "in_progress") and time.time() < deadline:
-            time.sleep(2)
-            run = client.beta.threads.runs.retrieve(
-                thread_id=thread.id, run_id=run.id
-            )
 
-        _log(f"thread={thread.id} run={run.id} status={run.status}")
-        if run.status != "completed":
-            last_err = getattr(run, "last_error", None)
-            detail = f" ({last_err.message})" if last_err else ""
-            raise RuntimeError(f"Assistant run did not complete: {run.status}{detail}")
+    _log(f"thread={thread.id} run={run.id} status={run.status}")
+    if run.status != "completed":
+        last_err = getattr(run, "last_error", None)
+        detail = f" ({last_err.message})" if last_err else ""
+        raise RuntimeError(f"Assistant run did not complete: {run.status}{detail}")
 
-        messages = client.beta.threads.messages.list(
-            thread_id=thread.id, order="desc", limit=10
-        )
-        raw = _extract_assistant_text(messages)
-        preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
-        _log(f"thread={thread.id} raw_len={len(raw)} preview={preview!r}")
-        return raw
-    finally:
-        try:
-            client.beta.threads.delete(thread.id)
-        except Exception:
-            pass
+    messages = client.beta.threads.messages.list(
+        thread_id=thread.id, order="desc", limit=10
+    )
+    raw = _extract_assistant_text(messages)
+    preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
+    _log(f"thread={thread.id} raw_len={len(raw)} preview={preview!r}")
+    return raw, thread.id
 
 
 # --- response cleaning -------------------------------------------------------
@@ -421,12 +417,12 @@ def extract_knowledge_from_paper(
     model: str,
     cached_file_id: Optional[str] = None,
     cached_assistant_id: Optional[str] = None,
-) -> tuple[dict, str, str, str]:
+) -> tuple[dict, str, str, str, str]:
     """Run structured extraction on a single PDF via Assistants + file_search.
 
-    Returns (parsed_json, raw_response, file_id, assistant_id).
-    Callers should persist file_id on the Paper row and assistant_id in config
-    so subsequent runs reuse them.
+    Returns (parsed_json, raw_response, file_id, assistant_id, thread_id).
+    Callers should persist file_id on the Paper row, assistant_id in config,
+    and thread_id on the Paper row so follow-up chat can reuse the thread.
     """
     client = OpenAI(api_key=api_key)
 
@@ -434,8 +430,9 @@ def extract_knowledge_from_paper(
     file_id = _ensure_file(client, cached_file_id, pdf_filepath)
 
     raw = ""
+    thread_id = ""
     try:
-        raw = _run_and_collect(client, assistant_id, file_id, prompt)
+        raw, thread_id = _run_and_collect(client, assistant_id, file_id, prompt)
         parsed = _normalize_extraction(_parse_json_lenient(raw))
     except PaperExtractionError:
         raise
@@ -450,7 +447,90 @@ def extract_knowledge_from_paper(
             assistant_id=assistant_id,
         ) from e
 
-    return parsed, raw, file_id, assistant_id
+    return parsed, raw, file_id, assistant_id, thread_id
+
+
+# --- follow-up chat ----------------------------------------------------------
+
+CHAT_INSTRUCTIONS = (
+    "你是一位学术论文分析助手。当前对话线程里用户已附加了一篇论文的 PDF。"
+    "请使用 file_search 工具阅读 PDF 全文，用中文自然地回答用户的追问。"
+    "可以使用 Markdown 排版，但不要输出 file_search 引用标记（如【n:m†source】）。"
+    "不要用 JSON 格式回答，正常讲人话即可。"
+)
+
+
+def _ensure_chat_thread(
+    client: OpenAI,
+    cached_thread_id: Optional[str],
+    file_id: str,
+) -> tuple[str, bool]:
+    """Return (thread_id, is_new). If the cached thread is missing (expired
+    or never existed), create a fresh one. Callers attach the PDF to the
+    first user message only when is_new is True."""
+    if cached_thread_id:
+        try:
+            client.beta.threads.retrieve(cached_thread_id)
+            return cached_thread_id, False
+        except NotFoundError:
+            pass
+        except APIStatusError:
+            pass
+
+    thread = client.beta.threads.create()
+    return thread.id, True
+
+
+def run_chat_turn(
+    api_key: str,
+    assistant_id: str,
+    file_id: str,
+    user_message: str,
+    cached_thread_id: Optional[str] = None,
+    timeout_s: int = 300,
+) -> tuple[str, str, bool]:
+    """Send a user message on the paper's thread and return
+    `(assistant_reply, thread_id, thread_was_recreated)`.
+
+    Reuses the persisted thread so the assistant sees prior turns. Recreates
+    the thread and re-attaches the PDF when the old one is gone.
+    """
+    client = OpenAI(api_key=api_key)
+    thread_id, is_new = _ensure_chat_thread(client, cached_thread_id, file_id)
+
+    attachments = None
+    if is_new:
+        attachments = [{"file_id": file_id, "tools": [{"type": "file_search"}]}]
+
+    client.beta.threads.messages.create(
+        thread_id=thread_id,
+        role="user",
+        content=user_message,
+        **({"attachments": attachments} if attachments else {}),
+    )
+    run = client.beta.threads.runs.create_and_poll(
+        thread_id=thread_id,
+        assistant_id=assistant_id,
+        poll_interval_ms=1500,
+        instructions=CHAT_INSTRUCTIONS,
+    )
+    deadline = time.time() + timeout_s
+    while run.status in ("queued", "in_progress") and time.time() < deadline:
+        time.sleep(2)
+        run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+
+    _log(f"chat thread={thread_id} run={run.id} status={run.status}")
+    if run.status != "completed":
+        last_err = getattr(run, "last_error", None)
+        detail = f" ({last_err.message})" if last_err else ""
+        raise RuntimeError(f"Chat run did not complete: {run.status}{detail}")
+
+    messages = client.beta.threads.messages.list(
+        thread_id=thread_id, order="desc", limit=5
+    )
+    raw = _extract_assistant_text(messages)
+    reply = _strip_citations(raw).strip()
+    return reply, thread_id, is_new
 
 
 # --- embeddings (unchanged) --------------------------------------------------

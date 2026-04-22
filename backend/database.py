@@ -24,6 +24,12 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN openai_file_id VARCHAR"))
         if "notes" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN notes TEXT"))
+        if "openai_thread_id" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN openai_thread_id VARCHAR"))
+        if "thread_created_at" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN thread_created_at DATETIME"))
+        if "chat_history" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN chat_history JSON"))
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")

@@ -29,6 +29,13 @@ class Paper(Base):
     error = Column(Text, nullable=True)
     # OpenAI Files API — cached file_id so we don't re-upload the same PDF
     openai_file_id = Column(String, nullable=True)
+    # OpenAI Assistants API — persisted thread for follow-up Q&A after extraction.
+    # Threads expire on OpenAI's side after ~60 days; thread_created_at drives the
+    # frontend countdown. chat_history keeps a local copy so the UI can render
+    # past turns even after the remote thread is gone.
+    openai_thread_id = Column(String, nullable=True)
+    thread_created_at = Column(DateTime, nullable=True)
+    chat_history = Column(JSON, default=list)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
