@@ -136,6 +136,17 @@ export const sendPaperChat = (id: number, message: string) =>
 export const resetPaperChat = (id: number) =>
   api.delete<ChatState>(`/papers/${id}/chat`).then(r => r.data)
 
+// Note images — pasted/dropped screenshots embedded in personal notes via markdown.
+export const uploadNoteImage = (file: File) => {
+  const form = new FormData()
+  form.append('file', file)
+  return api.post<{ filename: string; url: string; size: number }>(
+    '/note_images',
+    form,
+    { headers: { 'Content-Type': 'multipart/form-data' } },
+  ).then(r => r.data)
+}
+
 // Graph
 export const getGraph = () => api.get<GraphData>('/graph').then(r => r.data)
 export const getNode = (id: number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)

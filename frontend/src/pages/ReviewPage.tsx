@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, createContext, useContext } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -9,11 +9,12 @@ import {
   Zap, Layers, GitBranch, History, AlertTriangle, Code2,
   Copy, Check, ArrowRight, Plus, Trash2,
   MessageCircle, Maximize2, Send, RefreshCw, Timer,
+  ZoomIn, ZoomOut, Minimize,
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperNotes,
   pdfFileUrl, firstPageUrl,
-  sendPaperChat, resetPaperChat,
+  sendPaperChat, resetPaperChat, uploadNoteImage,
   type PaperRecord, type PaperDetail,
   type ChatState, type ChatMessage,
 } from '../api/client'
@@ -203,6 +204,7 @@ export default function ReviewPage() {
   }
 
   return (
+    <LightboxProvider>
     <div className="flex h-full min-h-0 flex-col text-slate-200 lg:flex-row">
       {/* Left list */}
       <aside className="flex h-[17.5rem] w-full shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:h-auto lg:w-72 lg:border-b-0 lg:border-r xl:w-80">
@@ -449,6 +451,7 @@ export default function ReviewPage() {
       </section>
 
     </div>
+    </LightboxProvider>
   )
 }
 
@@ -1517,45 +1520,16 @@ function NoteBlockCard({
 }) {
   if (editing) {
     return (
-      <div className="space-y-3 rounded-lg border border-indigo-500/30 bg-slate-950/40 px-3 py-3 shadow-[0_8px_24px_rgba(49,46,129,0.16)]">
-        {error && (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
-            {error}
-          </div>
-        )}
-        <input
-          type="text"
-          value={draftTitle}
-          onChange={e => onDraftTitleChange(e.target.value)}
-          placeholder="标题（可选）"
-          className="w-full rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
-        />
-        <textarea
-          value={draftContent}
-          onChange={e => onDraftContentChange(e.target.value)}
-          spellCheck={false}
-          autoFocus
-          placeholder="用 Markdown 写下这块笔记的内容…"
-          className="min-h-[14rem] w-full resize-y rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2.5 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
-        />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <button
-            onClick={onCancel}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
-          >
-            <X size={13} /> 取消
-          </button>
-          <button
-            onClick={onSave}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-          >
-            {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-            保存
-          </button>
-        </div>
-      </div>
+      <NoteBlockEditor
+        draftTitle={draftTitle}
+        draftContent={draftContent}
+        error={error}
+        saving={saving}
+        onDraftTitleChange={onDraftTitleChange}
+        onDraftContentChange={onDraftContentChange}
+        onCancel={onCancel}
+        onSave={onSave}
+      />
     )
   }
 
@@ -1597,10 +1571,368 @@ function NoteBlockCard({
   )
 }
 
+function NoteBlockEditor({
+  draftTitle, draftContent, error, saving,
+  onDraftTitleChange, onDraftContentChange, onCancel, onSave,
+}: {
+  draftTitle: string
+  draftContent: string
+  error: string | null
+  saving: boolean
+  onDraftTitleChange: (value: string) => void
+  onDraftContentChange: (value: string) => void
+  onCancel: () => void
+  onSave: () => void
+}) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [uploading, setUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+  // Keep the latest draft in a ref so paste/drop handlers don't race stale
+  // closures when multiple uploads land in quick succession.
+  const draftRef = useRef(draftContent)
+  useEffect(() => { draftRef.current = draftContent }, [draftContent])
+
+  const insertSnippet = (snippet: string) => {
+    const ta = textareaRef.current
+    const current = draftRef.current
+    if (!ta) {
+      const next = current + snippet
+      draftRef.current = next
+      onDraftContentChange(next)
+      return
+    }
+    const start = ta.selectionStart ?? current.length
+    const end = ta.selectionEnd ?? current.length
+    const next = current.slice(0, start) + snippet + current.slice(end)
+    draftRef.current = next
+    onDraftContentChange(next)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (!el) return
+      const pos = start + snippet.length
+      el.focus()
+      el.selectionStart = pos
+      el.selectionEnd = pos
+    })
+  }
+
+  const uploadAndInsert = async (file: File) => {
+    setUploading(true)
+    setUploadError(null)
+    try {
+      const res = await uploadNoteImage(file)
+      const alt = (file.name || 'image').replace(/[[\]()]/g, '')
+      insertSnippet(`\n![${alt}](${res.url})\n`)
+    } catch (e) {
+      setUploadError(getApiErrorMessage(e))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const onPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const images: File[] = []
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i]
+      if (it.kind === 'file' && it.type.startsWith('image/')) {
+        const f = it.getAsFile()
+        if (f) images.push(f)
+      }
+    }
+    if (images.length === 0) return
+    e.preventDefault()
+    void (async () => { for (const f of images) await uploadAndInsert(f) })()
+  }
+
+  const onDrop = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    setDragOver(false)
+    const files = e.dataTransfer?.files
+    if (!files || files.length === 0) return
+    const images = Array.from(files).filter(f => f.type.startsWith('image/'))
+    if (images.length === 0) return
+    e.preventDefault()
+    void (async () => { for (const f of images) await uploadAndInsert(f) })()
+  }
+
+  const onDragOver = (e: React.DragEvent<HTMLTextAreaElement>) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault()
+      setDragOver(true)
+    }
+  }
+
+  const onDragLeave = () => setDragOver(false)
+
+  return (
+    <div className="space-y-3 rounded-lg border border-indigo-500/30 bg-slate-950/40 px-3 py-3 shadow-[0_8px_24px_rgba(49,46,129,0.16)]">
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
+          {error}
+        </div>
+      )}
+      {uploadError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
+          图片上传失败：{uploadError}
+        </div>
+      )}
+      <input
+        type="text"
+        value={draftTitle}
+        onChange={e => onDraftTitleChange(e.target.value)}
+        placeholder="标题（可选）"
+        className="w-full rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
+      />
+      <div className="relative">
+        <textarea
+          ref={textareaRef}
+          value={draftContent}
+          onChange={e => onDraftContentChange(e.target.value)}
+          onPaste={onPaste}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          spellCheck={false}
+          autoFocus
+          placeholder="用 Markdown 写下这块笔记的内容；可直接粘贴或拖入截图…"
+          className={`min-h-[14rem] w-full resize-y rounded-md border bg-slate-950/60 px-3 py-2.5 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors placeholder:text-slate-600 ${
+            dragOver
+              ? 'border-indigo-400 ring-2 ring-indigo-500/30'
+              : 'border-slate-800 focus:border-indigo-500/60'
+          }`}
+        />
+        {dragOver && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-indigo-500/5 text-xs font-medium text-indigo-200">
+            松开插入图片
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <p className="mr-auto text-[11px] leading-5 text-slate-500">
+          {uploading ? (
+            <span className="inline-flex items-center gap-1 text-indigo-300">
+              <Loader2 size={10} className="animate-spin" /> 正在上传图片…
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <FileText size={10} /> 支持粘贴 / 拖入图片
+            </span>
+          )}
+        </p>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+        >
+          <X size={13} /> 取消
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saving || uploading}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+        >
+          {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+          保存
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// --- Image lightbox -------------------------------------------------------
+// Any <img> rendered inside MarkdownView opens a shared lightbox on click.
+// State lives at the page level via LightboxProvider so there's at most one
+// modal and any note/chat can reuse it.
+
+interface LightboxAPI {
+  open: (src: string, alt?: string) => void
+}
+
+const LightboxContext = createContext<LightboxAPI | null>(null)
+
+function useLightbox(): LightboxAPI | null {
+  return useContext(LightboxContext)
+}
+
+function LightboxProvider({ children }: { children: React.ReactNode }) {
+  const [state, setState] = useState<{ src: string; alt: string } | null>(null)
+
+  const open = useCallback((src: string, alt?: string) => {
+    setState({ src, alt: alt || '' })
+  }, [])
+  const close = useCallback(() => setState(null), [])
+
+  const api = useMemo<LightboxAPI>(() => ({ open }), [open])
+
+  return (
+    <LightboxContext.Provider value={api}>
+      {children}
+      {state && <Lightbox src={state.src} alt={state.alt} onClose={close} />}
+    </LightboxContext.Provider>
+  )
+}
+
+const MIN_SCALE = 0.25
+const MAX_SCALE = 6
+const SCALE_STEP = 0.25
+
+function clampScale(v: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, v))
+}
+
+function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  const [scale, setScale] = useState(1)
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      else if (e.key === '+' || e.key === '=') setScale(s => clampScale(s + SCALE_STEP))
+      else if (e.key === '-' || e.key === '_') setScale(s => clampScale(s - SCALE_STEP))
+      else if (e.key === '0') setScale(1)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // Block page scroll while lightbox is open.
+  useEffect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [])
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey || !e.shiftKey) {
+      // Free-scroll when image overflows; zoom when holding Shift or via buttons.
+      if (!e.shiftKey) return
+    }
+    e.preventDefault()
+    const delta = e.deltaY < 0 ? SCALE_STEP : -SCALE_STEP
+    setScale(s => clampScale(s + delta))
+  }
+
+  const zoomIn = () => setScale(s => clampScale(s + SCALE_STEP))
+  const zoomOut = () => setScale(s => clampScale(s - SCALE_STEP))
+  const reset = () => setScale(1)
+  const pct = Math.round(scale * 100)
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex flex-col bg-slate-950/85 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <header
+        className="flex items-center gap-2 border-b border-slate-800/80 bg-slate-950/70 px-4 py-2 text-slate-200"
+        onClick={e => e.stopPropagation()}
+      >
+        <span className="text-xs text-slate-500">
+          {alt ? <span className="text-slate-300">{alt}</span> : '图片'}
+        </span>
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            onClick={zoomOut}
+            disabled={scale <= MIN_SCALE}
+            title="缩小 (-)"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ZoomOut size={14} />
+          </button>
+          <button
+            onClick={reset}
+            title="重置 (0)"
+            className="inline-flex h-8 min-w-14 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 px-2 text-xs tabular-nums text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+          >
+            {pct}%
+          </button>
+          <button
+            onClick={zoomIn}
+            disabled={scale >= MAX_SCALE}
+            title="放大 (+)"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ZoomIn size={14} />
+          </button>
+          <a
+            href={src}
+            target="_blank"
+            rel="noreferrer"
+            onClick={e => e.stopPropagation()}
+            title="在新标签页打开原图"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+          >
+            <ExternalLink size={14} />
+          </a>
+          <button
+            onClick={reset}
+            title="适合窗口"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+          >
+            <Minimize size={14} />
+          </button>
+          <button
+            onClick={onClose}
+            title="关闭 (Esc)"
+            className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-red-500/60 hover:text-red-200"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      </header>
+
+      <div
+        ref={scrollRef}
+        onWheel={onWheel}
+        onClick={onClose}
+        className="min-h-0 flex-1 overflow-auto"
+      >
+        <div className="flex min-h-full min-w-full items-center justify-center p-8">
+          <img
+            src={src}
+            alt={alt}
+            onClick={e => e.stopPropagation()}
+            style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
+            className="max-h-[80vh] max-w-[90vw] select-none rounded-lg border border-slate-800 shadow-2xl transition-transform duration-100 ease-out"
+            draggable={false}
+          />
+        </div>
+      </div>
+
+      <footer
+        className="border-t border-slate-800/80 bg-slate-950/70 px-4 py-1.5 text-center text-[11px] text-slate-500"
+        onClick={e => e.stopPropagation()}
+      >
+        Shift + 滚轮缩放 · + / - 键缩放 · 0 重置 · Esc 关闭
+      </footer>
+    </div>
+  )
+}
+
 function MarkdownView({ source }: { source: string }) {
+  const lightbox = useLightbox()
   return (
     <div className="markdown-notes text-sm leading-7 text-slate-200">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          img: props => {
+            const src = typeof props.src === 'string' ? props.src : ''
+            const alt = typeof props.alt === 'string' ? props.alt : ''
+            return (
+              <img
+                {...props}
+                loading="lazy"
+                onClick={src && lightbox ? () => lightbox.open(src, alt) : undefined}
+                className={`my-2 max-w-full rounded-lg border border-slate-800 shadow-sm ${
+                  src && lightbox ? 'cursor-zoom-in transition-colors hover:border-indigo-500/60' : ''
+                }`}
+              />
+            )
+          },
+        }}
+      >{source}</ReactMarkdown>
     </div>
   )
 }
