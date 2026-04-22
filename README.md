@@ -1,5 +1,7 @@
 # Knowledge Wiki
 
+[中文](README.md) | [English](README.en.md)
+
 Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地论文知识图谱工具。它会扫描 PDF 论文，调用 OpenAI Assistants API + file_search 抽取结构化知识，再把论文、技术、数据集、研究领域和关键发现组织成可搜索、可浏览的图谱。
 
 ## 界面预览
