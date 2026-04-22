@@ -1,6 +1,6 @@
 # 架构说明
 
-Knowledge Wiki 由一个本地 FastAPI 服务和一个 Vite/React 前端组成。后端负责扫描论文、调用 OpenAI、持久化知识图谱；前端负责配置、触发处理、展示图谱和回顾抽取结果。
+Knowra 由一个本地 FastAPI 服务和一个 Vite/React 前端组成。后端负责扫描论文、调用 OpenAI、持久化知识图谱；前端负责配置、触发处理、展示图谱和回顾抽取结果。
 
 ## 总体流程
 

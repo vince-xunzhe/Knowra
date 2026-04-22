@@ -1,8 +1,8 @@
-# Knowledge Wiki
+# Knowra
 
 [中文](README.zh.md) | [English](README.md)
 
-Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地优先的论文知识库工具。它会扫描 PDF 论文，调用 OpenAI 模型抽取结构化回顾信息，并把论文、技术、数据集、关键发现和个人笔记组织成可浏览的知识图谱。
+Knowra 是一个本地优先的 AI 研究工作台，帮助用户从论文和领域知识中快速建立专家理解。它会扫描 PDF 论文，调用 OpenAI 模型抽取结构化回顾信息，并把论文、技术、数据集、关键发现和个人笔记组织成可浏览的知识图谱。
 
 安装、依赖环境和启动命令请看 [安装说明](INSTALL.zh.md)。
 
@@ -20,15 +20,15 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地优先的论文
 
 ### 知识图谱
 
-![Knowledge Wiki 知识图谱页面](docs/assets/knowledge-wiki-preview.png)
+![Knowra 知识图谱页面](docs/assets/knowledge-wiki-preview.png)
 
 ### 论文库
 
-![Knowledge Wiki 论文库页面](docs/assets/knowledge-wiki-papers.png)
+![Knowra 论文库页面](docs/assets/knowledge-wiki-papers.png)
 
 ### 论文回顾
 
-![Knowledge Wiki 论文回顾页面](docs/assets/knowledge-wiki-review.png)
+![Knowra 论文回顾页面](docs/assets/knowledge-wiki-review.png)
 
 ## 使用流程
 
@@ -42,7 +42,7 @@ Knowledge Wiki（应用内名为 Knowledge Tree）是一个本地优先的论文
 
 ## 数据架构
 
-Knowledge Wiki 使用 SQLite 和本地文件系统保存运行数据。
+Knowra 使用 SQLite 和本地文件系统保存运行数据。
 
 ### 核心表
 
@@ -108,7 +108,7 @@ data/
 
 ## 隐私说明
 
-Knowledge Wiki 面向本地个人研究流程。默认不会提交以下运行数据：
+Knowra 面向本地个人研究流程。默认不会提交以下运行数据：
 
 - `data/config.json`
 - `data/knowledge.db`

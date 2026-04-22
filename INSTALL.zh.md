@@ -2,7 +2,7 @@
 
 [中文](INSTALL.zh.md) | [English](INSTALL.md)
 
-本文档说明 Knowledge Wiki 的依赖环境、启动命令和手动运行方式。
+本文档说明 Knowra 的依赖环境、启动命令和手动运行方式。
 
 ## 环境要求
 

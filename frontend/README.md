@@ -1,6 +1,6 @@
-# Knowledge Wiki Frontend
+# Knowra Frontend
 
-这是 Knowledge Wiki 的 React 前端，基于 Vite、TypeScript、Tailwind CSS 和 Cytoscape 构建。
+这是 Knowra 的 React 前端，基于 Vite、TypeScript、Tailwind CSS 和 Cytoscape 构建。
 
 ## 页面
 

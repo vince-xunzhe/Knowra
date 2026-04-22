@@ -2,7 +2,7 @@
 
 [中文](INSTALL.zh.md) | [English](INSTALL.md)
 
-This guide covers environment requirements, startup commands, and manual run options for Knowledge Wiki.
+This guide covers environment requirements, startup commands, and manual run options for Knowra.
 
 ## Requirements
 

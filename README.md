@@ -1,8 +1,8 @@
-# Knowledge Wiki
+# Knowra
 
 [中文](README.zh.md) | [English](README.md)
 
-Knowledge Wiki, named Knowledge Tree in the app, is a local-first research tool for building a personal paper knowledge base. It scans PDF papers, extracts structured review data with an OpenAI model, and turns papers, methods, datasets, findings, and notes into an interactive knowledge graph.
+Knowra is a local-first research workspace for building expertise from papers and domain knowledge. It scans PDF papers, extracts structured review data with an OpenAI model, and turns papers, methods, datasets, findings, and notes into an interactive knowledge graph.
 
 For installation, runtime dependencies, and startup commands, see [Install](INSTALL.md).
 
@@ -20,15 +20,15 @@ For installation, runtime dependencies, and startup commands, see [Install](INST
 
 ### Knowledge Graph
 
-![Knowledge Wiki graph page](docs/assets/knowledge-wiki-preview.png)
+![Knowra graph page](docs/assets/knowledge-wiki-preview.png)
 
 ### Paper Library
 
-![Knowledge Wiki paper library page](docs/assets/knowledge-wiki-papers.png)
+![Knowra paper library page](docs/assets/knowledge-wiki-papers.png)
 
 ### Paper Review
 
-![Knowledge Wiki paper review page](docs/assets/knowledge-wiki-review.png)
+![Knowra paper review page](docs/assets/knowledge-wiki-review.png)
 
 ## Typical Workflow
 
@@ -42,7 +42,7 @@ For installation, runtime dependencies, and startup commands, see [Install](INST
 
 ## Data Model
 
-Knowledge Wiki stores runtime data in SQLite and the local filesystem.
+Knowra stores runtime data in SQLite and the local filesystem.
 
 ### Core Tables
 
@@ -108,7 +108,7 @@ data/
 
 ## Privacy
 
-Knowledge Wiki is designed for local personal research workflows. By default, the repository ignores:
+Knowra is designed for local personal research workflows. By default, the repository ignores:
 
 - `data/config.json`
 - `data/knowledge.db`

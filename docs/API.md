@@ -12,7 +12,7 @@
 
 ```json
 {
-  "message": "Knowledge Tree API is running"
+  "message": "Knowra API is running"
 }
 ```
 

@@ -180,7 +180,7 @@ run_docker() {
 
   mkdir -p "$PROJECT_DIR/data/artifacts" "$PROJECT_DIR/data/papers"
 
-  echo "=== Knowledge Tree (Docker) ==="
+  echo "=== Knowra (Docker) ==="
   echo ""
   echo "Starting backend on http://localhost:$BACKEND_PORT"
   echo "Starting frontend on http://localhost:$FRONTEND_PORT"
@@ -206,7 +206,7 @@ run_native() {
   trap cleanup_native EXIT
   trap stop_native INT TERM
 
-  echo "=== Knowledge Tree (native) ==="
+  echo "=== Knowra (native) ==="
   echo ""
 
   if [ ! -d "$VENV_DIR" ]; then

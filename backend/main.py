@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
 from routers import papers, graph, config, prompt, note_images
 
-app = FastAPI(title="Knowledge Tree API", version="2.0.0")
+app = FastAPI(title="Knowra API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,4 +27,4 @@ def startup():
 
 @app.get("/")
 def root():
-    return {"message": "Knowledge Tree API is running"}
+    return {"message": "Knowra API is running"}
