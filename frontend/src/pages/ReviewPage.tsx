@@ -200,9 +200,9 @@ export default function ReviewPage() {
   }
 
   return (
-    <div className="flex h-full text-slate-200">
+    <div className="flex h-full min-h-0 flex-col text-slate-200 lg:flex-row">
       {/* Left list */}
-      <aside className="w-80 bg-[#0f1117] border-r border-slate-800/80 flex flex-col overflow-hidden shrink-0">
+      <aside className="flex h-[17.5rem] w-full shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:h-auto lg:w-72 lg:border-b-0 lg:border-r xl:w-80">
         <div className="p-4 border-b border-slate-800/80 space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <div>
@@ -243,7 +243,7 @@ export default function ReviewPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <p className="text-sm text-slate-500 p-6 text-center">加载中…</p>
           ) : filtered.length === 0 ? (
@@ -284,23 +284,25 @@ export default function ReviewPage() {
       </aside>
 
       {/* Main reading area */}
-      <section className="flex-1 min-w-0 overflow-y-auto">
+      <section className="min-h-0 flex-1 min-w-0 overflow-y-auto">
         {!visibleDetail ? (
-          <div className="h-full flex items-center justify-center text-slate-500">
+          <div className="flex h-full min-h-[16rem] items-center justify-center text-slate-500">
             {papers.length === 0 ? '还没有论文' : '选择左侧论文查看详情'}
           </div>
         ) : (
-          <article className="max-w-[84rem] mx-auto px-6 xl:px-10 py-10 fade-in">
+          <article className="mx-auto w-full max-w-[112rem] px-4 py-6 fade-in sm:px-6 lg:px-7 lg:py-8 xl:px-8">
             {/* Paper header */}
-            <header className="mb-8">
-              <div className="flex flex-wrap items-center gap-2 mb-4">
-                <StatusBadge paper={visibleDetail} large />
-                {visibleDetail.processed_at && (
-                  <span className="text-xs text-slate-500">
-                    于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
-                  </span>
-                )}
-                <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <header className="mb-6 lg:mb-8">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex flex-wrap items-center gap-2">
+                  <StatusBadge paper={visibleDetail} large />
+                  {visibleDetail.processed_at && (
+                    <span className="text-xs text-slate-500">
+                      于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                   {visibleDetail.raw_llm_response && (
                     <button
                       onClick={startRawEdit}
@@ -329,21 +331,21 @@ export default function ReviewPage() {
                 </div>
               </div>
 
-              <h1 className="text-2xl font-semibold text-white leading-tight tracking-tight">
+              <h1 className="text-xl font-semibold leading-tight tracking-tight text-white text-safe-wrap sm:text-2xl">
                 {parsed?.title || visibleDetail.title || visibleDetail.filename}
               </h1>
 
               <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-slate-400">
                 {Array.isArray(parsed?.authors) && parsed.authors.length > 0 && (
-                  <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-flex min-w-0 max-w-full items-start gap-1.5 text-safe-wrap">
                     <Users size={13} className="text-slate-500" />
-                    {parsed.authors.join(', ')}
+                    <span>{parsed.authors.join(', ')}</span>
                   </span>
                 )}
                 {(parsed?.venue || parsed?.year) && (
-                  <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-flex min-w-0 max-w-full items-start gap-1.5 text-safe-wrap">
                     <Calendar size={13} className="text-slate-500" />
-                    {parsed.venue}{parsed.venue && parsed.year && ' · '}{parsed.year}
+                    <span>{parsed.venue}{parsed.venue && parsed.year && ' · '}{parsed.year}</span>
                   </span>
                 )}
                 {visibleDetail.num_pages && (
@@ -365,7 +367,13 @@ export default function ReviewPage() {
                 onSave={saveRawEdit}
               />
             ) : (
-              <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] xl:grid-cols-[minmax(0,1fr)_26rem] items-start">
+              <div
+                className={`grid items-start gap-5 ${
+                  visibleDetail.has_first_page_image
+                    ? 'xl:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(18rem,23rem)_minmax(15rem,20rem)]'
+                    : 'xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]'
+                }`}
+              >
                 <div className="min-w-0">
                   {visibleDetail.error ? (
                     <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
@@ -397,7 +405,7 @@ export default function ReviewPage() {
                 </div>
 
                 {/* Personal notes — markdown, side column */}
-                <div className="min-w-0 lg:sticky lg:top-6">
+                <div className="min-w-0 space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1">
                   <NotesSection
                     key={visibleDetail.id}
                     paper={visibleDetail}
@@ -407,6 +415,15 @@ export default function ReviewPage() {
                     }}
                   />
                 </div>
+
+                {visibleDetail.has_first_page_image && (
+                  <div className="hidden min-w-0 2xl:block 2xl:sticky 2xl:top-6 2xl:max-h-[calc(100vh-7rem)] 2xl:overflow-y-auto 2xl:pr-1">
+                    <FirstPagePreview
+                      paper={visibleDetail}
+                      keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
+                    />
+                  </div>
+                )}
               </div>
             )}
 
@@ -428,36 +445,40 @@ export default function ReviewPage() {
         )}
       </section>
 
-      {/* Right: first page preview */}
-      {visibleDetail?.has_first_page_image && (
-        <aside className="hidden xl:flex w-72 bg-[#0f1117] border-l border-slate-800/80 flex-col overflow-hidden shrink-0">
-          <div className="px-4 py-3 border-b border-slate-800/80">
-            <p className="section-label">首页预览</p>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3">
-            <a href={pdfFileUrl(visibleDetail.id)} target="_blank" rel="noreferrer" className="block">
-              <img
-                src={firstPageUrl(visibleDetail.id)}
-                alt="first page"
-                className="w-full rounded-lg border border-slate-800 hover:border-indigo-500/60 transition-colors shadow-xl"
-              />
-            </a>
-            {Array.isArray(parsed?.keywords) && parsed.keywords.length > 0 && (
-              <div className="mt-4">
-                <p className="section-label mb-2">关键词</p>
-                <div className="flex flex-wrap gap-1">
-                  {parsed.keywords.map((k: string, i: number) => (
-                    <span key={i} className="chip bg-slate-800/80 text-slate-400 border border-slate-700/40">
-                      <Hash size={10} />{k}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </aside>
-      )}
     </div>
+  )
+}
+
+function FirstPagePreview({
+  paper, keywords,
+}: {
+  paper: PaperDetail
+  keywords: string[]
+}) {
+  return (
+    <ReviewBlock icon={<FileText size={14} />} title="首页预览">
+      <div className="space-y-4">
+        <a href={pdfFileUrl(paper.id)} target="_blank" rel="noreferrer" className="block">
+          <img
+            src={firstPageUrl(paper.id)}
+            alt="first page"
+            className="max-h-[44vh] w-full rounded-lg border border-slate-800 object-contain shadow-xl transition-colors hover:border-indigo-500/60"
+          />
+        </a>
+        {keywords.length > 0 && (
+          <div>
+            <p className="section-label mb-2">关键词</p>
+            <div className="flex flex-wrap gap-1">
+              {keywords.map((k: string, i: number) => (
+                <span key={i} className="chip border border-slate-700/40 bg-slate-800/80 text-slate-400">
+                  <Hash size={10} />{k}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </ReviewBlock>
   )
 }
 
@@ -486,7 +507,7 @@ function RawResponseEditor({
           value={value}
           onChange={e => onChange(e.target.value)}
           spellCheck={false}
-          className="min-h-[28rem] w-full resize-y rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60"
+          className="min-h-[18rem] w-full resize-y rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 lg:min-h-[28rem]"
         />
         <div className="flex flex-wrap items-center justify-end gap-2">
           <button
@@ -578,7 +599,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
 
       {/* Problem + motivation side by side */}
       {(data.problem || data.motivation) && (
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2">
           {data.problem && (
             <ReviewBlock icon={<Target size={14} />} title="研究问题">
               <p className="leading-7 text-slate-200">{data.problem}</p>
@@ -628,7 +649,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
       {/* Innovations — vs previous work */}
       {data.innovations && (data.innovations.previous_work || data.innovations.this_work || data.innovations.why_better) && (
         <ReviewBlock icon={<GitBranch size={14} />} title="关键创新点">
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="responsive-card-grid">
             {data.innovations.previous_work && (
               <InnovationCard
                 tone="slate"
@@ -671,7 +692,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
       {/* Techniques */}
       {Array.isArray(data.techniques) && data.techniques.length > 0 && (
         <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
-          <div className="grid md:grid-cols-2 gap-3">
+          <div className="responsive-card-grid">
             {data.techniques.map((t, i) => (
               <div
                 key={i}
@@ -706,7 +727,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
       {/* Datasets + Baselines */}
       {((Array.isArray(data.datasets) && data.datasets.length) ||
         (Array.isArray(data.baselines) && data.baselines.length)) && (
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-4 lg:grid-cols-2">
           {Array.isArray(data.datasets) && data.datasets.length > 0 && (
             <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
               <ul className="space-y-2.5">
@@ -788,7 +809,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
             {data.historical_position.overall && (
               <p className="prose-reading text-[14px] text-slate-200">{data.historical_position.overall}</p>
             )}
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 lg:grid-cols-2">
               {data.historical_position.builds_on && (
                 <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
                   <p className="section-label mb-1.5 text-slate-400">站在谁的肩上</p>
@@ -894,7 +915,7 @@ function CodeBlock({ code }: { code: string }) {
         {copied ? <Check size={11} /> : <Copy size={11} />}
         {copied ? '已复制' : '复制'}
       </button>
-      <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/70 px-4 py-3 pr-20 text-[12px] leading-6 font-mono text-slate-200">
+      <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-3 pt-10 font-mono text-[12px] leading-6 text-slate-200 sm:px-4 sm:pt-3 sm:pr-20">
         <code>{code}</code>
       </pre>
     </div>
@@ -906,18 +927,18 @@ function ReviewBlock({
 }: { icon: React.ReactNode; title: string; meta?: string; children: React.ReactNode }) {
   return (
     <section className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/35 shadow-[0_12px_28px_rgba(2,6,23,0.16)]">
-      <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-4 py-2.5">
+      <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-3 py-2.5 sm:px-4">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
           {icon}
         </span>
-        <h3 className="text-sm font-semibold tracking-tight text-slate-100">{title}</h3>
+        <h3 className="min-w-0 text-sm font-semibold tracking-tight text-slate-100 text-safe-wrap">{title}</h3>
         {meta && (
-          <span className="ml-auto rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-xs tabular-nums text-slate-400">
+          <span className="ml-auto max-w-[45%] truncate rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-xs tabular-nums text-slate-400">
             {meta}
           </span>
         )}
       </div>
-      <div className="px-4 py-4 text-sm">{children}</div>
+      <div className="px-3 py-4 text-sm sm:px-4">{children}</div>
     </section>
   )
 }
@@ -1178,7 +1199,7 @@ function NoteBlockCard({
             <h4 className="text-sm font-semibold leading-6 text-slate-100">{block.title}</h4>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div className="flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
           <button
             onClick={onStartEdit}
             disabled={locked}
