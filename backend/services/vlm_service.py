@@ -336,6 +336,14 @@ _PRINCIPLE_SUB = {
     "关键公式": "key_formulas", "key_formulas": "key_formulas",
 }
 
+_FORMULA_SUB = {
+    "名称": "name", "名字": "name", "title": "name", "name": "name",
+    "公式": "formula", "公式内容": "formula", "latex": "formula",
+    "equation": "formula", "expression": "formula", "formula": "formula",
+    "解释": "plain", "白话": "plain", "说明": "plain",
+    "plain": "plain", "meaning": "plain",
+}
+
 _INNOVATIONS_SUB = {
     "以前": "previous_work", "之前": "previous_work",
     "以前是怎么做的": "previous_work",
@@ -425,7 +433,17 @@ def _normalize_extraction(raw) -> dict:
         if isinstance(p, str):
             out["principle"] = {"analogy": p}
         elif isinstance(p, dict):
-            out["principle"] = _remap_keys(p, _PRINCIPLE_SUB)
+            p = _remap_keys(p, _PRINCIPLE_SUB)
+            formulas = p.get("key_formulas")
+            if isinstance(formulas, list):
+                normalized_formulas = []
+                for item in formulas:
+                    if isinstance(item, str):
+                        normalized_formulas.append({"name": item, "formula": "", "plain": ""})
+                    elif isinstance(item, dict):
+                        normalized_formulas.append(_remap_keys(item, _FORMULA_SUB))
+                p["key_formulas"] = normalized_formulas
+            out["principle"] = p
 
     if "innovations" in out and isinstance(out["innovations"], dict):
         out["innovations"] = _remap_keys(out["innovations"], _INNOVATIONS_SUB)

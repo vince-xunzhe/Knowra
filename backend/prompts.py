@@ -46,7 +46,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
     "analogy": <string>,
     "architecture_flow": <string>,
     "key_formulas": [
-      {"name": <string>, "plain": <string>}
+      {"name": <string>, "formula": <string>, "plain": <string>}
     ]
   },
 
@@ -103,7 +103,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
 - motivation: 为什么值得做 50 字内
 - principle.analogy: 用日常生活比喻把核心机制讲清楚（120-200 字），不要公式，突出直觉
 - principle.architecture_flow: 文字描述数据从输入到输出依次流经哪些模块、每一步发生了什么（120-250 字）；如果论文有架构图，把图用文字读出来
-- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, plain: "白话解释这条公式在做什么"}；plain 不要粘 LaTeX
+- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, formula: "公式正文，可用 LaTeX 或论文里的标准写法", plain: "白话解释这条公式在做什么"}；`formula` 必须填写真正公式内容，不能为空，`plain` 不要粘 LaTeX
 - innovations.previous_work: 在这篇论文之前，同类问题主流是怎么做的？卡在哪里？（80-150 字）
 - innovations.this_work: 这篇论文关键改动是什么？（80-150 字）
 - innovations.why_better: 为什么新做法更好？从效率 / 效果 / 扩展性 / 简洁性给出理由（80-150 字）
@@ -139,7 +139,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
 [ ] 关键字段全部填写：title / authors / keywords / techniques / datasets / baselines / contributions / key_findings 都不为空
 [ ] techniques 至少 3 条，datasets 至少 1 条，keywords 至少 5 个，key_findings 至少 2 条
 [ ] principle / innovations / historical_position / pytorch_snippet 都是对象结构，子 key 齐全
-[ ] principle.key_formulas 至少 2 条
+[ ] principle.key_formulas 至少 2 条，且每条都有非空 formula
 [ ] pytorch_snippet.code 是单个字符串，不是数组，也没被 ```python 包着
 [ ] 所有叙事字段字数到位，没有一句话敷衍
 [ ] 输出前后没有任何多余文字、围栏、引用标记

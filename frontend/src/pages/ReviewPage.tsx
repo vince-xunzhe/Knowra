@@ -1,6 +1,7 @@
 import { useEffect, useState, useMemo, useRef, useCallback, createContext, useContext } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import katex from 'katex'
 import {
   CheckCircle2, XCircle, Clock, Search, ExternalLink,
   BookOpen, Users, Calendar, Sparkles, Target, Lightbulb,
@@ -28,7 +29,7 @@ type TextValue = string | { short?: string; detail?: string }
 interface PrincipleBlock {
   analogy?: string
   architecture_flow?: string
-  key_formulas?: { name?: string; plain?: string }[]
+  key_formulas?: { name?: string; formula?: string; plain?: string }[]
 }
 
 interface InnovationsBlock {
@@ -1012,12 +1013,15 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
             )}
             {Array.isArray(principle.key_formulas) && principle.key_formulas.length > 0 && (
               <div>
-                <p className="section-label mb-2 text-indigo-300/80">关键公式（白话）</p>
+                <p className="section-label mb-2 text-indigo-300/80">关键公式</p>
                 <ul className="space-y-2">
                   {principle.key_formulas.map((f, i) => (
                     <li key={i} className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
                       {f.name && <p className="text-xs font-semibold text-indigo-200">{f.name}</p>}
-                      {f.plain && <p className="mt-1 text-sm leading-7 text-slate-300">{f.plain}</p>}
+                      {f.formula && (
+                        <FormulaDisplay formula={f.formula} />
+                      )}
+                      {f.plain && <p className="mt-2 text-sm leading-7 text-slate-300">{f.plain}</p>}
                     </li>
                   ))}
                 </ul>
@@ -1321,6 +1325,49 @@ function ReviewBlock({
       </div>
       <div className="px-3 py-4 text-sm sm:px-4">{children}</div>
     </section>
+  )
+}
+
+function normalizeFormula(raw: string): string {
+  const text = (raw || '').trim()
+  if (!text) return ''
+  if (text.startsWith('$$') && text.endsWith('$$')) return text.slice(2, -2).trim()
+  if (text.startsWith('\\[') && text.endsWith('\\]')) return text.slice(2, -2).trim()
+  if (text.startsWith('$') && text.endsWith('$')) return text.slice(1, -1).trim()
+  return text
+}
+
+function FormulaDisplay({ formula }: { formula: string }) {
+  const normalized = useMemo(() => normalizeFormula(formula), [formula])
+  const rendered = useMemo(() => {
+    if (!normalized) return null
+    try {
+      return katex.renderToString(normalized, {
+        displayMode: true,
+        throwOnError: true,
+        strict: 'warn',
+        trust: false,
+        output: 'html',
+      })
+    } catch {
+      return null
+    }
+  }, [normalized])
+
+  if (!normalized) return null
+
+  if (!rendered) {
+    return (
+      <pre className="formula-fallback mt-1.5 overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-slate-800/70 bg-slate-950/80 px-3 py-2 text-[13px] leading-6 text-slate-100">
+        {normalized}
+      </pre>
+    )
+  }
+
+  return (
+    <div className="formula-display mt-1.5 overflow-x-auto rounded-md border border-slate-800/70 bg-slate-950/80 px-3 py-3 text-slate-50">
+      <div dangerouslySetInnerHTML={{ __html: rendered }} />
+    </div>
   )
 }
 

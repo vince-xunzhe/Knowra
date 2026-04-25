@@ -27,6 +27,26 @@ AVAILABLE_EMBEDDING_MODELS = [
 ]
 
 
+def _upgrade_extraction_prompt(prompt: str) -> str:
+    if not prompt:
+        return DEFAULT_PAPER_PROMPT
+
+    upgraded = prompt
+    upgraded = upgraded.replace(
+        '{"name": <string>, "plain": <string>}',
+        '{"name": <string>, "formula": <string>, "plain": <string>}',
+    )
+    upgraded = upgraded.replace(
+        '- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, plain: "白话解释这条公式在做什么"}；plain 不要粘 LaTeX',
+        '- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, formula: "公式正文，可用 LaTeX 或论文里的标准写法", plain: "白话解释这条公式在做什么"}；`formula` 必须填写真正公式内容，不能为空，`plain` 不要粘 LaTeX',
+    )
+    upgraded = upgraded.replace(
+        '[ ] principle.key_formulas 至少 2 条',
+        '[ ] principle.key_formulas 至少 2 条，且每条都有非空 formula',
+    )
+    return upgraded
+
+
 def load_config() -> dict:
     defaults = {
         "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
@@ -45,6 +65,9 @@ def load_config() -> dict:
             defaults.update(saved)
         except Exception:
             pass
+    defaults["extraction_prompt"] = _upgrade_extraction_prompt(
+        defaults.get("extraction_prompt", DEFAULT_PAPER_PROMPT)
+    )
     if defaults.get("scan_directory"):
         defaults["scan_directory"] = str(
             resolve_papers_directory(defaults["scan_directory"])
@@ -60,6 +83,8 @@ def save_config(updates: dict) -> dict:
         }
     current = load_config()
     current.update(updates)
+    if "extraction_prompt" in current:
+        current["extraction_prompt"] = _upgrade_extraction_prompt(current["extraction_prompt"])
     if current.get("scan_directory"):
         current["scan_directory"] = portable_data_path(current["scan_directory"])
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)

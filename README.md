@@ -41,6 +41,8 @@ For installation, runtime dependencies, and startup commands, see [Install](INST
 6. Use the graph to explore connections between papers, techniques, datasets, findings, and research areas.
 7. Adjust the prompt or similarity threshold as your research corpus evolves.
 
+For the end-to-end pipeline from a PDF to graph nodes and edges, see [Architecture](docs/ARCHITECTURE.md).
+
 ## Data Model
 
 Knowra stores runtime data in SQLite and the local filesystem.

@@ -168,6 +168,29 @@ input[type="range"]::-webkit-slider-thumb:hover {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
 }
 
+.formula-display {
+  box-shadow: inset 0 1px 0 rgba(148, 163, 184, 0.04);
+}
+
+.formula-display .katex-display {
+  margin: 0;
+  padding: 0;
+}
+
+.formula-display .katex {
+  color: #f8fafc;
+  font-size: 1.08rem;
+}
+
+.formula-display .katex-display > .katex {
+  display: inline-block;
+  min-width: max-content;
+}
+
+.formula-fallback {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
 /* Markdown notes — paper review personal notes */
 .markdown-notes {
   overflow-wrap: anywhere;

@@ -16,6 +16,47 @@ flowchart LR
   H --> I["React 图谱与论文界面"]
 ```
 
+## PDF 到知识图谱链路
+
+下面这条链路描述的是一篇论文从本地 PDF 进入 Knowra，再变成图谱节点和边的实际处理过程。
+
+```mermaid
+flowchart TD
+  A["本地 PDF"] --> B["scanner_service.scan_directory"]
+  B --> C["papers 表<br/>创建论文记录"]
+  C --> D["papers._process_single"]
+  D --> E["pdf_service.extract_text<br/>提取全文文本"]
+  D --> F["pdf_service.render_first_page<br/>生成首页预览图"]
+  D --> G["vlm_service.extract_knowledge_from_paper"]
+  G --> H{"模型通道"}
+  H -->|旧模型| I["Assistants API + file_search"]
+  H -->|GPT-5.4 / 5.5 等| J["Responses API + file_search"]
+  I --> K["raw_llm_response"]
+  J --> K
+  K --> L["parse_extraction_response<br/>宽松 JSON 解析 + 字段归一化"]
+  L --> M["结构化 extraction"]
+  M --> N["graph_service.add_nodes_from_paper_extraction"]
+  N --> O["创建或合并节点<br/>paper / technique / dataset / problem_area / finding"]
+  O --> P["创建关系边<br/>uses / builds_on / trained_on / evaluated_on / compared_to / finding"]
+  O --> Q["get_embedding<br/>生成节点向量"]
+  Q --> R["按相似度阈值补充 similar 边"]
+  P --> S["knowledge_nodes / knowledge_edges"]
+  R --> S
+  D --> T["paper_record_service.sync_record_from_paper"]
+  K --> T
+  S --> U["前端图谱页 / 论文库 / 回顾页"]
+  T --> U
+```
+
+### 关键说明
+
+- `scanner_service.py` 只负责发现论文、去重并创建 `Paper` 记录，不直接构建图谱。
+- 真正的主处理入口是 `backend/routers/papers.py` 里的 `_process_single()`。
+- PDF 文本提取和首页渲染属于本地预处理，主要用于调试、展示和辅助信息，不是当前图谱生成的主输入。
+- 论文理解的核心依赖 `vlm_service.py` 的 `file_search` 抽取；模型返回的 `raw_llm_response` 会先经过宽松解析和字段归一化，再交给图谱构建层。
+- `graph_service.py` 会同时做两类工作：一类是按抽取字段显式创建语义边，另一类是按 embedding 相似度补 `similar` 边。
+- 每篇论文还会同步生成一份 markdown 档案，保存源资料、首次响应、当前响应、笔记和追问记录，作为持续积累的原始知识语料。
+
 ## 后端模块
 
 ### API 层
