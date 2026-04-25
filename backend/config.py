@@ -21,6 +21,11 @@ AVAILABLE_MODELS = [
     {"id": "gpt-4.1-mini", "label": "GPT-4.1-mini", "supports_vision": True, "desc": "性价比"},
 ]
 
+AVAILABLE_EMBEDDING_MODELS = [
+    {"id": "text-embedding-3-large", "label": "text-embedding-3-large", "desc": "精度更高，适合更细的语义连接"},
+    {"id": "text-embedding-3-small", "label": "text-embedding-3-small", "desc": "默认推荐，成本和效果更均衡"},
+]
+
 
 def load_config() -> dict:
     defaults = {

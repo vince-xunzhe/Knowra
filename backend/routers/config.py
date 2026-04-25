@@ -1,7 +1,12 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
-from config import load_config, save_config, AVAILABLE_MODELS
+from config import (
+    AVAILABLE_EMBEDDING_MODELS,
+    AVAILABLE_MODELS,
+    load_config,
+    save_config,
+)
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -26,6 +31,7 @@ def get_config():
         key = cfg["openai_api_key"]
         cfg["openai_api_key"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "****"
     cfg["available_models"] = AVAILABLE_MODELS
+    cfg["available_embedding_models"] = AVAILABLE_EMBEDDING_MODELS
     return cfg
 
 

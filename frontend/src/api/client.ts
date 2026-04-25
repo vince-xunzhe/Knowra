@@ -82,8 +82,8 @@ export interface NodeDetail extends GraphNode {
 export interface AvailableModel {
   id: string
   label: string
-  supports_vision: boolean
   desc: string
+  supports_vision?: boolean
 }
 
 export interface Config {
@@ -94,6 +94,7 @@ export interface Config {
   similarity_threshold: number
   use_first_page_image: boolean
   available_models: AvailableModel[]
+  available_embedding_models: AvailableModel[]
 }
 
 export interface PromptData {

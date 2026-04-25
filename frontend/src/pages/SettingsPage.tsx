@@ -43,6 +43,7 @@ export default function SettingsPage() {
   if (loading) return <div className="p-10 text-sm text-slate-500">加载中…</div>
 
   const models = config.available_models || []
+  const embeddingModels = config.available_embedding_models || []
   const selectedModel = models.find(m => m.id === config.vlm_model)
 
   return (
@@ -101,7 +102,7 @@ export default function SettingsPage() {
         </SettingGroup>
 
         {/* Model */}
-        <SettingGroup title="模型" description="处理论文使用的大语言模型">
+        <SettingGroup title="模型" description="配置论文处理模型与图谱向量模型">
           <Field icon={<Cpu size={14} />} label="处理模型">
             <select
               value={config.vlm_model || 'gpt-4o'}
@@ -114,6 +115,28 @@ export default function SettingsPage() {
                 models.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.label} {m.supports_vision ? '[视觉]' : ''} — {m.desc}
+                  </option>
+                ))
+              )}
+            </select>
+          </Field>
+
+          <Field
+            icon={<Cpu size={14} />}
+            label="Embedding 模型"
+            hint="用于图谱节点向量化与相似度连接计算"
+          >
+            <select
+              value={config.embedding_model || 'text-embedding-3-small'}
+              onChange={e => setConfig(c => ({ ...c, embedding_model: e.target.value }))}
+              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg text-sm text-slate-200 px-3 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors appearance-none"
+            >
+              {embeddingModels.length === 0 ? (
+                <option value="text-embedding-3-small">text-embedding-3-small</option>
+              ) : (
+                embeddingModels.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} — {m.desc}
                   </option>
                 ))
               )}
