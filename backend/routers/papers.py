@@ -15,6 +15,7 @@ from services.scanner_service import scan_directory
 from services.pdf_service import extract_text, render_first_page
 from services.vlm_service import (
     extract_knowledge_from_paper,
+    model_uses_responses_api,
     parse_extraction_response,
     run_chat_turn,
     PaperExtractionError,
@@ -265,20 +266,24 @@ def _process_single(paper_id: int):
         # The PDF itself is uploaded; cached file_id + assistant_id get reused.
         cached_file_id = p.openai_file_id
         cached_assistant_id = cfg.get("openai_assistant_id") or None
+        cached_vector_store_id = p.openai_vector_store_id
 
-        extraction, raw, new_file_id, new_assistant_id, new_thread_id = extract_knowledge_from_paper(
+        extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
             pdf_filepath=str(pdf_path),
             prompt=cfg["extraction_prompt"],
             api_key=cfg["openai_api_key"],
             model=cfg["vlm_model"],
             cached_file_id=cached_file_id,
             cached_assistant_id=cached_assistant_id,
+            cached_vector_store_id=cached_vector_store_id,
         )
 
         # Persist the cached identifiers so subsequent runs skip the upload /
         # assistant creation round-trips.
         if new_file_id and new_file_id != cached_file_id:
             p.openai_file_id = new_file_id
+        if new_vector_store_id and new_vector_store_id != cached_vector_store_id:
+            p.openai_vector_store_id = new_vector_store_id
         if new_assistant_id and new_assistant_id != cached_assistant_id:
             save_config({"openai_assistant_id": new_assistant_id})
         # Keep the thread so follow-up chat can reuse it. Reset history since
@@ -378,6 +383,7 @@ def _prepare_reprocess(db: Session, p: Paper):
     # fresh thread. Reusing a stale file_id against a new per-thread vector
     # store often returns zero file_search hits → model answers with "{}".
     p.openai_file_id = None
+    p.openai_vector_store_id = None
     p.openai_thread_id = None
     p.thread_created_at = None
     db.commit()
@@ -527,20 +533,26 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
     cfg = load_config()
     api_key = cfg.get("openai_api_key")
     assistant_id = cfg.get("openai_assistant_id")
-    if not api_key or not assistant_id:
-        raise HTTPException(status_code=400, detail="OpenAI 未配置或 assistant 未创建")
+    model = cfg.get("vlm_model", "gpt-4o")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="OpenAI 未配置")
+    if not model_uses_responses_api(model) and not assistant_id:
+        raise HTTPException(status_code=400, detail="assistant 未创建")
 
     user_text = (body.message or "").strip()
     if not user_text:
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     try:
-        reply, thread_id, was_recreated = run_chat_turn(
+        reply, thread_id, was_recreated, vector_store_id = run_chat_turn(
             api_key=api_key,
+            model=model,
             assistant_id=assistant_id,
             file_id=p.openai_file_id,
             user_message=user_text,
+            cached_vector_store_id=p.openai_vector_store_id,
             cached_thread_id=p.openai_thread_id,
+            chat_history=p.chat_history,
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"对话失败: {e}")
@@ -556,6 +568,8 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
     history.append({"role": "assistant", "content": reply, "ts": datetime.now(timezone.utc).isoformat()})
 
     p.openai_thread_id = thread_id
+    if vector_store_id:
+        p.openai_vector_store_id = vector_store_id
     p.chat_history = history
     if p.thread_created_at is None:
         p.thread_created_at = now

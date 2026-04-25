@@ -1,11 +1,9 @@
-"""Paper extraction via OpenAI Assistants API + file_search.
+"""Paper extraction via OpenAI file_search.
 
-The PDF itself is uploaded to OpenAI (purpose="assistants"), attached to a
-throwaway thread with the file_search tool, and the assistant returns a
-structured JSON response built from its own layout-aware PDF pipeline.
-
-This replaces the previous chat.completions path that stuffed pypdf-extracted
-text + a first-page PNG into a multimodal user message.
+Compatibility strategy:
+- Older supported models keep using Assistants API + file_search.
+- Newer GPT-5.4/5.5 models use Responses API + file_search because they are
+  not available in the Assistants API.
 """
 import json
 import math
@@ -50,6 +48,11 @@ ASSISTANT_INSTRUCTIONS = (
 )
 
 ASSISTANT_NAME = "knowledge-tree-paper-extractor"
+RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
+
+
+def model_uses_responses_api(model: str) -> bool:
+    return model in RESPONSES_ONLY_MODELS
 
 
 # --- assistant lifecycle -----------------------------------------------------
@@ -109,6 +112,38 @@ def _ensure_file(
     with open(pdf_filepath, "rb") as f:
         uploaded = client.files.create(file=f, purpose="assistants")
     return uploaded.id
+
+
+def _ensure_vector_store(
+    client: OpenAI,
+    cached_vector_store_id: Optional[str],
+    file_id: str,
+    timeout_s: int = 300,
+) -> str:
+    if cached_vector_store_id:
+        try:
+            existing = client.vector_stores.retrieve(cached_vector_store_id)
+            file_counts = getattr(existing, "file_counts", None)
+            in_progress = getattr(file_counts, "in_progress", 0) if file_counts else 0
+            if in_progress == 0:
+                return existing.id
+        except Exception:
+            pass
+
+    store = client.vector_stores.create(file_ids=[file_id])
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        current = client.vector_stores.retrieve(store.id)
+        file_counts = getattr(current, "file_counts", None)
+        in_progress = getattr(file_counts, "in_progress", 0) if file_counts else 0
+        failed = getattr(file_counts, "failed", 0) if file_counts else 0
+        completed = getattr(file_counts, "completed", 0) if file_counts else 0
+        if in_progress == 0:
+            if failed and completed == 0:
+                raise RuntimeError("Vector store file processing failed")
+            return current.id
+        time.sleep(1.5)
+    raise RuntimeError("Timed out waiting for vector store readiness")
 
 
 # --- run & collect -----------------------------------------------------------
@@ -187,6 +222,25 @@ def _run_and_collect(
     preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
     _log(f"thread={thread.id} raw_len={len(raw)} preview={preview!r}")
     return raw, thread.id
+
+
+def _run_with_responses_file_search(
+    client: OpenAI,
+    model: str,
+    vector_store_id: str,
+    prompt: str,
+) -> tuple[str, str]:
+    response = client.responses.create(
+        model=model,
+        instructions=ASSISTANT_INSTRUCTIONS,
+        input=prompt,
+        tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+        text={"format": {"type": "json_object"}},
+    )
+    raw = getattr(response, "output_text", "") or ""
+    preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
+    _log(f"responses id={response.id} raw_len={len(raw)} preview={preview!r}")
+    return raw, response.id
 
 
 # --- response cleaning -------------------------------------------------------
@@ -417,22 +471,32 @@ def extract_knowledge_from_paper(
     model: str,
     cached_file_id: Optional[str] = None,
     cached_assistant_id: Optional[str] = None,
-) -> tuple[dict, str, str, str, str]:
+    cached_vector_store_id: Optional[str] = None,
+) -> tuple[dict, str, str, str, str, str]:
     """Run structured extraction on a single PDF via Assistants + file_search.
 
-    Returns (parsed_json, raw_response, file_id, assistant_id, thread_id).
+    Returns (parsed_json, raw_response, file_id, assistant_id, thread_or_response_id, vector_store_id).
     Callers should persist file_id on the Paper row, assistant_id in config,
     and thread_id on the Paper row so follow-up chat can reuse the thread.
     """
     client = OpenAI(api_key=api_key)
-
-    assistant_id = _ensure_assistant(client, cached_assistant_id, model)
     file_id = _ensure_file(client, cached_file_id, pdf_filepath)
+    assistant_id = ""
+    vector_store_id = cached_vector_store_id or ""
 
     raw = ""
     thread_id = ""
     try:
-        raw, thread_id = _run_and_collect(client, assistant_id, file_id, prompt)
+        if model_uses_responses_api(model):
+            vector_store_id = _ensure_vector_store(
+                client, cached_vector_store_id, file_id
+            )
+            raw, thread_id = _run_with_responses_file_search(
+                client, model, vector_store_id, prompt
+            )
+        else:
+            assistant_id = _ensure_assistant(client, cached_assistant_id, model)
+            raw, thread_id = _run_and_collect(client, assistant_id, file_id, prompt)
         parsed = _normalize_extraction(_parse_json_lenient(raw))
     except PaperExtractionError:
         raise
@@ -447,7 +511,7 @@ def extract_knowledge_from_paper(
             assistant_id=assistant_id,
         ) from e
 
-    return parsed, raw, file_id, assistant_id, thread_id
+    return parsed, raw, file_id, assistant_id, thread_id, vector_store_id
 
 
 # --- follow-up chat ----------------------------------------------------------
@@ -483,12 +547,15 @@ def _ensure_chat_thread(
 
 def run_chat_turn(
     api_key: str,
+    model: str,
     assistant_id: str,
     file_id: str,
     user_message: str,
+    cached_vector_store_id: Optional[str] = None,
     cached_thread_id: Optional[str] = None,
+    chat_history: Optional[list] = None,
     timeout_s: int = 300,
-) -> tuple[str, str, bool]:
+) -> tuple[str, str, bool, str]:
     """Send a user message on the paper's thread and return
     `(assistant_reply, thread_id, thread_was_recreated)`.
 
@@ -496,6 +563,57 @@ def run_chat_turn(
     the thread and re-attaches the PDF when the old one is gone.
     """
     client = OpenAI(api_key=api_key)
+
+    if model_uses_responses_api(model):
+        vector_store_id = _ensure_vector_store(client, cached_vector_store_id, file_id)
+        create_kwargs = {
+            "model": model,
+            "instructions": CHAT_INSTRUCTIONS,
+            "input": [{"role": "user", "content": user_message}],
+            "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+        }
+        is_new = not bool(cached_thread_id)
+        if cached_thread_id:
+            create_kwargs["previous_response_id"] = cached_thread_id
+            try:
+                response = client.responses.create(**create_kwargs)
+            except APIStatusError:
+                history = []
+                for item in chat_history or []:
+                    if not isinstance(item, dict):
+                        continue
+                    role = str(item.get("role") or "").strip()
+                    if role not in {"user", "assistant"}:
+                        continue
+                    history.append({"role": role, "content": str(item.get("content") or "")})
+                history.append({"role": "user", "content": user_message})
+                response = client.responses.create(
+                    model=model,
+                    instructions=CHAT_INSTRUCTIONS,
+                    input=history,
+                    tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+                )
+                is_new = True
+        else:
+            history = []
+            for item in chat_history or []:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "").strip()
+                if role not in {"user", "assistant"}:
+                    continue
+                history.append({"role": role, "content": str(item.get("content") or "")})
+            history.append({"role": "user", "content": user_message})
+            response = client.responses.create(
+                model=model,
+                instructions=CHAT_INSTRUCTIONS,
+                input=history,
+                tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+            )
+
+        reply = _strip_citations((getattr(response, "output_text", "") or "")).strip()
+        return reply, response.id, is_new, vector_store_id
+
     thread_id, is_new = _ensure_chat_thread(client, cached_thread_id, file_id)
 
     attachments = None
@@ -530,7 +648,7 @@ def run_chat_turn(
     )
     raw = _extract_assistant_text(messages)
     reply = _strip_citations(raw).strip()
-    return reply, thread_id, is_new
+    return reply, thread_id, is_new, cached_vector_store_id or ""
 
 
 # --- embeddings (unchanged) --------------------------------------------------
