@@ -552,6 +552,14 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
   const [expanded, setExpanded] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Reprocess / reload updates arrive through the parent paper detail object.
+  // Keep the local chat panel in sync so the module re-enables itself when the
+  // backend has finished rebuilding the paper state.
+  useEffect(() => {
+    setChat(paper.chat)
+    setError(null)
+  }, [paper.id, paper.chat])
+
   // Re-derive countdown every minute without refetching.
   const [, setTick] = useState(0)
   useEffect(() => {
