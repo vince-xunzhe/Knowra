@@ -1,6 +1,6 @@
 # 架构说明
 
-Knowra 由一个本地 FastAPI 服务和一个 Vite/React 前端组成。后端负责扫描论文、调用 OpenAI、持久化知识图谱；前端负责配置、触发处理、展示图谱和回顾抽取结果。
+Knowra 由一个本地 FastAPI 服务和一个 Vite/React 前端组成。后端负责扫描论文、调用 OpenAI、持久化知识图谱，并为每篇论文维护一份 markdown 档案；前端负责配置、触发处理、展示图谱和回顾抽取结果。
 
 ## 总体流程
 
@@ -21,7 +21,7 @@ flowchart LR
 ### API 层
 
 - `backend/main.py` 创建 FastAPI 应用，挂载 CORS 和四组路由。
-- `backend/routers/papers.py` 管理论文扫描、列表、详情、单篇/批量处理、重试和处理状态。
+- `backend/routers/papers.py` 管理论文扫描、列表、详情、单篇/批量处理、重试、markdown 档案和处理状态。
 - `backend/routers/graph.py` 提供图谱数据、节点详情、搜索、重建相似边和重置图谱。
 - `backend/routers/config.py` 读取和更新运行配置，并对 API Key 做脱敏返回。
 - `backend/routers/prompt.py` 读取、保存和重置论文抽取 Prompt。
@@ -32,6 +32,7 @@ flowchart LR
 - `pdf_service.py` 抽取 PDF 文本、渲染首页 PNG，并计算文件哈希。
 - `vlm_service.py` 通过 OpenAI Assistants API 上传 PDF，使用 file_search 阅读全文，并要求模型返回 JSON。
 - `graph_service.py` 将抽取 JSON 转换为节点和边，并用 embedding 相似度补充 `similar` 边。
+- `paper_record_service.py` 为每篇论文生成/同步 markdown 档案，沉淀源信息、首次响应、当前响应、用户笔记和追问记录。
 
 ### 数据层
 
@@ -42,6 +43,8 @@ SQLite 数据库默认位于 `data/knowledge.db`。
 - `papers`：记录 PDF 文件、元信息、处理状态、OpenAI file id、原始模型响应和错误信息。
 - `knowledge_nodes`：记录论文、技术、数据集、研究领域、关键发现等节点。
 - `knowledge_edges`：记录节点关系，包含关系类型和权重。
+
+除了 SQLite 外，每篇论文还会在 `data/paper_records/` 下生成一份 markdown 档案，作为持续积累论文知识语料的可读主档案。
 
 `backend/database.py` 会在启动时执行 `create_all()`，并包含针对 SQLite 的轻量幂等迁移。
 

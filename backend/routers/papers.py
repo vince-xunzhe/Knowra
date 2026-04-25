@@ -20,6 +20,14 @@ from services.vlm_service import (
     PaperExtractionError,
 )
 from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
+from services.note_images_gc import gc_on_notes_update
+from services.paper_record_service import (
+    record_path_for_paper,
+    record_relpath_for_paper,
+    record_url_for_paper,
+    sync_paper_from_record,
+    sync_record_from_paper,
+)
 
 
 def _safe_parse(raw):
@@ -110,12 +118,20 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": has_first_page_image,
+        "record_markdown_path": record_relpath_for_paper(p),
+        "record_markdown_url": record_url_for_paper(p),
         "chat": _chat_state(p),
         "knowledge_nodes": [
             {"id": n.id, "title": n.title, "node_type": n.node_type, "tags": n.tags or []}
             for n in nodes
         ],
     }
+
+
+def _sync_paper_from_record_if_needed(db: Session, p: Paper):
+    if sync_paper_from_record(p):
+        db.commit()
+        db.refresh(p)
 
 
 @router.post("/scan")
@@ -130,6 +146,11 @@ def scan_papers(db: Session = Depends(get_db)):
 @router.get("/papers")
 def list_papers(db: Session = Depends(get_db)):
     papers = db.query(Paper).order_by(Paper.created_at.desc()).all()
+    changed = False
+    for paper in papers:
+        changed = _sync_bulk_record_state(paper) or changed
+    if changed:
+        db.commit()
     return [
         {
             "id": p.id,
@@ -147,11 +168,16 @@ def list_papers(db: Session = Depends(get_db)):
     ]
 
 
+def _sync_bulk_record_state(p: Paper) -> bool:
+    return sync_paper_from_record(p)
+
+
 @router.get("/papers/{paper_id}")
 def get_paper(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
     return _serialize_paper_detail(p, db)
 
 
@@ -164,6 +190,18 @@ def serve_pdf(paper_id: int, db: Session = Depends(get_db)):
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail=f"PDF not found: {pdf_path}")
     return FileResponse(str(pdf_path), media_type="application/pdf", filename=p.filename)
+
+
+@router.get("/papers/{paper_id}/record")
+def serve_paper_record(paper_id: int, db: Session = Depends(get_db)):
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
+    path = record_path_for_paper(p)
+    if not path.exists():
+        sync_record_from_paper(p, event="bootstrap")
+    return FileResponse(str(path), media_type="text/markdown; charset=utf-8", filename=path.name)
 
 
 @router.get("/papers/{paper_id}/first_page")
@@ -188,6 +226,7 @@ def _process_single(paper_id: int):
         if not cfg.get("openai_api_key"):
             p.error = "OpenAI API key not configured"
             db.commit()
+            sync_record_from_paper(p, event="process_error")
             processing_state["errors"] += 1
             return
 
@@ -266,6 +305,7 @@ def _process_single(paper_id: int):
         p.processed_at = datetime.now(timezone.utc)
         p.error = None
         db.commit()
+        sync_record_from_paper(p, event="process")
         processing_state["done"] += 1
     except PaperExtractionError as e:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
@@ -276,6 +316,7 @@ def _process_single(paper_id: int):
                 p.openai_file_id = e.file_id
             p.error = str(e)[:500]
             db.commit()
+            sync_record_from_paper(p, event="process_error")
         if e.assistant_id:
             try:
                 save_config({"openai_assistant_id": e.assistant_id})
@@ -287,6 +328,7 @@ def _process_single(paper_id: int):
         if p:
             p.error = str(e)[:500]
             db.commit()
+            sync_record_from_paper(p, event="process_error")
         processing_state["errors"] += 1
     finally:
         db.close()
@@ -332,7 +374,14 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.processed_at = None
     p.raw_llm_response = None
     p.error = None
+    # Drop cached OpenAI handles so reprocess re-uploads the PDF and opens a
+    # fresh thread. Reusing a stale file_id against a new per-thread vector
+    # store often returns zero file_search hits → model answers with "{}".
+    p.openai_file_id = None
+    p.openai_thread_id = None
+    p.thread_created_at = None
     db.commit()
+    sync_record_from_paper(p, event="reprocess_prepare")
 
 
 @router.post("/process")
@@ -365,6 +414,7 @@ def retry_paper(paper_id: int, background_tasks: BackgroundTasks, db: Session = 
     p.error = None
     p.processed = False
     db.commit()
+    sync_record_from_paper(p, event="retry_prepare")
     background_tasks.add_task(_process_one_background, paper_id)
     return {"message": f"Retry started for {p.filename}"}
 
@@ -392,6 +442,7 @@ def update_paper_response(
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
 
     raw = body.raw_llm_response.strip()
     if not raw:
@@ -424,6 +475,7 @@ def update_paper_response(
         db,
     )
     db.commit()
+    sync_record_from_paper(p, event="manual_response_edit")
     db.refresh(p)
     return _serialize_paper_detail(p, db)
 
@@ -438,8 +490,18 @@ def update_paper_notes(
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
+    old_notes = p.notes or ""
     p.notes = body.notes
     db.commit()
+    # Clean up pasted images that got removed from this paper's notes and
+    # aren't referenced by any other paper. Runs after commit so a GC failure
+    # can't take down the save.
+    try:
+        gc_on_notes_update(db, p.id, old_notes, body.notes)
+    except Exception:
+        pass
+    sync_record_from_paper(p, event="notes_update")
     db.refresh(p)
     return _serialize_paper_detail(p, db)
 
@@ -449,6 +511,7 @@ def get_chat(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
     return _chat_state(p)
 
 
@@ -457,6 +520,7 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
     if not p.processed or not p.openai_file_id:
         raise HTTPException(status_code=400, detail="论文尚未完成处理，无法追问")
 
@@ -496,6 +560,7 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
     if p.thread_created_at is None:
         p.thread_created_at = now
     db.commit()
+    sync_record_from_paper(p, event="chat_turn")
     db.refresh(p)
     return _chat_state(p)
 
@@ -507,10 +572,12 @@ def reset_chat(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
     p.openai_thread_id = None
     p.thread_created_at = None
     p.chat_history = []
     db.commit()
+    sync_record_from_paper(p, event="chat_reset")
     db.refresh(p)
     return _chat_state(p)
 

@@ -4,6 +4,7 @@ from database import get_db
 from models import Paper, KnowledgeNode, KnowledgeEdge
 from config import load_config
 from services.graph_service import get_graph_data, _add_similarity_edges
+from services.paper_record_service import sync_record_from_paper
 
 router = APIRouter(prefix="/api", tags=["graph"])
 
@@ -88,6 +89,11 @@ def reset_graph(db: Session = Depends(get_db)):
         Paper.error: None,
     })
     db.commit()
+    for paper in db.query(Paper).all():
+        try:
+            sync_record_from_paper(paper, event="graph_reset")
+        except Exception:
+            pass
     return {"message": "Graph cleared. All papers marked for re-processing."}
 
 

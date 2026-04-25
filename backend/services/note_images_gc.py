@@ -11,6 +11,7 @@ saved into its notes yet.
 """
 import re
 from pathlib import Path
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
@@ -23,7 +24,7 @@ from routers.note_images import NOTE_IMAGES_DIR
 _REF_RE = re.compile(r"/api/note_images/([A-Za-z0-9._-]+)")
 
 
-def _refs_in(text: str | None) -> set[str]:
+def _refs_in(text: Optional[str]) -> set:
     if not text:
         return set()
     return set(_REF_RE.findall(text))
@@ -32,8 +33,8 @@ def _refs_in(text: str | None) -> set[str]:
 def gc_on_notes_update(
     db: Session,
     paper_id: int,
-    old_notes: str | None,
-    new_notes: str | None,
+    old_notes: Optional[str],
+    new_notes: Optional[str],
 ) -> int:
     """Delete image files that were in `old_notes`, are gone from `new_notes`,
     and are not referenced by any other paper. Returns files deleted."""

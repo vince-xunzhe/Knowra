@@ -12,6 +12,7 @@ Knowra 是一个本地优先的 AI 研究工作台，帮助用户从论文和领
 - **论文回顾**：查看模型抽取的标题、作者、摘要、研究问题、方法、数据集、baseline、贡献和关键发现。
 - **修复流程**：当模型回答格式有小问题时，可以编辑原始 response；也可以对单篇论文确认后重新处理，并调整抽取 Prompt。
 - **个人笔记**：每篇论文支持 Markdown 笔记，可直接粘贴或拖入截图，并支持图片放大查看。
+- **论文档案 markdown**：每篇论文都有一份持续累积的 markdown 档案，包含源资料信息、首次 file_search response、当前 response、用户笔记和完整追问记录。
 - **知识图谱**：浏览论文、技术、数据集、研究领域、关键发现和相似节点之间的关系。
 - **相似度重建**：按配置阈值重建 embedding 相似边，不需要重新抽取论文。
 - **本地存储**：数据库、PDF、缩略图、笔记图片和配置都保存在本地 `data/` 目录。
@@ -72,9 +73,10 @@ data/
 ├── config.json              # 本地设置和 API Key，默认不提交
 ├── knowledge.db             # SQLite 数据库，默认不提交
 ├── papers/                  # 默认 PDF 扫描目录，默认不提交
-└── artifacts/
+├── artifacts/
     ├── first_pages/         # 首页预览图缓存
     └── note_images/         # 粘贴或拖入笔记的图片
+└── paper_records/           # 每篇论文一份 markdown 知识档案
 ```
 
 ## 项目结构
@@ -114,6 +116,7 @@ Knowra 面向本地个人研究流程。默认不会提交以下运行数据：
 - `data/knowledge.db`
 - `data/papers/*`
 - `data/artifacts/*`
+- `data/paper_records/*`
 - `backend/.venv`
 - `frontend/node_modules`
 - `frontend/dist`

@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 from models import Paper
 from path_utils import portable_data_path, resolve_papers_directory
 from services.pdf_service import compute_hash
+from services.paper_record_service import sync_record_from_paper
 
 
 def scan_directory(directory: str, db: Session) -> dict:
@@ -16,6 +17,7 @@ def scan_directory(directory: str, db: Session) -> dict:
     existing_hashes = {row.file_hash for row in db.query(Paper.file_hash).all()}
 
     added = 0
+    added_papers: list[Paper] = []
     for ext in ("*.pdf", "*.PDF"):
         for pdf_path in scan_path.rglob(ext):
             filepath_str = str(pdf_path)
@@ -33,6 +35,7 @@ def scan_directory(directory: str, db: Session) -> dict:
                     processed=False,
                 )
                 db.add(paper)
+                added_papers.append(paper)
                 existing_paths.add(storage_path)
                 existing_hashes.add(file_hash)
                 added += 1
@@ -40,6 +43,12 @@ def scan_directory(directory: str, db: Session) -> dict:
                 continue
 
     db.commit()
+
+    for paper in added_papers:
+        try:
+            sync_record_from_paper(paper, event="scan")
+        except Exception:
+            pass
 
     total = db.query(Paper).count()
     unprocessed = db.query(Paper).filter(Paper.processed == False).count()

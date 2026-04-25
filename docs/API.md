@@ -30,6 +30,10 @@
 }
 ```
 
+### `GET /api/papers/{paper_id}/record`
+
+返回这篇论文对应的 markdown 档案文件。
+
 ## 配置
 
 ### `GET /api/config`

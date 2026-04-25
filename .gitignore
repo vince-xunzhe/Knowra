@@ -36,6 +36,8 @@ data/*.sqlite3
 data/knowledge.db
 data/artifacts/*
 !data/artifacts/.gitkeep
+data/paper_records/*
+!data/paper_records/.gitkeep
 data/papers/*
 !data/papers/.gitkeep
 

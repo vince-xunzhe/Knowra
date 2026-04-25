@@ -12,6 +12,7 @@ For installation, runtime dependencies, and startup commands, see [Install](INST
 - **Paper review**: inspect model-extracted metadata, summaries, research questions, methods, datasets, baselines, contributions, and findings.
 - **Repair workflow**: edit raw model responses when formatting is slightly wrong, reprocess a single paper with confirmation, and tune the extraction prompt.
 - **Personal notes**: write Markdown notes per paper, paste or drop screenshots into notes, and zoom images in a lightbox.
+- **Paper record markdown**: keep a durable markdown record for every paper, including source metadata, the first file_search response, current working response, notes, and the full follow-up chat log.
 - **Knowledge graph**: browse generated nodes for papers, techniques, datasets, research areas, findings, and similarity links.
 - **Similarity rebuilds**: recompute embedding-based `similar` edges with a configurable threshold without re-running paper extraction.
 - **Local storage**: keep the database, PDFs, thumbnails, note images, and configuration under the local `data/` directory.
@@ -72,9 +73,10 @@ data/
 ├── config.json              # local settings and API key; ignored by Git
 ├── knowledge.db             # SQLite database; ignored by Git
 ├── papers/                  # default PDF scan directory; ignored by Git
-└── artifacts/
+├── artifacts/
     ├── first_pages/         # rendered first-page previews
     └── note_images/         # pasted or dropped note images
+└── paper_records/           # one markdown knowledge record per paper
 ```
 
 ## Project Layout
@@ -114,6 +116,7 @@ Knowra is designed for local personal research workflows. By default, the reposi
 - `data/knowledge.db`
 - `data/papers/*`
 - `data/artifacts/*`
+- `data/paper_records/*`
 - `backend/.venv`
 - `frontend/node_modules`
 - `frontend/dist`
