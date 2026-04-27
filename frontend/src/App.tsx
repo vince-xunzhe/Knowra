@@ -1,13 +1,15 @@
 import { useState } from 'react'
-import { Network, BookOpen, FileText, Pencil, Settings } from 'lucide-react'
+import { Network, BookOpen, FileText, BookMarked, Pencil, Settings } from 'lucide-react'
 import GraphPage from './pages/GraphPage'
 import PapersPage from './pages/PapersPage'
 import ReviewPage from './pages/ReviewPage'
+import ConceptsPage from './pages/ConceptsPage'
 import PromptEditorPage from './pages/PromptEditorPage'
 import SettingsPage from './pages/SettingsPage'
 import ProcessingStatus from './components/ProcessingStatus'
+import WikiCompileStatus from './components/WikiCompileStatus'
 
-type Page = 'graph' | 'papers' | 'review' | 'prompt' | 'settings'
+type Page = 'graph' | 'papers' | 'review' | 'concepts' | 'prompt' | 'settings'
 type NavItem =
   | { id: Page; icon: typeof Network; label: string }
   | { divider: true }
@@ -16,6 +18,7 @@ const NAV: NavItem[] = [
   { id: 'graph', icon: Network, label: '图谱' },
   { id: 'papers', icon: BookOpen, label: '论文' },
   { id: 'review', icon: FileText, label: '回顾' },
+  { id: 'concepts', icon: BookMarked, label: 'Wiki' },
   { divider: true },
   { id: 'prompt', icon: Pencil, label: 'Prompt' },
   { id: 'settings', icon: Settings, label: '设置' },
@@ -69,11 +72,13 @@ export default function App() {
         {page === 'graph' && <GraphPage />}
         {page === 'papers' && <PapersPage />}
         {page === 'review' && <ReviewPage />}
+        {page === 'concepts' && <ConceptsPage />}
         {page === 'prompt' && <PromptEditorPage />}
         {page === 'settings' && <SettingsPage />}
       </main>
 
       <ProcessingStatus />
+      <WikiCompileStatus />
     </div>
   )
 }

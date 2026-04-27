@@ -12,6 +12,8 @@ export default function SettingsPage() {
   const handleSave = useCallback(async () => {
     const updates: Partial<Config> = { ...config }
     delete updates.available_models
+    delete updates.available_embedding_models
+    delete updates.available_wiki_compile_models
     if (apiKey) updates.openai_api_key = apiKey
     if (updates.openai_api_key && typeof updates.openai_api_key === 'string' && updates.openai_api_key.includes('...')) {
       delete updates.openai_api_key
@@ -44,6 +46,7 @@ export default function SettingsPage() {
 
   const models = config.available_models || []
   const embeddingModels = config.available_embedding_models || []
+  const compileModels = config.available_wiki_compile_models || []
   const selectedModel = models.find(m => m.id === config.vlm_model)
 
   return (
@@ -135,6 +138,28 @@ export default function SettingsPage() {
                 <option value="text-embedding-3-small">text-embedding-3-small</option>
               ) : (
                 embeddingModels.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} — {m.desc}
+                  </option>
+                ))
+              )}
+            </select>
+          </Field>
+
+          <Field
+            icon={<Cpu size={14} />}
+            label="Wiki 编译模型"
+            hint="用于「概念」页的 LLM 编译（论文百科页 + 概念综述页）。与处理模型解耦：编译只是文本摘要，gpt-4o-mini 已够用。"
+          >
+            <select
+              value={config.wiki_compile_model || 'gpt-4o-mini'}
+              onChange={e => setConfig(c => ({ ...c, wiki_compile_model: e.target.value }))}
+              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg text-sm text-slate-200 px-3 py-2 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors appearance-none"
+            >
+              {compileModels.length === 0 ? (
+                <option value="gpt-4o-mini">gpt-4o-mini</option>
+              ) : (
+                compileModels.map(m => (
                   <option key={m.id} value={m.id}>
                     {m.label} — {m.desc}
                   </option>

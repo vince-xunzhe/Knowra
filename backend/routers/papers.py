@@ -312,6 +312,22 @@ def _process_single(paper_id: int):
         db.commit()
         sync_record_from_paper(p, event="process")
         processing_state["done"] += 1
+
+        # Phase 1 wiki compile. Failures here must not break processing —
+        # the raw layer is already saved and the user can manually retry
+        # via the Wiki page.
+        try:
+            from services.wiki_compiler import (
+                compile_paper_page,
+                compile_concept_pages_for_paper,
+            )
+            compile_model = cfg["wiki_compile_model"]
+            compile_paper_page(p, cfg["openai_api_key"], compile_model)
+            compile_concept_pages_for_paper(
+                p.id, db, cfg["openai_api_key"], compile_model
+            )
+        except Exception as compile_err:
+            print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
     except PaperExtractionError as e:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
         if p:

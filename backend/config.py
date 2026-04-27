@@ -26,6 +26,19 @@ AVAILABLE_EMBEDDING_MODELS = [
     {"id": "text-embedding-3-small", "label": "text-embedding-3-small", "desc": "默认推荐，成本和效果更均衡"},
 ]
 
+# Wiki compile is a pure summarization task — no file_search, no PDF —
+# so any chat-completions OR responses-capable model works. Defaults below
+# are sorted cheap → strong; gpt-4o-mini is the fast/cheap recommendation.
+AVAILABLE_WIKI_COMPILE_MODELS = [
+    {"id": "gpt-4o-mini", "label": "GPT-4o-mini", "desc": "默认推荐，便宜快速"},
+    {"id": "gpt-4.1-mini", "label": "GPT-4.1-mini", "desc": "性价比"},
+    {"id": "gpt-4o", "label": "GPT-4o", "desc": "更稳，写作质量更高"},
+    {"id": "gpt-4.1", "label": "GPT-4.1", "desc": "主力，更稳"},
+    {"id": "gpt-5.4-mini", "label": "GPT-5.4-mini", "desc": "Responses API 通道"},
+    {"id": "gpt-5.4", "label": "GPT-5.4", "desc": "Responses API 通道，写作更细"},
+    {"id": "gpt-5.5", "label": "GPT-5.5", "desc": "Responses API 通道，最强"},
+]
+
 
 def _upgrade_extraction_prompt(prompt: str) -> str:
     if not prompt:
@@ -53,6 +66,11 @@ def load_config() -> dict:
         "scan_directory": str(PAPERS_DIR),
         "vlm_model": "gpt-4o",
         "embedding_model": "text-embedding-3-small",
+        # Used by services.wiki_compiler. Decoupled from vlm_model because
+        # compile is plain summarization and doesn't need the strongest model.
+        # Env var WIKI_COMPILE_MODEL overrides only at first-run / unset state;
+        # once saved into config.json the user's choice wins.
+        "wiki_compile_model": os.environ.get("WIKI_COMPILE_MODEL", "gpt-4o-mini"),
         "similarity_threshold": 0.6,
         "use_first_page_image": True,   # kept for backwards-compat; ignored by the Assistants pipeline
         "extraction_prompt": DEFAULT_PAPER_PROMPT,

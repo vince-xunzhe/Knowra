@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
-from routers import papers, graph, config, prompt, note_images
+from routers import papers, graph, config, prompt, note_images, wiki
 
 app = FastAPI(title="Knowra API", version="2.0.0")
 
@@ -18,6 +18,7 @@ app.include_router(graph.router)
 app.include_router(config.router)
 app.include_router(prompt.router)
 app.include_router(note_images.router)
+app.include_router(wiki.router)
 
 
 @app.on_event("startup")

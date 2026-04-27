@@ -14,12 +14,20 @@ export default function ProcessingStatus() {
   const [status, setStatus] = useState<Status | null>(null)
 
   useEffect(() => {
+    // Silence transient timeouts (axios ECONNABORTED / proxy 502) — they
+    // happen when uvicorn is mid-OpenAI-call during a wiki compile and the
+    // status request races with it. The next poll usually succeeds; logging
+    // these scares the user without conveying real signal.
+    const isTransient = (err: unknown) => {
+      const e = err as { code?: string; response?: { status?: number } }
+      return e.code === 'ECONNABORTED' || e.response?.status === 502 || e.response?.status === 504
+    }
     const poll = async () => {
       try {
         const s = await getStatus()
         setStatus(s)
       } catch (error) {
-        console.error('Failed to poll processing status', error)
+        if (!isTransient(error)) console.error('Failed to poll processing status', error)
       }
     }
 
