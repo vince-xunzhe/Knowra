@@ -52,6 +52,8 @@ class KnowledgeNode(Base):
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     node_type = Column(String, default="concept")  # paper/technique/dataset/problem/concept/entity
+    node_origin = Column(String, default="auto")   # auto/manual
+    hidden = Column(Boolean, default=False)
     tags = Column(JSON, default=list)
     embedding = Column(JSON, nullable=True)
     source_paper_ids = Column(JSON, default=list)  # list of Paper IDs

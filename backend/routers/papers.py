@@ -399,12 +399,14 @@ def _process_single(paper_id: int):
             from services.wiki_compiler import (
                 compile_paper_page,
                 compile_concept_pages_for_paper,
+                reconcile_concept_pages_dir,
             )
             compile_model = cfg["wiki_compile_model"]
             compile_paper_page(p, cfg["openai_api_key"], compile_model)
             compile_concept_pages_for_paper(
                 p.id, db, cfg["openai_api_key"], compile_model
             )
+            reconcile_concept_pages_dir(db, prune_orphans=True)
             # Refresh the FTS index so the new wiki page is searchable
             # immediately. Cheap (<1s) at this scale.
             try:

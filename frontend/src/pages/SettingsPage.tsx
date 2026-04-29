@@ -257,12 +257,12 @@ export default function SettingsPage() {
           />
           <ActionRow
             label="重置图谱"
-            desc="清空所有知识节点和边，将论文标记为未处理。会重新调用大模型，消耗 API 额度。"
+            desc="清空自动抽取的知识节点和边，将论文标记为未处理。手动新增的概念会保留；重新处理论文仍会调用大模型。"
             buttonLabel="清空并重置"
             icon={<Trash2 size={14} />}
             destructive
             onClick={async () => {
-              if (!confirm('确认清空所有知识节点？论文会被标记为未处理，需要重新调用大模型。')) return
+              if (!confirm('确认重置自动图谱？论文会被标记为未处理，需要重新调用大模型；手动概念会保留。')) return
               await resetGraph()
               alert('已重置，回到图谱页点击「处理论文」重新提取。')
             }}

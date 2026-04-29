@@ -21,6 +21,7 @@ from database import get_db
 from models import KnowledgeNode
 from services import wiki_search as wiki_search_service
 from services.wiki_compiler import (
+    count_publishable_concepts,
     compile_all_concept_pages,
     compile_all_paper_pages,
     compile_concept_page,
@@ -224,7 +225,7 @@ def _drive_concept_recompile():
             )
         # We pre-count to seed the progress bar; the helper will re-query
         # but the count is stable within this background run.
-        total = db.query(KnowledgeNode).count()
+        total = count_publishable_concepts(db)
         with _state_lock:
             compile_state.update({"total": total, "model": model})
 

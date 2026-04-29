@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { X, FileText, Tag, Link as LinkIcon, Clock } from 'lucide-react'
+import { X, FileText, Tag, Link as LinkIcon, Clock, Pencil, Trash2 } from 'lucide-react'
 import { getNode, firstPageUrl, type NodeDetail as NodeDetailType, type GraphNode } from '../api/client'
 
 const TYPE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
@@ -23,15 +23,26 @@ const RELATION_LABELS: Record<string, string> = {
   similar: '相似',
   finding: '发现',
   belongs_to: '属于',
+  curated_link: '人工关联',
 }
 
 interface Props {
   node: GraphNode | null
   onClose: () => void
   onNavigate: (nodeId: string) => void
+  onEditManualConcept: (node: GraphNode) => void
+  onSuppressNode: (node: GraphNode) => void
+  busyNodeId?: string | null
 }
 
-export default function NodeDetail({ node, onClose, onNavigate }: Props) {
+export default function NodeDetail({
+  node,
+  onClose,
+  onNavigate,
+  onEditManualConcept,
+  onSuppressNode,
+  busyNodeId,
+}: Props) {
   const [detail, setDetail] = useState<NodeDetailType | null>(null)
   const nodeId = node?.id
 
@@ -68,6 +79,9 @@ export default function NodeDetail({ node, onClose, onNavigate }: Props) {
               <span className={`chip ${style.bg} ${style.text} text-xs`}>
                 {style.label}
               </span>
+              <span className={`chip text-xs ${node.origin === 'manual' ? 'bg-teal-500/10 text-teal-200 border border-teal-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700/60'}`}>
+                {node.origin === 'manual' ? '手动策展' : '自动抽取'}
+              </span>
               {visibleDetail?.connected_nodes && (
                 <span className="text-xs text-slate-500">
                   {visibleDetail.connected_nodes.length} 个关联
@@ -97,6 +111,37 @@ export default function NodeDetail({ node, onClose, onNavigate }: Props) {
           <section className="surface-card p-4">
             <div className="section-label mb-2">节点概述</div>
             <p className="prose-reading whitespace-pre-wrap text-safe-wrap">{node.content}</p>
+          </section>
+        )}
+
+        {(visibleDetail?.can_edit || visibleDetail?.can_hide) && (
+          <section className="surface-card p-4">
+            <div className="section-label mb-3">策展操作</div>
+            <div className="flex flex-wrap gap-2">
+              {visibleDetail?.can_edit && (
+                <button
+                  onClick={() => onEditManualConcept(node)}
+                  disabled={busyNodeId === node.id}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
+                >
+                  <Pencil size={13} />
+                  编辑概念
+                </button>
+              )}
+              {visibleDetail?.can_hide && (
+                <button
+                  onClick={() => onSuppressNode(node)}
+                  disabled={busyNodeId === node.id}
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/15 disabled:opacity-50"
+                >
+                  <Trash2 size={13} />
+                  从概念层移除
+                </button>
+              )}
+            </div>
+            <p className="mt-3 text-xs leading-relaxed text-slate-500">
+              这里的“删除”是隐藏该概念节点，不会改动原始论文；下次重处理也不会把你的人工概念清空。
+            </p>
           </section>
         )}
 
@@ -135,6 +180,21 @@ export default function NodeDetail({ node, onClose, onNavigate }: Props) {
               <FileText size={11} />
               <span className="section-label">来源论文 · {node.source_paper_ids.length}</span>
             </div>
+            {visibleDetail?.linked_papers && visibleDetail.linked_papers.length > 0 && (
+              <div className="space-y-1.5 mb-3">
+                {visibleDetail.linked_papers.map(paper => (
+                  <div
+                    key={paper.id}
+                    className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2"
+                  >
+                    <p className="text-sm text-slate-200 leading-snug text-safe-wrap">{paper.title}</p>
+                    <p className="mt-1 text-[11px] text-slate-500">
+                      paper #{paper.id} · {paper.processed ? '已处理' : '未处理'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-2.5">
               {node.source_paper_ids.slice(0, 9).map(pid => (
                 <img

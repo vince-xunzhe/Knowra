@@ -14,6 +14,7 @@ tied to the Assistants/Responses + file_search pipeline). Wiki compilation
 is a plain summarization task; default to a fast/cheap chat-completions
 model. Override via the ``WIKI_COMPILE_MODEL`` env var.
 """
+import hashlib
 import json
 import re
 import sys
@@ -27,6 +28,11 @@ from sqlalchemy.orm import Session
 
 from models import KnowledgeNode, Paper
 from path_utils import DATA_DIR
+from services.graph_service import (
+    is_publishable_concept_node,
+    node_origin,
+    normalize_source_paper_ids,
+)
 from services.vlm_service import model_uses_responses_api
 
 
@@ -55,6 +61,14 @@ def _slugify(text: str, fallback: str = "untitled") -> str:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _hash_payload(value: Any) -> str:
+    return hashlib.sha1(_stable_json(value).encode("utf-8")).hexdigest()
 
 
 # --- frontmatter ------------------------------------------------------------
@@ -160,6 +174,71 @@ def _normalize_int_list(values: Any) -> List[int]:
         except (TypeError, ValueError):
             continue
     return out
+
+
+def _paper_compile_signature(paper: Paper, model: Optional[str] = None) -> str:
+    return _hash_payload({
+        "paper_id": paper.id,
+        "title": paper.title or paper.filename,
+        "authors": list(paper.authors or []),
+        "processed_at": paper.processed_at.isoformat() if paper.processed_at else None,
+        "extraction_model": getattr(paper, "extraction_model", None),
+        "wiki_compile_model": model,
+        "raw_llm_response": paper.raw_llm_response or "",
+        "notes": paper.notes or "",
+    })
+
+
+def _published_concept_source_papers(node: KnowledgeNode, db: Session) -> List[Paper]:
+    paper_ids = normalize_source_paper_ids(node.source_paper_ids)
+    if not paper_ids:
+        return []
+    papers = db.query(Paper).filter(Paper.id.in_(paper_ids), Paper.processed.is_(True)).all()
+    paper_by_id = {paper.id: paper for paper in papers}
+    ordered: List[Paper] = []
+    for pid in paper_ids:
+        paper = paper_by_id.get(pid)
+        if paper is not None:
+            ordered.append(paper)
+    return ordered
+
+
+def _concept_compile_signature(
+    node: KnowledgeNode,
+    papers: List[Paper],
+    model: Optional[str] = None,
+) -> str:
+    return _hash_payload({
+        "concept_id": node.id,
+        "title": node.title,
+        "content": node.content or "",
+        "node_type": node.node_type,
+        "node_origin": node_origin(node),
+        "wiki_compile_model": model,
+        "tags": sorted(set(node.tags or [])),
+        "source_paper_ids": [paper.id for paper in papers],
+        "papers": [
+            {
+                "id": paper.id,
+                "title": paper.title or paper.filename,
+                "processed_at": paper.processed_at.isoformat() if paper.processed_at else None,
+                "extraction_model": getattr(paper, "extraction_model", None),
+            }
+            for paper in papers
+        ],
+    })
+
+
+def list_publishable_concept_nodes(db: Session) -> List[KnowledgeNode]:
+    processed_ids = {
+        row[0] for row in db.query(Paper.id).filter(Paper.processed.is_(True)).all()
+    }
+    nodes = db.query(KnowledgeNode).all()
+    return [node for node in nodes if is_publishable_concept_node(node, processed_ids)]
+
+
+def count_publishable_concepts(db: Session) -> int:
+    return len(list_publishable_concept_nodes(db))
 
 
 # --- LLM call ---------------------------------------------------------------
@@ -365,7 +444,7 @@ def reconcile_paper_pages_dir(db: Session, prune_orphans: bool = True) -> dict:
 
 
 def reconcile_concept_pages_dir(db: Session, prune_orphans: bool = True) -> dict:
-    nodes = db.query(KnowledgeNode).all()
+    nodes = list_publishable_concept_nodes(db)
     expected = {node.id: _concept_page_path(node) for node in nodes}
     return _reconcile_generated_pages(
         WIKI_CONCEPTS_DIR,
@@ -389,6 +468,15 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
     if not isinstance(extraction, dict):
         extraction = {"_raw": str(paper.raw_llm_response)[:4000]}
 
+    WIKI_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _paper_page_path(paper)
+    signature = _paper_compile_signature(paper, model)
+    if path.is_file():
+        existing_meta = _read_frontmatter_from_path(path) or {}
+        if existing_meta.get("source_signature") == signature:
+            _cleanup_same_id_pages(WIKI_PAPERS_DIR, "paper_id", paper.id, path)
+            return path
+
     client = OpenAI(api_key=api_key)
     body = _call_llm(
         client,
@@ -399,8 +487,6 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
 
     title = _paper_page_title(paper)
     slug = _slugify(title, fallback=f"paper-{paper.id}")
-    WIKI_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
-    path = _paper_page_path(paper)
 
     record_stem = _slugify(Path(paper.filename or "").stem, fallback=f"paper-{paper.id}")
     meta = {
@@ -411,6 +497,7 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         "authors": list(paper.authors or []),
         "compiled_at": _now_iso(),
         "compile_model": model,
+        "source_signature": signature,
         "source_record": f"data/paper_records/{paper.id:04d}-{record_stem}.md",
     }
     page = _render_frontmatter(meta) + f"\n# {title}\n\n" + body.strip() + "\n"
@@ -464,7 +551,16 @@ def _snippet_for_paper(paper: Paper) -> str:
             ex = None
         if isinstance(ex, dict):
             bits = []
-            for key in ("title", "summary", "abstract", "principle", "method", "contributions"):
+            for key in (
+                "title",
+                "problem_area",
+                "abstract_summary",
+                "core_contribution",
+                "principle",
+                "method",
+                "contributions",
+                "key_findings",
+            ):
                 val = ex.get(key)
                 if val:
                     bits.append(f"{key}: {json.dumps(val, ensure_ascii=False)[:600]}")
@@ -479,14 +575,26 @@ def compile_concept_page(
     api_key: str,
     model: str,
 ) -> Optional[Path]:
-    paper_ids = _node_paper_ids(node)
-    if not paper_ids:
+    processed_ids = {
+        row[0] for row in db.query(Paper.id).filter(Paper.processed.is_(True)).all()
+    }
+    if not is_publishable_concept_node(node, processed_ids):
         return None
 
-    papers = db.query(Paper).filter(Paper.id.in_(paper_ids)).all()
-    snippets = [(p.id, _snippet_for_paper(p)) for p in papers if p.processed]
+    papers = _published_concept_source_papers(node, db)
+    snippets = [(p.id, _snippet_for_paper(p)) for p in papers]
     if not snippets:
         return None
+
+    WIKI_CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = _concept_page_path(node)
+    slug = _slugify(node.title, fallback=f"concept-{node.id}")
+    signature = _concept_compile_signature(node, papers, model)
+    if path.is_file():
+        existing_meta = _read_frontmatter_from_path(path) or {}
+        if existing_meta.get("source_signature") == signature:
+            _cleanup_same_id_pages(WIKI_CONCEPTS_DIR, "concept_id", node.id, path)
+            return path
 
     client = OpenAI(api_key=api_key)
     body = _call_llm(
@@ -497,20 +605,18 @@ def compile_concept_page(
         max_tokens=1500,
     )
 
-    WIKI_CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = _concept_page_path(node)
-    slug = _slugify(node.title, fallback=f"concept-{node.id}")
-
     meta = {
         "kind": "concept",
         "title": node.title,
         "concept_id": node.id,
         "slug": slug,
         "node_type": node.node_type,
+        "concept_origin": node_origin(node),
         "tags": list(node.tags or []),
         "source_paper_ids": [pid for pid, _ in snippets],
         "compiled_at": _now_iso(),
         "compile_model": model,
+        "source_signature": signature,
     }
     page = _render_frontmatter(meta) + f"\n# {node.title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
@@ -532,7 +638,7 @@ def compile_concept_pages_for_paper(
 ) -> List[Path]:
     """Recompile every concept page that references this paper. Used as the
     incremental hook after a paper finishes processing."""
-    nodes = [n for n in db.query(KnowledgeNode).all() if paper_id in _node_paper_ids(n)]
+    nodes = [n for n in list_publishable_concept_nodes(db) if paper_id in _node_paper_ids(n)]
     written: List[Path] = []
     for node in nodes:
         try:
@@ -589,7 +695,7 @@ def compile_all_concept_pages(
     model: str,
     on_progress: Optional[ConceptProgress] = None,
 ) -> List[Path]:
-    nodes = db.query(KnowledgeNode).all()
+    nodes = list_publishable_concept_nodes(db)
     total = len(nodes)
     _log(f"compile_all_concept_pages start: {total} concepts, model={model}")
     written: List[Path] = []
@@ -626,6 +732,7 @@ _PASSTHROUGH_META_KEYS = (
     "kind", "title", "slug", "compiled_at", "compile_model",
     "concept_id", "paper_id", "node_type", "tags",
     "source_paper_ids", "authors", "source_record",
+    "concept_origin", "source_signature",
 )
 
 
@@ -751,7 +858,7 @@ def compute_freshness_summary(db: Session) -> dict:
     last compile run.
     """
     papers = db.query(Paper).filter(Paper.processed.is_(True)).all()
-    nodes = db.query(KnowledgeNode).all()
+    nodes = list_publishable_concept_nodes(db)
 
     paper_by_id = {p.id: p for p in papers}
     node_ids = {n.id for n in nodes}
@@ -777,6 +884,7 @@ def compute_freshness_summary(db: Session) -> dict:
     for paper in papers:
         title = paper.title or paper.filename or f"paper-{paper.id}"
         expected_name = _paper_page_path(paper).name
+        current_signature = _paper_compile_signature(paper)
         candidates = paper_pages_by_id.get(paper.id) or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
@@ -793,6 +901,8 @@ def compute_freshness_summary(db: Session) -> dict:
             reasons.append("duplicate_files")
         if wiki.get("title") != title or wiki.get("filename") != expected_name:
             reasons.append("identity_changed")
+        if wiki.get("source_signature") != current_signature:
+            reasons.append("source_signature_changed")
         if processed_at and compiled_at and processed_at > compiled_at:
             reasons.append("source_newer")
         if reasons:
@@ -822,6 +932,8 @@ def compute_freshness_summary(db: Session) -> dict:
     concept_ok = 0
     for node in nodes:
         expected_name = _concept_page_path(node).name
+        source_papers = _published_concept_source_papers(node, db)
+        current_signature = _concept_compile_signature(node, source_papers)
         candidates = concept_pages_by_id.get(node.id) or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
@@ -862,6 +974,8 @@ def compute_freshness_summary(db: Session) -> dict:
             or wiki.get("node_type") != node.node_type
         ):
             reasons.append("identity_changed")
+        if wiki.get("source_signature") != current_signature:
+            reasons.append("source_signature_changed")
         if current_source_ids != wiki_source_ids:
             reasons.append("source_papers_changed")
         if compiled_at and newest and newest > compiled_at:
@@ -913,4 +1027,3 @@ def compute_freshness_summary(db: Session) -> dict:
             "orphan": _cap(concept_orphan),
         },
     }
-

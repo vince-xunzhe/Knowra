@@ -187,7 +187,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       <div className="absolute bottom-4 left-4 bg-slate-900/82 backdrop-blur rounded-2xl p-3.5 border border-slate-800 shadow-xl max-w-[12rem]">
         <p className="section-label mb-2">节点类型</p>
         <div className="space-y-1.5">
-          {['paper', 'technique', 'dataset', 'problem_area', 'finding'].map(type => (
+          {['paper', 'concept', 'technique', 'dataset', 'problem_area', 'finding'].map(type => (
             <div key={type} className="flex items-center gap-2">
               <span
                 className="w-2.5 h-2.5 rounded-full inline-block"

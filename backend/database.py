@@ -35,6 +35,20 @@ def _migrate():
         if "extraction_model" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN extraction_model VARCHAR"))
 
+        node_cols = conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()
+        node_existing = {row[1] for row in node_cols}
+        if "node_origin" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN node_origin VARCHAR"))
+        if "hidden" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN hidden BOOLEAN"))
+        conn.execute(
+            text(
+                "UPDATE knowledge_nodes "
+                "SET node_origin = COALESCE(NULLIF(node_origin, ''), 'auto'), "
+                "    hidden = COALESCE(hidden, 0)"
+            )
+        )
+
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")
         ).mappings().all()

@@ -1,10 +1,21 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Search, RefreshCw, Play, ScanLine, Loader2, Filter, X } from 'lucide-react'
+import { Search, RefreshCw, Play, ScanLine, Loader2, Filter, X, Plus, Layers3 } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
 import {
-  getGraph, scanPapers, processAll, searchNodes, getStatus,
-  type GraphData, type GraphNode,
+  createManualConcept,
+  getGraph,
+  getStatus,
+  listPapers,
+  processAll,
+  scanPapers,
+  searchNodes,
+  suppressNode,
+  updateManualConcept,
+  type GraphData,
+  type GraphNode,
+  type ManualConceptInput,
+  type PaperRecord,
 } from '../api/client'
 
 interface ProcStatus {
@@ -18,6 +29,7 @@ interface ProcStatus {
 const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
   { id: 'all', label: '全部', color: '' },
   { id: 'paper', label: '论文', color: '#6366f1' },
+  { id: 'concept', label: '概念', color: '#14b8a6' },
   { id: 'technique', label: '技术', color: '#22c55e' },
   { id: 'dataset', label: '数据集', color: '#f59e0b' },
   { id: 'problem_area', label: '研究领域', color: '#06b6d4' },
@@ -30,6 +42,7 @@ export default function GraphPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<GraphNode[]>([])
   const [typeFilter, setTypeFilter] = useState('all')
+  const [viewMode, setViewMode] = useState<'curated' | 'all'>('curated')
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -37,12 +50,20 @@ export default function GraphPage() {
   const [scanResult, setScanResult] = useState<string | null>(null)
   const [processResult, setProcessResult] = useState<string | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
+  const [paperCatalog, setPaperCatalog] = useState<PaperRecord[]>([])
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editingNode, setEditingNode] = useState<GraphNode | null>(null)
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null)
   const wasRunningRef = useRef(false)
 
   const loadGraph = useCallback(async () => {
     try {
       const data = await getGraph()
       setGraphData(data)
+      setSelectedNode(prev => {
+        if (!prev) return prev
+        return data.nodes.find(n => n.id === prev.id) || null
+      })
     } catch (error) {
       console.error('Failed to load graph', error)
     }
@@ -51,10 +72,12 @@ export default function GraphPage() {
 
   useEffect(() => {
     let cancelled = false
-    const loadInitialGraph = async () => {
+    const loadInitial = async () => {
       try {
-        const data = await getGraph()
-        if (!cancelled) setGraphData(data)
+        const [data, papers] = await Promise.all([getGraph(), listPapers()])
+        if (cancelled) return
+        setGraphData(data)
+        setPaperCatalog(papers)
       } catch (error) {
         console.error('Failed to load graph', error)
       } finally {
@@ -62,7 +85,7 @@ export default function GraphPage() {
       }
     }
 
-    void loadInitialGraph()
+    void loadInitial()
     return () => { cancelled = true }
   }, [])
 
@@ -93,19 +116,32 @@ export default function GraphPage() {
     return () => { cancelled = true; clearInterval(id) }
   }, [loadGraph])
 
-  const filteredData = useMemo(() => {
-    if (typeFilter === 'all') {
-      return graphData
-    }
-
+  const visibleData = useMemo(() => {
+    if (viewMode === 'all') return graphData
     const nodeIds = new Set(
-      graphData.nodes.filter(n => n.node_type === typeFilter).map(n => n.id)
+      graphData.nodes
+        .filter(n => n.node_type === 'paper' || n.publishable_concept)
+        .map(n => n.id)
     )
     return {
       nodes: graphData.nodes.filter(n => nodeIds.has(n.id)),
       edges: graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
     }
-  }, [graphData, typeFilter])
+  }, [graphData, viewMode])
+
+  const filteredData = useMemo(() => {
+    if (typeFilter === 'all') {
+      return visibleData
+    }
+
+    const nodeIds = new Set(
+      visibleData.nodes.filter(n => n.node_type === typeFilter).map(n => n.id)
+    )
+    return {
+      nodes: visibleData.nodes.filter(n => nodeIds.has(n.id)),
+      edges: visibleData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
+    }
+  }, [visibleData, typeFilter])
 
   const handleSearch = async (q: string) => {
     setSearchQuery(q)
@@ -117,6 +153,13 @@ export default function GraphPage() {
       console.error('Failed to search nodes', error)
     }
   }
+
+  const focusNode = useCallback((node: GraphNode) => {
+    if (viewMode === 'curated' && node.node_type !== 'paper' && !node.publishable_concept) {
+      setViewMode('all')
+    }
+    setSelectedNode(node)
+  }, [viewMode])
 
   const handleScan = async () => {
     setScanning(true)
@@ -145,20 +188,65 @@ export default function GraphPage() {
 
   const handleNodeNavigate = (nodeId: string) => {
     const node = graphData.nodes.find(n => n.id === nodeId)
-    if (node) setSelectedNode(node)
+    if (node) focusNode(node)
+  }
+
+  const handleOpenCreate = () => {
+    setEditingNode(null)
+    setEditorOpen(true)
+  }
+
+  const handleEditManualConcept = (node: GraphNode) => {
+    setEditingNode(node)
+    setEditorOpen(true)
+  }
+
+  const handleSaveManualConcept = async (payload: ManualConceptInput) => {
+    setActionBusyId(editingNode?.id || 'create')
+    try {
+      const response = editingNode
+        ? await updateManualConcept(Number(editingNode.id), payload)
+        : await createManualConcept(payload)
+      await loadGraph()
+      focusNode(response.node)
+      setEditorOpen(false)
+      setEditingNode(null)
+      setViewMode('curated')
+      setProcessResult(editingNode ? '概念已更新。' : '新概念已加入策展图。')
+    } catch (error) {
+      setProcessResult('概念保存失败: ' + getErrorMessage(error))
+    } finally {
+      setActionBusyId(null)
+    }
+  }
+
+  const handleSuppressNode = async (node: GraphNode) => {
+    const ok = confirm(`确认将「${node.title}」从概念层移除？`)
+    if (!ok) return
+    setActionBusyId(node.id)
+    try {
+      await suppressNode(Number(node.id))
+      await loadGraph()
+      if (selectedNode?.id === node.id) setSelectedNode(null)
+      setProcessResult('节点已从概念层移除。')
+    } catch (error) {
+      setProcessResult('移除节点失败: ' + getErrorMessage(error))
+    } finally {
+      setActionBusyId(null)
+    }
   }
 
   const nodeTypeCounts = NODE_TYPE_FILTERS.reduce((acc, f) => {
     acc[f.id] = f.id === 'all'
-      ? graphData.nodes.length
-      : graphData.nodes.filter(n => n.node_type === f.id).length
+      ? visibleData.nodes.length
+      : visibleData.nodes.filter(n => n.node_type === f.id).length
     return acc
   }, {} as Record<string, number>)
 
   const progressPct = status?.running && status.total > 0
     ? Math.round((status.done / status.total) * 100)
     : 0
-  const isEmpty = !loading && graphData.nodes.length === 0
+  const isEmpty = !loading && visibleData.nodes.length === 0
 
   return (
     <div className="flex flex-col h-full relative">
@@ -182,7 +270,7 @@ export default function GraphPage() {
               </span>
             </div>
             <p className="text-sm text-slate-500 mt-1">
-              浏览论文、技术与发现之间的关联，点击节点可查看来源与上下文。
+              默认进入策展视图：聚焦论文与可发布概念，支持人工补概念、隐藏碎概念，再进入 wiki 编译。
             </p>
           </div>
 
@@ -214,13 +302,15 @@ export default function GraphPage() {
                 {searchResults.map(n => (
                   <button
                     key={n.id}
-                    onClick={() => { setSelectedNode(n); setSearchQuery(''); setSearchResults([]) }}
+                    onClick={() => { focusNode(n); setSearchQuery(''); setSearchResults([]) }}
                     className="w-full text-left px-3.5 py-3 hover:bg-slate-800 border-b border-slate-800 last:border-0 transition-colors"
                   >
                     <div className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
                       {n.title}
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">{n.node_type}</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {n.origin === 'manual' ? '手动概念' : n.node_type}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -263,6 +353,14 @@ export default function GraphPage() {
             </button>
 
             <button
+              onClick={handleOpenCreate}
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-teal-500 hover:bg-teal-400 px-3.5 py-2 rounded-xl transition-colors shrink-0"
+            >
+              <Plus size={14} />
+              新增概念
+            </button>
+
+            <button
               onClick={loadGraph}
               className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors shrink-0"
               title="刷新图谱"
@@ -273,8 +371,31 @@ export default function GraphPage() {
         </div>
       </header>
 
-      {/* Type filter chips */}
+      {/* View + type filter chips */}
       <div className={`bg-[#0f1117]/60 border-b border-slate-800/60 px-6 py-2.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
+        <div className="inline-flex items-center rounded-xl border border-slate-800 bg-slate-900/60 p-1 mr-2">
+          <button
+            onClick={() => setViewMode('curated')}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              viewMode === 'curated'
+                ? 'bg-slate-800 text-white'
+                : 'text-slate-500 hover:text-slate-200'
+            }`}
+          >
+            <Layers3 size={12} />
+            策展图
+          </button>
+          <button
+            onClick={() => setViewMode('all')}
+            className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              viewMode === 'all'
+                ? 'bg-slate-800 text-white'
+                : 'text-slate-500 hover:text-slate-200'
+            }`}
+          >
+            全量图
+          </button>
+        </div>
         <div className="inline-flex items-center gap-2 pr-2">
           <Filter size={12} className="text-slate-500" />
           <span className="section-label">节点类型</span>
@@ -374,7 +495,224 @@ export default function GraphPage() {
           node={selectedNode}
           onClose={() => setSelectedNode(null)}
           onNavigate={handleNodeNavigate}
+          onEditManualConcept={handleEditManualConcept}
+          onSuppressNode={handleSuppressNode}
+          busyNodeId={actionBusyId}
         />
+      </div>
+
+      <ConceptEditorModal
+        open={editorOpen}
+        busy={actionBusyId === (editingNode?.id || 'create')}
+        papers={paperCatalog}
+        initialNode={editingNode}
+        onClose={() => {
+          setEditorOpen(false)
+          setEditingNode(null)
+        }}
+        onSubmit={handleSaveManualConcept}
+      />
+    </div>
+  )
+}
+
+function ConceptEditorModal({
+  open,
+  busy,
+  papers,
+  initialNode,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  busy: boolean
+  papers: PaperRecord[]
+  initialNode: GraphNode | null
+  onClose: () => void
+  onSubmit: (payload: ManualConceptInput) => Promise<void>
+}) {
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [paperQuery, setPaperQuery] = useState('')
+  const [tagsText, setTagsText] = useState('')
+  const [selectedPaperIds, setSelectedPaperIds] = useState<number[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    setTitle(initialNode?.title || '')
+    setContent(initialNode?.content || '')
+    setTagsText((initialNode?.tags || []).join(', '))
+    setSelectedPaperIds(initialNode?.source_paper_ids || [])
+    setPaperQuery('')
+  }, [open, initialNode])
+
+  if (!open) return null
+
+  const filteredPapers = papers.filter(paper => {
+    const q = paperQuery.trim().toLowerCase()
+    if (!q) return true
+    return (paper.title || paper.filename).toLowerCase().includes(q)
+      || paper.filename.toLowerCase().includes(q)
+      || String(paper.id).includes(q)
+  })
+
+  const togglePaper = (paperId: number) => {
+    setSelectedPaperIds(current => (
+      current.includes(paperId)
+        ? current.filter(id => id !== paperId)
+        : [...current, paperId]
+    ))
+  }
+
+  const submit = async () => {
+    await onSubmit({
+      title: title.trim(),
+      content: content.trim(),
+      paper_ids: selectedPaperIds,
+      tags: tagsText.split(',').map(s => s.trim()).filter(Boolean),
+    })
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm"
+      onClick={e => {
+        if (e.target === e.currentTarget && !busy) onClose()
+      }}
+    >
+      <div className="flex h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-[#0f1117] shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white tracking-tight">
+              {initialNode ? '编辑手动概念' : '新增手动概念'}
+            </h2>
+            <p className="mt-1 text-sm text-slate-500">
+              新概念会进入策展图，并在后续概念编译时基于你勾选的论文生成 wiki 条目。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-800/70 hover:text-slate-200 disabled:opacity-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="grid flex-1 gap-0 overflow-hidden lg:grid-cols-[minmax(0,0.95fr)_minmax(20rem,1.05fr)]">
+          <div className="overflow-y-auto border-b border-slate-800 px-6 py-5 lg:border-b-0 lg:border-r">
+            <div className="space-y-4">
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">概念名称</label>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="例如：世界模型 / 闭环驾驶 / 3D grounding"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">概念简介</label>
+                <textarea
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  rows={8}
+                  placeholder="写下你对这个概念的定义、边界或想保留的先验知识。"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">标签</label>
+                <input
+                  value={tagsText}
+                  onChange={e => setTagsText(e.target.value)}
+                  placeholder="逗号分隔，例如 规划, 世界模型, 驾驶"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-col overflow-hidden px-6 py-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-slate-200">关联论文</p>
+                <p className="text-xs text-slate-500">这些论文会作为后续概念编译的证据来源。</p>
+              </div>
+              <span className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-400">
+                已选 {selectedPaperIds.length}
+              </span>
+            </div>
+            <input
+              value={paperQuery}
+              onChange={e => setPaperQuery(e.target.value)}
+              placeholder="按标题 / 文件名 / paper id 搜索"
+              className="mb-3 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/40 p-2">
+              <div className="space-y-2">
+                {filteredPapers.map(paper => {
+                  const checked = selectedPaperIds.includes(paper.id)
+                  return (
+                    <label
+                      key={paper.id}
+                      className={`block cursor-pointer rounded-xl border px-3 py-3 transition-colors ${
+                        checked
+                          ? 'border-teal-500/40 bg-teal-500/10'
+                          : 'border-slate-800 bg-slate-900/40 hover:border-slate-700 hover:bg-slate-900/70'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => togglePaper(paper.id)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-400"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm leading-snug text-slate-100 text-safe-wrap">
+                            {paper.title || paper.filename}
+                          </p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                            paper #{paper.id} · {paper.processed ? '已处理' : '未处理'} · {paper.filename}
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+                {filteredPapers.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
+                    没有匹配的论文
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-slate-800 px-6 py-4">
+          <p className="text-xs leading-relaxed text-slate-500">
+            自动抽取出来的碎概念可以隐藏；手动新增的概念会稳定保留，并通过已选论文参与后续 wiki 编译。
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              disabled={busy}
+              className="rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              onClick={submit}
+              disabled={busy || !title.trim()}
+              className="inline-flex items-center gap-2 rounded-xl bg-teal-500 px-4 py-2 text-sm font-medium text-white hover:bg-teal-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              {busy ? '保存中…' : initialNode ? '保存概念' : '创建概念'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

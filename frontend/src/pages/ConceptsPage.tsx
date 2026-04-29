@@ -252,7 +252,7 @@ export default function ConceptsPage() {
   }
 
   const handleRecompileAll = async () => {
-    const ok = confirm('确认重新编译所有概念页？这会逐个调用 LLM，可能需要一段时间，并消耗 token。')
+    const ok = confirm('确认重新编译所有活跃概念页？系统会跳过输入未变化的页面，但对脏页面仍会逐个调用 LLM。')
     if (!ok) return
     setRecompilingAll(true)
     setActionMessage(null)

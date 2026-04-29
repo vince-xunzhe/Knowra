@@ -2,10 +2,14 @@ from __future__ import annotations
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from models import KnowledgeNode, KnowledgeEdge
+from models import Paper, KnowledgeNode, KnowledgeEdge
 from services.vlm_service import get_embedding, cosine_similarity
 
 MAX_TITLE_LEN = 24
+AUTO_NODE_ORIGIN = "auto"
+MANUAL_NODE_ORIGIN = "manual"
+MANUAL_LINK_RELATION = "curated_link"
+AUTO_CONCEPT_NODE_TYPES = {"technique", "dataset", "problem_area", "concept"}
 
 
 def _normalize_name(s: str) -> str:
@@ -19,6 +23,52 @@ def _truncate_title(s: str, max_len: int = MAX_TITLE_LEN) -> str:
     return s[: max_len - 1] + "…"
 
 
+def normalize_source_paper_ids(values) -> list[int]:
+    raw = values or []
+    if not isinstance(raw, list):
+        raw = [raw]
+    out: list[int] = []
+    for item in raw:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def node_origin(node: KnowledgeNode) -> str:
+    origin = (getattr(node, "node_origin", None) or AUTO_NODE_ORIGIN).strip().lower()
+    return origin or AUTO_NODE_ORIGIN
+
+
+def node_is_hidden(node: KnowledgeNode) -> bool:
+    return bool(getattr(node, "hidden", False))
+
+
+def is_concept_candidate_node(node: KnowledgeNode) -> bool:
+    return (node.node_type or "") != "paper"
+
+
+def is_publishable_concept_node(
+    node: KnowledgeNode,
+    processed_paper_ids: Optional[set[int]] = None,
+) -> bool:
+    if node_is_hidden(node):
+        return False
+
+    source_ids = normalize_source_paper_ids(node.source_paper_ids)
+    if processed_paper_ids is not None:
+        source_ids = [pid for pid in source_ids if pid in processed_paper_ids]
+    if not source_ids:
+        return False
+
+    origin = node_origin(node)
+    if origin == MANUAL_NODE_ORIGIN:
+        return (node.node_type or "") == "concept"
+
+    return (node.node_type or "") in AUTO_CONCEPT_NODE_TYPES and len(set(source_ids)) >= 2
+
+
 def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[KnowledgeNode]:
     """Find by exact title (case-insensitive) or alias intersection."""
     candidates = {_normalize_name(name)} | {_normalize_name(a) for a in aliases}
@@ -28,13 +78,16 @@ def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[Knowl
 
     for cand in candidates:
         node = db.query(KnowledgeNode).filter(
-            func.lower(KnowledgeNode.title) == cand
+            func.lower(KnowledgeNode.title) == cand,
+            KnowledgeNode.node_origin != MANUAL_NODE_ORIGIN,
         ).first()
         if node:
             return node
 
     # Alias overlap via tags (we store aliases in tags)
-    all_nodes = db.query(KnowledgeNode).all()
+    all_nodes = db.query(KnowledgeNode).filter(
+        KnowledgeNode.node_origin != MANUAL_NODE_ORIGIN,
+    ).all()
     for n in all_nodes:
         existing = {_normalize_name(a) for a in (n.tags or []) if a}
         existing.add(_normalize_name(n.title))
@@ -77,6 +130,8 @@ def _upsert_node(
         title=title,
         content=content,
         node_type=node_type,
+        node_origin=AUTO_NODE_ORIGIN,
+        hidden=False,
         tags=list({*tags, *aliases}),
         embedding=embedding,
         source_paper_ids=[paper_id],
@@ -143,6 +198,8 @@ def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
     removed = 0
 
     for node in db.query(KnowledgeNode).all():
+        if node_origin(node) == MANUAL_NODE_ORIGIN:
+            continue
         raw_ids = node.source_paper_ids or []
         ids = raw_ids if isinstance(raw_ids, list) else [raw_ids]
         if not any(str(source_id) == str(paper_id) for source_id in ids):
@@ -333,22 +390,69 @@ def add_nodes_from_paper_extraction(
     return [n.id for n in touched]
 
 
-def get_graph_data(db: Session) -> dict:
-    nodes = db.query(KnowledgeNode).all()
-    edges = db.query(KnowledgeEdge).all()
+def _processed_paper_ids(db: Session) -> set[int]:
     return {
-        "nodes": [
-            {
-                "id": str(n.id),
-                "title": n.title,
-                "content": n.content,
-                "node_type": n.node_type,
-                "tags": n.tags or [],
-                "source_paper_ids": n.source_paper_ids or [],
-                "created_at": n.created_at.isoformat() if n.created_at else None,
-            }
-            for n in nodes
-        ],
+        row[0] for row in db.query(Paper.id).filter(Paper.processed.is_(True)).all()
+    }
+
+
+def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) -> dict:
+    return {
+        "id": str(node.id),
+        "title": node.title,
+        "content": node.content,
+        "node_type": node.node_type,
+        "origin": node_origin(node),
+        "hidden": node_is_hidden(node),
+        "concept_candidate": is_concept_candidate_node(node),
+        "publishable_concept": is_publishable_concept_node(node, processed_paper_ids),
+        "tags": node.tags or [],
+        "source_paper_ids": normalize_source_paper_ids(node.source_paper_ids),
+        "created_at": node.created_at.isoformat() if node.created_at else None,
+    }
+
+
+def _paper_nodes_by_paper_id(nodes: list[KnowledgeNode]) -> dict[int, KnowledgeNode]:
+    out: dict[int, KnowledgeNode] = {}
+    for node in nodes:
+        if node.node_type != "paper":
+            continue
+        for pid in normalize_source_paper_ids(node.source_paper_ids):
+            out.setdefault(pid, node)
+    return out
+
+
+def _manual_synthetic_edges(nodes: list[KnowledgeNode]) -> list[dict]:
+    paper_nodes = _paper_nodes_by_paper_id(nodes)
+    out: list[dict] = []
+    for node in nodes:
+        if node_origin(node) != MANUAL_NODE_ORIGIN or node.node_type != "concept":
+            continue
+        for pid in normalize_source_paper_ids(node.source_paper_ids):
+            paper_node = paper_nodes.get(pid)
+            if not paper_node:
+                continue
+            out.append({
+                "id": f"manual:{node.id}:{paper_node.id}",
+                "source": str(node.id),
+                "target": str(paper_node.id),
+                "relation_type": MANUAL_LINK_RELATION,
+                "weight": 1.0,
+            })
+    return out
+
+
+def get_graph_data(db: Session) -> dict:
+    processed_ids = _processed_paper_ids(db)
+    nodes = [n for n in db.query(KnowledgeNode).all() if not node_is_hidden(n)]
+    node_ids = {n.id for n in nodes}
+    edges = [
+        e for e in db.query(KnowledgeEdge).all()
+        if e.source_id in node_ids and e.target_id in node_ids
+    ]
+    synthetic_edges = _manual_synthetic_edges(nodes)
+    return {
+        "nodes": [_serialize_graph_node(n, processed_ids) for n in nodes],
         "edges": [
             {
                 "id": str(e.id),
@@ -358,5 +462,81 @@ def get_graph_data(db: Session) -> dict:
                 "weight": e.weight,
             }
             for e in edges
+        ] + synthetic_edges,
+    }
+
+
+def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
+    node = db.query(KnowledgeNode).filter(KnowledgeNode.id == node_id).first()
+    if not node:
+        return None
+
+    processed_ids = _processed_paper_ids(db)
+    visible_nodes = [n for n in db.query(KnowledgeNode).all() if not node_is_hidden(n) or n.id == node.id]
+    node_map = {n.id: n for n in visible_nodes}
+
+    stored_edges = [
+        e for e in db.query(KnowledgeEdge).all()
+        if (e.source_id == node.id and e.target_id in node_map)
+        or (e.target_id == node.id and e.source_id in node_map)
+    ]
+    synthetic_edges = [
+        e for e in _manual_synthetic_edges(visible_nodes)
+        if e["source"] == str(node.id) or e["target"] == str(node.id)
+    ]
+
+    connected_ids = set()
+    for edge in stored_edges:
+        if edge.source_id == node.id:
+            connected_ids.add(edge.target_id)
+        else:
+            connected_ids.add(edge.source_id)
+    for edge in synthetic_edges:
+        source = int(edge["source"])
+        target = int(edge["target"])
+        connected_ids.add(target if source == node.id else source)
+
+    linked_papers = []
+    for paper in db.query(Paper).filter(Paper.id.in_(normalize_source_paper_ids(node.source_paper_ids))).all():
+        linked_papers.append({
+            "id": paper.id,
+            "title": paper.title or paper.filename,
+            "filename": paper.filename,
+            "processed": bool(paper.processed),
+        })
+    linked_papers.sort(key=lambda item: item["id"])
+
+    return {
+        **_serialize_graph_node(node, processed_ids),
+        "connected_nodes": [
+            {
+                "id": n.id,
+                "title": n.title,
+                "node_type": n.node_type,
+                "origin": node_origin(n),
+            }
+            for n in (node_map[cid] for cid in connected_ids if cid in node_map and cid != node.id)
         ],
+        "edges": [
+            {
+                "id": e.id,
+                "source": e.source_id,
+                "target": e.target_id,
+                "relation_type": e.relation_type,
+                "weight": e.weight,
+            }
+            for e in stored_edges
+        ] + [
+            {
+                "id": e["id"],
+                "source": int(e["source"]),
+                "target": int(e["target"]),
+                "relation_type": e["relation_type"],
+                "weight": e["weight"],
+            }
+            for e in synthetic_edges
+        ],
+        "linked_papers": linked_papers,
+        "can_hide": node.node_type != "paper",
+        "can_edit": node_origin(node) == MANUAL_NODE_ORIGIN,
     }

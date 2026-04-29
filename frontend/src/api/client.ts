@@ -59,6 +59,10 @@ export interface GraphNode {
   title: string
   content: string
   node_type: NodeType
+  origin: 'auto' | 'manual'
+  hidden: boolean
+  concept_candidate: boolean
+  publishable_concept: boolean
   tags: string[]
   source_paper_ids: number[]
   created_at: string | null
@@ -78,8 +82,18 @@ export interface GraphData {
 }
 
 export interface NodeDetail extends GraphNode {
-  connected_nodes: { id: number; title: string; node_type: string }[]
-  edges: { id: number; source: number; target: number; relation_type: string; weight: number }[]
+  connected_nodes: { id: number; title: string; node_type: string; origin: 'auto' | 'manual' }[]
+  edges: { id: string | number; source: number; target: number; relation_type: string; weight: number }[]
+  linked_papers: { id: number; title: string; filename: string; processed: boolean }[]
+  can_hide: boolean
+  can_edit: boolean
+}
+
+export interface ManualConceptInput {
+  title: string
+  content: string
+  paper_ids: number[]
+  tags: string[]
 }
 
 export interface AvailableModel {
@@ -158,10 +172,19 @@ export const uploadNoteImage = (file: File) => {
 // Graph
 export const getGraph = () => api.get<GraphData>('/graph').then(r => r.data)
 export const getNode = (id: number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
-export const searchNodes = (q: string) => api.get('/search', { params: { q } }).then(r => r.data)
+export const searchNodes = (q: string) =>
+  api.get<GraphNode[]>('/search', { params: { q } }).then(r => r.data)
 export const rebuildEdges = () =>
   api.post<{ threshold: number; total_edges: number }>('/graph/rebuild_edges').then(r => r.data)
 export const resetGraph = () => api.post<{ message: string }>('/graph/reset').then(r => r.data)
+export const createManualConcept = (data: ManualConceptInput) =>
+  api.post<{ node: NodeDetail }>('/graph/manual_concepts', data).then(r => r.data)
+export const updateManualConcept = (id: number, data: ManualConceptInput) =>
+  api.put<{ node: NodeDetail }>(`/graph/manual_concepts/${id}`, data).then(r => r.data)
+export const suppressNode = (id: number) =>
+  api.post<{ message: string; node_id: number }>(`/graph/nodes/${id}/suppress`).then(r => r.data)
+export const restoreNode = (id: number) =>
+  api.post<{ node: NodeDetail }>(`/graph/nodes/${id}/restore`).then(r => r.data)
 
 // Status — short timeout so a single slow tick doesn't block the next
 // polling round. The tick handler must tolerate timeouts gracefully.
