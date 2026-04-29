@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from config import load_config
 from database import get_db
 from models import KnowledgeNode
+from services import wiki_search as wiki_search_service
 from services.wiki_compiler import (
     compile_all_concept_pages,
     compile_all_paper_pages,
@@ -28,6 +29,8 @@ from services.wiki_compiler import (
     list_paper_pages,
     read_concept_page,
     read_paper_page,
+    reconcile_concept_pages_dir,
+    reconcile_paper_pages_dir,
 )
 
 
@@ -180,6 +183,28 @@ def get_freshness(db: Session = Depends(get_db)):
     return compute_freshness_summary(db)
 
 
+# --- search (Phase 2A) ------------------------------------------------------
+
+@router.get("/search")
+def wiki_search(q: str = "", limit: int = 20):
+    """Full-text search over the LLM-compiled wiki layer.
+    Zero token cost — pure SQLite FTS5 / bm25 ranking on disk."""
+    hits = wiki_search_service.search(q, limit=limit) if q.strip() else []
+    return {"query": q, "hits": hits}
+
+
+@router.get("/search/stats")
+def wiki_search_stats():
+    return wiki_search_service.index_stats()
+
+
+@router.post("/reindex")
+def wiki_reindex():
+    """Rebuild the FTS index from disk. Auto-runs after each compile, but
+    exposed manually for diagnostics."""
+    return wiki_search_service.rebuild_index()
+
+
 # --- background drivers -----------------------------------------------------
 
 def _drive_concept_recompile():
@@ -189,6 +214,14 @@ def _drive_concept_recompile():
     model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
     db = SessionLocal()
     try:
+        cleanup = reconcile_concept_pages_dir(db, prune_orphans=True)
+        if cleanup["removed_count"] > 0:
+            print(
+                "[wiki] concept reconcile removed "
+                f"{cleanup['removed_count']} files "
+                f"(duplicates={cleanup['duplicate_removed']}, "
+                f"orphans={cleanup['orphan_removed']})"
+            )
         # We pre-count to seed the progress bar; the helper will re-query
         # but the count is stable within this background run.
         total = db.query(KnowledgeNode).count()
@@ -208,6 +241,10 @@ def _drive_concept_recompile():
     finally:
         db.close()
         _finish()
+        try:
+            wiki_search_service.rebuild_index()
+        except Exception as ix_err:
+            print(f"[wiki_search] post-compile reindex failed: {ix_err}")
 
 
 def _drive_paper_recompile():
@@ -218,6 +255,14 @@ def _drive_paper_recompile():
     model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
     db = SessionLocal()
     try:
+        cleanup = reconcile_paper_pages_dir(db, prune_orphans=True)
+        if cleanup["removed_count"] > 0:
+            print(
+                "[wiki] paper reconcile removed "
+                f"{cleanup['removed_count']} files "
+                f"(duplicates={cleanup['duplicate_removed']}, "
+                f"orphans={cleanup['orphan_removed']})"
+            )
         total = db.query(Paper).filter(Paper.processed.is_(True)).count()
         with _state_lock:
             compile_state.update({"total": total, "model": model})
@@ -236,6 +281,10 @@ def _drive_paper_recompile():
     finally:
         db.close()
         _finish()
+        try:
+            wiki_search_service.rebuild_index()
+        except Exception as ix_err:
+            print(f"[wiki_search] post-compile reindex failed: {ix_err}")
 
 
 # --- recompile endpoints ----------------------------------------------------

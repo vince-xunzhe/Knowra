@@ -69,6 +69,8 @@ def _reconcile_processed_paper(p: Paper) -> bool:
     if not parsed:
         return changed
     issues = set(extraction_quality_issues(parsed))
+    # Auto-heal only the clear "ghost-success" shape we observed in the DB:
+    # processed=True, but both the paper identity and graph payload are empty.
     if "title 为空" not in issues or "图谱关键字段全空" not in issues:
         return changed
 
@@ -163,6 +165,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "extracted_text": p.extracted_text,
         "processed": p.processed,
         "processed_at": p.processed_at.isoformat() if p.processed_at else None,
+        "extraction_model": p.extraction_model,
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
@@ -339,6 +342,10 @@ def _process_single(paper_id: int):
             fallback_text=p.extracted_text or "",
         )
 
+        # Defensive check: if the model returned an empty response without
+        # raising, treat that as a failure rather than silently marking the
+        # paper as processed=True with no extraction. We saw this produce
+        # "ghost-success" rows where every field is null but processed=True.
         if not raw or not raw.strip():
             raise PaperExtractionError(
                 "模型返回了空响应（可能是 file_search 没命中 PDF，或网络中断）。请重试，或检查 PDF 是否可读。",
@@ -363,6 +370,9 @@ def _process_single(paper_id: int):
             p.chat_history = []
 
         p.raw_llm_response = raw
+        # Stamp which model produced this raw response so the Review page
+        # can show it alongside processed_at.
+        p.extraction_model = cfg["vlm_model"]
         p.title = (extraction.get("title") or p.filename)[:200]
         p.authors = extraction.get("authors") or []
 
@@ -395,10 +405,18 @@ def _process_single(paper_id: int):
             compile_concept_pages_for_paper(
                 p.id, db, cfg["openai_api_key"], compile_model
             )
+            # Refresh the FTS index so the new wiki page is searchable
+            # immediately. Cheap (<1s) at this scale.
+            try:
+                from services.wiki_search import rebuild_index
+                rebuild_index()
+            except Exception as ix_err:
+                print(f"[wiki_search] reindex after paper {p.id} failed: {ix_err}")
         except Exception as compile_err:
             print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
     except PaperExtractionError as e:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
+        logger.exception("paper processing failed during extraction paper_id=%s filename=%s", paper_id, p.filename if p else None)
         if p:
             if e.raw:
                 p.raw_llm_response = e.raw
@@ -406,7 +424,6 @@ def _process_single(paper_id: int):
                 p.openai_file_id = e.file_id
             p.error = str(e)[:500]
             db.commit()
-            logger.exception("paper processing failed during extraction paper_id=%s filename=%s", paper_id, p.filename if p else None)
             sync_record_from_paper(p, event="process_error")
         if e.assistant_id:
             try:
@@ -416,10 +433,10 @@ def _process_single(paper_id: int):
         processing_state["errors"] += 1
     except Exception as e:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
+        logger.exception("paper processing crashed paper_id=%s filename=%s", paper_id, p.filename if p else None)
         if p:
             p.error = str(e)[:500]
             db.commit()
-            logger.exception("paper processing crashed paper_id=%s filename=%s", paper_id, p.filename if p else None)
             sync_record_from_paper(p, event="process_error")
         processing_state["errors"] += 1
     finally:
@@ -462,6 +479,7 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.processed = False
     p.processed_at = None
     p.raw_llm_response = None
+    p.extraction_model = None
     p.error = None
     # Drop cached OpenAI handles so reprocess re-uploads the PDF and opens a
     # fresh thread. Reusing a stale file_id against a new per-thread vector

@@ -190,6 +190,7 @@ export default function ReviewPage() {
         ...visibleDetail,
         processed: false,
         processed_at: null,
+        extraction_model: null,
         raw_llm_response: null,
         error: null,
         knowledge_nodes: [],
@@ -306,6 +307,23 @@ export default function ReviewPage() {
                     <span className="text-xs text-slate-500">
                       于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
                     </span>
+                  )}
+                  {visibleDetail.processed && (
+                    visibleDetail.extraction_model ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-mono text-indigo-200"
+                        title="本次抽取使用的模型"
+                      >
+                        {visibleDetail.extraction_model}
+                      </span>
+                    ) : (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-md border border-slate-700/60 bg-slate-800/60 px-1.5 py-0.5 text-[11px] text-slate-500"
+                        title="此论文在添加 extraction_model 列之前处理，模型信息未保存。下次重新处理后会记录。"
+                      >
+                        模型未记录
+                      </span>
+                    )
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 sm:justify-end">

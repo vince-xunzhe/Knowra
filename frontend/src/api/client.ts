@@ -34,6 +34,9 @@ export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
   extraction: Record<string, unknown> | null
+  // Which model produced the current raw_llm_response (e.g. "gpt-4.1",
+  // "gpt-5.5"). null for legacy rows that pre-date the column.
+  extraction_model: string | null
   notes: string
   has_first_page_image: boolean
   chat: ChatState
@@ -122,7 +125,7 @@ export const processAll = () => api.post('/process').then(r => r.data)
 export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
 export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
 export const retryFailedPapers = () =>
-  api.post<{ message: string; retried: number }>(`/papers/retry_failed`).then(r => r.data)
+  api.post<{ message: string; retried: number }>('/papers/retry_failed').then(r => r.data)
 export const reprocessPaper = (id: number) => api.post(`/papers/${id}/reprocess`).then(r => r.data)
 export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.data)
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
@@ -285,3 +288,27 @@ export interface WikiFreshnessSummary {
 
 export const getWikiFreshness = () =>
   api.get<WikiFreshnessSummary>('/wiki/freshness', { timeout: 12000 }).then(r => r.data)
+
+// FTS5 search across the LLM-compiled wiki layer. Pure local SQLite —
+// zero token cost. snippet contains <mark>...</mark> spans; render via
+// dangerouslySetInnerHTML.
+export interface WikiSearchHit {
+  kind: 'paper' | 'concept'
+  filename: string
+  path: string
+  title: string
+  compiled_at: string | null
+  snippet: string
+  score: number
+}
+
+export interface WikiSearchResponse {
+  query: string
+  hits: WikiSearchHit[]
+}
+
+export const searchWiki = (q: string, limit = 20) =>
+  api.get<WikiSearchResponse>('/wiki/search', {
+    params: { q, limit },
+    timeout: 10000,
+  }).then(r => r.data)

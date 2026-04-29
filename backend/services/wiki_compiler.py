@@ -124,6 +124,44 @@ def _parse_frontmatter(text: str) -> Tuple[dict, str]:
     return meta, body
 
 
+def _read_frontmatter_from_path(path: Path) -> Optional[dict]:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    meta, _ = _parse_frontmatter(text)
+    return meta
+
+
+def _pick_preferred_page(entries: List[dict], expected_name: Optional[str] = None) -> Optional[dict]:
+    if not entries:
+        return None
+    if expected_name:
+        for entry in entries:
+            if entry.get("filename") == expected_name:
+                return entry
+    return max(
+        entries,
+        key=lambda entry: (
+            str(entry.get("compiled_at") or ""),
+            str(entry.get("filename") or ""),
+        ),
+    )
+
+
+def _normalize_int_list(values: Any) -> List[int]:
+    raw = values or []
+    if not isinstance(raw, list):
+        raw = [raw]
+    out: List[int] = []
+    for item in raw:
+        try:
+            out.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 # --- LLM call ---------------------------------------------------------------
 
 def _call_llm(
@@ -191,6 +229,152 @@ def _paper_user_prompt(paper: Paper, extraction: dict) -> str:
     return "\n".join(parts)
 
 
+def _paper_page_title(paper: Paper) -> str:
+    return paper.title or Path(paper.filename or f"paper-{paper.id}").stem
+
+
+def _paper_page_path(paper: Paper) -> Path:
+    slug = _slugify(_paper_page_title(paper), fallback=f"paper-{paper.id}")
+    return WIKI_PAPERS_DIR / f"{paper.id:04d}-{slug}.md"
+
+
+def _concept_page_path(node: KnowledgeNode) -> Path:
+    slug = _slugify(node.title, fallback=f"concept-{node.id}")
+    return WIKI_CONCEPTS_DIR / f"{node.id:04d}-{slug}.md"
+
+
+def _cleanup_same_id_pages(
+    base_dir: Path,
+    id_key: str,
+    ident: int,
+    keep_path: Path,
+) -> List[str]:
+    removed: List[str] = []
+    if not base_dir.exists():
+        return removed
+
+    for candidate in base_dir.glob("*.md"):
+        if candidate == keep_path:
+            continue
+        meta = _read_frontmatter_from_path(candidate)
+        if not meta or meta.get(id_key) != ident:
+            continue
+        try:
+            candidate.unlink()
+            removed.append(candidate.name)
+        except OSError:
+            continue
+    return removed
+
+
+def _reconcile_generated_pages(
+    base_dir: Path,
+    id_key: str,
+    expected_paths_by_id: dict[int, Path],
+    prune_orphans: bool = True,
+) -> dict:
+    """Clean stale wiki files on disk without calling the LLM.
+
+    Rules:
+      - If an id no longer exists in the raw layer, remove every page for it.
+      - If multiple files share the same id, keep the current expected slug if
+        present; otherwise keep the newest compiled_at file.
+      - If exactly one legacy file remains for a still-valid id but its slug no
+        longer matches the current expected path, keep it for now. The next
+        successful compile for that id will write the new file and self-clean.
+    """
+    removed: List[str] = []
+    duplicate_removed = 0
+    orphan_removed = 0
+    if not base_dir.exists():
+        return {
+            "removed": removed,
+            "removed_count": 0,
+            "duplicate_removed": 0,
+            "orphan_removed": 0,
+        }
+
+    grouped: dict[int, List[Tuple[Path, dict]]] = {}
+    for path in base_dir.glob("*.md"):
+        meta = _read_frontmatter_from_path(path)
+        if not meta:
+            continue
+        ident = meta.get(id_key)
+        if not isinstance(ident, int):
+            continue
+        grouped.setdefault(ident, []).append((path, meta))
+
+    for ident, entries in grouped.items():
+        expected_path = expected_paths_by_id.get(ident)
+        if expected_path is None:
+            if not prune_orphans:
+                continue
+            for path, _ in entries:
+                try:
+                    path.unlink()
+                    removed.append(path.name)
+                    orphan_removed += 1
+                except OSError:
+                    continue
+            continue
+
+        if len(entries) == 1 and entries[0][0].name != expected_path.name:
+            continue
+
+        keep_path: Optional[Path] = None
+        for path, _ in entries:
+            if path.name == expected_path.name:
+                keep_path = path
+                break
+        if keep_path is None:
+            keep_path = max(
+                entries,
+                key=lambda item: (
+                    str(item[1].get("compiled_at") or ""),
+                    item[0].name,
+                ),
+            )[0]
+
+        for path, _ in entries:
+            if path == keep_path:
+                continue
+            try:
+                path.unlink()
+                removed.append(path.name)
+                duplicate_removed += 1
+            except OSError:
+                continue
+
+    return {
+        "removed": removed,
+        "removed_count": len(removed),
+        "duplicate_removed": duplicate_removed,
+        "orphan_removed": orphan_removed,
+    }
+
+
+def reconcile_paper_pages_dir(db: Session, prune_orphans: bool = True) -> dict:
+    processed = db.query(Paper).filter(Paper.processed.is_(True)).all()
+    expected = {paper.id: _paper_page_path(paper) for paper in processed}
+    return _reconcile_generated_pages(
+        WIKI_PAPERS_DIR,
+        "paper_id",
+        expected,
+        prune_orphans=prune_orphans,
+    )
+
+
+def reconcile_concept_pages_dir(db: Session, prune_orphans: bool = True) -> dict:
+    nodes = db.query(KnowledgeNode).all()
+    expected = {node.id: _concept_page_path(node) for node in nodes}
+    return _reconcile_generated_pages(
+        WIKI_CONCEPTS_DIR,
+        "concept_id",
+        expected,
+        prune_orphans=prune_orphans,
+    )
+
+
 def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]:
     """Generate / refresh wiki/papers/{id}-{slug}.md from this paper's
     extraction + notes. Returns None if there is nothing to compile yet
@@ -213,11 +397,10 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         _paper_user_prompt(paper, extraction),
     )
 
-    title = paper.title or Path(paper.filename or f"paper-{paper.id}").stem
+    title = _paper_page_title(paper)
     slug = _slugify(title, fallback=f"paper-{paper.id}")
-    name = f"{paper.id:04d}-{slug}.md"
     WIKI_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
-    path = WIKI_PAPERS_DIR / name
+    path = _paper_page_path(paper)
 
     record_stem = _slugify(Path(paper.filename or "").stem, fallback=f"paper-{paper.id}")
     meta = {
@@ -232,6 +415,9 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
     }
     page = _render_frontmatter(meta) + f"\n# {title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
+    removed = _cleanup_same_id_pages(WIKI_PAPERS_DIR, "paper_id", paper.id, path)
+    if removed:
+        _log(f"paper={paper.id} pruned stale wiki files: {', '.join(removed)}")
     return path
 
 
@@ -265,16 +451,7 @@ def _concept_user_prompt(node: KnowledgeNode, snippets: List[Tuple[int, str]]) -
 
 
 def _node_paper_ids(node: KnowledgeNode) -> List[int]:
-    raw = node.source_paper_ids or []
-    if not isinstance(raw, list):
-        raw = [raw]
-    out: List[int] = []
-    for x in raw:
-        try:
-            out.append(int(x))
-        except (TypeError, ValueError):
-            continue
-    return out
+    return _normalize_int_list(node.source_paper_ids)
 
 
 def _snippet_for_paper(paper: Paper) -> str:
@@ -320,10 +497,9 @@ def compile_concept_page(
         max_tokens=1500,
     )
 
-    slug = _slugify(node.title, fallback=f"concept-{node.id}")
-    name = f"{node.id:04d}-{slug}.md"
     WIKI_CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = WIKI_CONCEPTS_DIR / name
+    path = _concept_page_path(node)
+    slug = _slugify(node.title, fallback=f"concept-{node.id}")
 
     meta = {
         "kind": "concept",
@@ -338,6 +514,9 @@ def compile_concept_page(
     }
     page = _render_frontmatter(meta) + f"\n# {node.title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
+    removed = _cleanup_same_id_pages(WIKI_CONCEPTS_DIR, "concept_id", node.id, path)
+    if removed:
+        _log(f"concept={node.id} pruned stale wiki files: {', '.join(removed)}")
     return path
 
 
@@ -578,26 +757,28 @@ def compute_freshness_summary(db: Session) -> dict:
     node_ids = {n.id for n in nodes}
 
     paper_pages = list_paper_pages()
-    paper_pages_by_id: dict = {}
+    paper_pages_by_id: dict[int, List[dict]] = {}
     for pp in paper_pages:
         pid = pp.get("paper_id")
         if isinstance(pid, int):
-            paper_pages_by_id[pid] = pp
+            paper_pages_by_id.setdefault(pid, []).append(pp)
 
     concept_pages = list_concept_pages()
-    concept_pages_by_id: dict = {}
+    concept_pages_by_id: dict[int, List[dict]] = {}
     for cp in concept_pages:
         cid = cp.get("concept_id")
         if isinstance(cid, int):
-            concept_pages_by_id[cid] = cp
+            concept_pages_by_id.setdefault(cid, []).append(cp)
 
     # --- paper page freshness ---
     paper_missing: List[dict] = []
     paper_stale: List[dict] = []
     paper_ok = 0
     for paper in papers:
-        wiki = paper_pages_by_id.get(paper.id)
         title = paper.title or paper.filename or f"paper-{paper.id}"
+        expected_name = _paper_page_path(paper).name
+        candidates = paper_pages_by_id.get(paper.id) or []
+        wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
             paper_missing.append({
                 "paper_id": paper.id,
@@ -607,13 +788,21 @@ def compute_freshness_summary(db: Session) -> dict:
             continue
         compiled_at = _parse_iso(wiki.get("compiled_at"))
         processed_at = _to_aware(paper.processed_at)
+        reasons: List[str] = []
+        if len(candidates) > 1:
+            reasons.append("duplicate_files")
+        if wiki.get("title") != title or wiki.get("filename") != expected_name:
+            reasons.append("identity_changed")
         if processed_at and compiled_at and processed_at > compiled_at:
+            reasons.append("source_newer")
+        if reasons:
             paper_stale.append({
                 "paper_id": paper.id,
                 "title": title,
                 "filename": wiki.get("filename"),
                 "processed_at": processed_at.isoformat(),
-                "compiled_at": compiled_at.isoformat(),
+                "compiled_at": compiled_at.isoformat() if compiled_at else None,
+                "reasons": reasons,
             })
             continue
         paper_ok += 1
@@ -632,7 +821,9 @@ def compute_freshness_summary(db: Session) -> dict:
     concept_stale: List[dict] = []
     concept_ok = 0
     for node in nodes:
-        wiki = concept_pages_by_id.get(node.id)
+        expected_name = _concept_page_path(node).name
+        candidates = concept_pages_by_id.get(node.id) or []
+        wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
             concept_missing.append({
                 "concept_id": node.id,
@@ -658,13 +849,31 @@ def compute_freshness_summary(db: Session) -> dict:
             ts = _to_aware(paper.processed_at)
             if ts is not None and (newest is None or ts > newest):
                 newest = ts
+        current_source_ids = sorted(
+            pid for pid in _normalize_int_list(node.source_paper_ids) if pid in paper_by_id
+        )
+        wiki_source_ids = sorted(_normalize_int_list(wiki.get("source_paper_ids")))
+        reasons: List[str] = []
+        if len(candidates) > 1:
+            reasons.append("duplicate_files")
+        if (
+            wiki.get("title") != node.title
+            or wiki.get("filename") != expected_name
+            or wiki.get("node_type") != node.node_type
+        ):
+            reasons.append("identity_changed")
+        if current_source_ids != wiki_source_ids:
+            reasons.append("source_papers_changed")
         if compiled_at and newest and newest > compiled_at:
+            reasons.append("source_newer")
+        if reasons:
             concept_stale.append({
                 "concept_id": node.id,
                 "title": node.title,
                 "filename": wiki.get("filename"),
-                "compiled_at": compiled_at.isoformat(),
-                "newest_source_processed_at": newest.isoformat(),
+                "compiled_at": compiled_at.isoformat() if compiled_at else None,
+                "newest_source_processed_at": newest.isoformat() if newest else None,
+                "reasons": reasons,
             })
             continue
         concept_ok += 1
@@ -704,5 +913,4 @@ def compute_freshness_summary(db: Session) -> dict:
             "orphan": _cap(concept_orphan),
         },
     }
-
 

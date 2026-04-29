@@ -27,6 +27,14 @@ app.include_router(wiki.router)
 @app.on_event("startup")
 def startup():
     init_db()
+    # Phase 2A: keep the wiki FTS index warm. Cheap at this scale (<1s for
+    # ~500 .md files); failures are non-fatal so a missing wiki/ directory
+    # doesn't take the API down.
+    try:
+        from services.wiki_search import rebuild_index
+        rebuild_index()
+    except Exception as e:
+        print(f"[wiki_search] startup index failed: {e}")
 
 
 @app.get("/")

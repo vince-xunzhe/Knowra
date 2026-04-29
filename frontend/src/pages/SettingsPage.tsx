@@ -105,8 +105,8 @@ export default function SettingsPage() {
         </SettingGroup>
 
         {/* Model */}
-        <SettingGroup title="模型" description="配置论文处理模型与图谱向量模型">
-          <Field icon={<Cpu size={14} />} label="处理模型">
+        <SettingGroup title="模型" description="配置论文交互模型与图谱向量模型">
+          <Field icon={<Cpu size={14} />} label="论文交互模型">
             <select
               value={config.vlm_model || 'gpt-4o'}
               onChange={e => setConfig(c => ({ ...c, vlm_model: e.target.value }))}
@@ -149,7 +149,7 @@ export default function SettingsPage() {
           <Field
             icon={<Cpu size={14} />}
             label="Wiki 编译模型"
-            hint="用于「概念」页的 LLM 编译（论文百科页 + 概念综述页）。与处理模型解耦：编译只是文本摘要，gpt-4o-mini 已够用。"
+            hint="用于「概念」页的 LLM 编译（论文百科页 + 概念综述页）。与论文交互模型解耦：编译只是文本摘要，gpt-4o-mini 已够用。"
           >
             <select
               value={config.wiki_compile_model || 'gpt-4o-mini'}
@@ -279,7 +279,10 @@ function SettingGroup({
   return (
     <section className="mb-8">
       <div className="mb-4">
-        <p className="section-label mb-1">{title}</p>
+        {/* Bumped from .section-label (10px uppercase) — that style is for
+            subtle inline subtitles, but a Settings group heading deserves
+            real hierarchy. */}
+        <h2 className="text-lg font-semibold text-slate-100 tracking-tight mb-1">{title}</h2>
         {description && <p className="panel-subtitle">{description}</p>}
       </div>
       <div className="surface-card p-5 space-y-4">{children}</div>

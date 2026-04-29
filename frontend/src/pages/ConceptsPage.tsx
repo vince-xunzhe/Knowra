@@ -14,11 +14,13 @@ import {
   recompileAllPaperPages,
   getWikiStatus,
   getWikiFreshness,
+  searchWiki,
   type WikiPageMeta,
   type WikiPageDetail,
   type WikiKind,
   type WikiCompileState,
   type WikiFreshnessSummary,
+  type WikiSearchHit,
 } from '../api/client'
 
 export default function ConceptsPage() {
@@ -43,7 +45,16 @@ export default function ConceptsPage() {
   const [recompilingPapers, setRecompilingPapers] = useState(false)
   const [status, setStatus] = useState<WikiCompileState | null>(null)
   const [freshness, setFreshness] = useState<WikiFreshnessSummary | null>(null)
+  // Phase 2A — when `searchHits` is non-null, the left panel renders global
+  // FTS5 results across both kinds instead of the per-kind list. Cleared
+  // back to null when the search input is empty.
+  const [searchHits, setSearchHits] = useState<WikiSearchHit[] | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
   const wasRunningRef = useRef(false)
+  // Pending selection survives the kind-change → load → reset cycle so a
+  // search hit click into a different tab actually selects the file once
+  // the new list loads.
+  const pendingSelectionRef = useRef<string | null>(null)
 
   const refreshFreshness = useCallback(async () => {
     try {
@@ -57,7 +68,12 @@ export default function ConceptsPage() {
     try {
       const next = kind === 'concepts' ? await listConceptPages() : await listPaperPages()
       setItems(next)
+      // Pending selection from a search-hit click takes precedence over
+      // both the previous selection and the default-to-first behavior.
+      const pending = pendingSelectionRef.current
+      pendingSelectionRef.current = null
       setSelectedFilename(prev => {
+        if (pending && next.some(it => it.filename === pending)) return pending
         if (prev && next.some(it => it.filename === prev)) return prev
         return next[0]?.filename ?? null
       })
@@ -148,6 +164,9 @@ export default function ConceptsPage() {
     return () => { cancelled = true }
   }, [selectedFilename, kind])
 
+  // Local title-only filter (instant, no network). Used as a UX bridge while
+  // the FTS5 query is in flight or for short queries (<2 chars) — the
+  // global search needs trigrams so it can't do anything useful with 1 char.
   const filtered = useMemo(() => {
     if (!search.trim()) return items
     const q = search.toLowerCase()
@@ -158,6 +177,45 @@ export default function ConceptsPage() {
       (it.authors || []).some(a => a.toLowerCase().includes(q))
     )
   }, [items, search])
+
+  // Debounced FTS5 search across both kinds. Fires when query >= 2 chars;
+  // cleared when input is empty. The 250ms debounce avoids a request on
+  // every keystroke.
+  useEffect(() => {
+    const q = search.trim()
+    if (q.length < 2) {
+      setSearchHits(null)
+      setSearchLoading(false)
+      return
+    }
+    setSearchLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const r = await searchWiki(q, 30)
+        setSearchHits(r.hits)
+      } catch (error) {
+        console.error('wiki search failed', error)
+        setSearchHits([])
+      } finally {
+        setSearchLoading(false)
+      }
+    }, 250)
+    return () => clearTimeout(t)
+  }, [search])
+
+  const handleHitClick = (hit: WikiSearchHit) => {
+    const targetKind: WikiKind = hit.kind === 'paper' ? 'papers' : 'concepts'
+    if (targetKind !== kind) {
+      // Stash the desired filename so `load` picks it up after the kind
+      // change triggers a fresh list fetch.
+      pendingSelectionRef.current = hit.filename
+      setKind(targetKind)
+    } else {
+      setSelectedFilename(hit.filename)
+    }
+    setSearch('')
+    setSearchHits(null)
+  }
 
   // Sets of stale ids for O(1) per-row lookups during list render.
   const staleIds = useMemo(() => {
@@ -273,11 +331,20 @@ export default function ConceptsPage() {
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="text"
-              placeholder={kind === 'concepts' ? '搜索 (标题 / 类型 / 标签)' : '搜索 (标题 / 作者 / 标签)'}
+              placeholder="全 wiki 搜索 (≥2 字)"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-xs text-slate-200 pl-8 pr-3 py-1.5 focus:outline-none focus:border-indigo-500/60 transition-colors placeholder:text-slate-500"
+              className="w-full bg-slate-900/60 border border-slate-700/60 rounded-xl text-xs text-slate-200 pl-8 pr-7 py-1.5 focus:outline-none focus:border-indigo-500/60 transition-colors placeholder:text-slate-500"
             />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                title="清空搜索"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-200 text-xs leading-none"
+              >
+                ✕
+              </button>
+            )}
           </div>
           <div className="mt-2 grid grid-cols-2 gap-1.5">
             <button
@@ -323,7 +390,17 @@ export default function ConceptsPage() {
         </header>
 
         <div className="flex-1 overflow-y-auto px-2 py-2">
-          {loading ? (
+          {searchHits !== null ? (
+            // Phase 2A: global FTS5 results take over the list area while
+            // the search input is non-empty. Tab is ignored — hits across
+            // both kinds render with a small kind badge.
+            <SearchHitList
+              hits={searchHits}
+              loading={searchLoading}
+              query={search}
+              onPick={handleHitClick}
+            />
+          ) : loading ? (
             <div className="text-center text-xs text-slate-500 py-12">加载中…</div>
           ) : filtered.length === 0 ? (
             <div className="text-center text-xs text-slate-500 py-12">
@@ -440,6 +517,80 @@ function WikiListItem({
           <span className="text-slate-700">·</span>
           <span className="line-clamp-1 text-safe-wrap">{subtitle}</span>
         </div>
+      </button>
+    </li>
+  )
+}
+
+function SearchHitList({
+  hits, loading, query, onPick,
+}: {
+  hits: WikiSearchHit[]
+  loading: boolean
+  query: string
+  onPick: (hit: WikiSearchHit) => void
+}) {
+  if (query.trim().length < 2) {
+    return (
+      <div className="text-center text-xs text-slate-500 py-10">
+        <Search size={20} className="mx-auto text-slate-700 mb-2" />
+        输入 2 字以上开始搜索 wiki
+      </div>
+    )
+  }
+  if (loading && hits.length === 0) {
+    return (
+      <div className="text-center text-xs text-slate-500 py-10">
+        <Loader2 size={16} className="mx-auto animate-spin mb-2" /> 搜索中…
+      </div>
+    )
+  }
+  if (hits.length === 0) {
+    return (
+      <div className="text-center text-xs text-slate-500 py-10">
+        <Search size={20} className="mx-auto text-slate-700 mb-2" />
+        没有匹配
+      </div>
+    )
+  }
+  return (
+    <ul className="space-y-1.5">
+      <li className="px-2 py-1 text-[10.5px] text-slate-500">
+        命中 {hits.length} 条
+      </li>
+      {hits.map(h => (
+        <SearchHitRow key={`${h.kind}:${h.filename}`} hit={h} onClick={() => onPick(h)} />
+      ))}
+    </ul>
+  )
+}
+
+function SearchHitRow({ hit, onClick }: { hit: WikiSearchHit; onClick: () => void }) {
+  const kindLabel = hit.kind === 'paper' ? '论文' : '概念'
+  const kindClass = hit.kind === 'paper'
+    ? 'bg-blue-500/10 text-blue-300 border-blue-500/30'
+    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+  return (
+    <li>
+      <button
+        onClick={onClick}
+        className="w-full text-left rounded-xl px-3 py-2.5 transition-colors border border-transparent hover:bg-slate-800/40 hover:border-slate-700"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-medium leading-snug line-clamp-2 text-slate-100 text-safe-wrap">
+            {hit.title}
+          </p>
+          <span className={`shrink-0 text-[10px] px-1.5 py-0.5 rounded border ${kindClass}`}>
+            {kindLabel}
+          </span>
+        </div>
+        {/* Snippet contains <mark>...</mark> from FTS5; safe to render as
+            HTML because the source comes from .md files we wrote ourselves
+            and FTS5 itself emits the markers. */}
+        <p
+          className="mt-1.5 text-[11px] text-slate-400 leading-relaxed line-clamp-3 text-safe-wrap [&_mark]:bg-amber-300/30 [&_mark]:text-amber-100 [&_mark]:rounded [&_mark]:px-0.5"
+          dangerouslySetInnerHTML={{ __html: hit.snippet }}
+        />
       </button>
     </li>
   )

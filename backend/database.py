@@ -32,6 +32,8 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN thread_created_at DATETIME"))
         if "chat_history" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN chat_history JSON"))
+        if "extraction_model" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN extraction_model VARCHAR"))
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")

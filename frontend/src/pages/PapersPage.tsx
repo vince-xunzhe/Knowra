@@ -7,6 +7,7 @@ import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
   type PaperRecord,
 } from '../api/client'
+import PromptPanel from '../components/PromptPanel'
 
 interface ProcStatus {
   running: boolean
@@ -326,6 +327,21 @@ export default function PapersPage() {
           </div>
         </header>
 
+        {/* Selected-paper strip — sits between toolbar and the grid as a
+            compact horizontal panel. Replaces the previous full-height
+            right-column detail view; the right column is now dedicated
+            to the Prompt editor. */}
+        {selected && (
+          <PaperDetailStrip
+            paper={selected}
+            pending={isPending(selected)}
+            onClose={() => setSelected(null)}
+            onProcess={() => handleProcessOne(selected)}
+            onRetry={() => handleRetry(selected)}
+            onReprocess={() => handleReprocess(selected)}
+          />
+        )}
+
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading ? (
@@ -368,109 +384,124 @@ export default function PapersPage() {
         </div>
       </div>
 
-      {/* Detail panel */}
-      {selected && (
-        <aside className="w-[24rem] max-w-[38vw] bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden fade-in shrink-0">
-          <div className="px-5 py-4 border-b border-slate-800/80 flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="section-label mb-1">论文详情</p>
-              <p className="text-base text-white font-semibold line-clamp-3 leading-snug tracking-tight text-safe-wrap">
-                {selected.title || selected.filename}
-              </p>
-              <p className="text-sm text-slate-500 mt-2">查看元数据、处理状态与错误信息。</p>
-            </div>
+      {/* Right column: dedicated to the global extraction Prompt editor.
+          Per-paper detail used to share this column, but it now lives as
+          a compact strip in the left column above the grid. */}
+      <aside className="w-[24rem] max-w-[38vw] bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden shrink-0">
+        <div className="px-5 py-4 border-b border-slate-800/80">
+          <p className="section-label mb-1">全局 Prompt</p>
+          <p className="text-sm text-slate-500 leading-relaxed">
+            论文抽取使用的指令，所有论文共享。
+          </p>
+        </div>
+        <PromptPanel />
+      </aside>
+    </div>
+  )
+}
+
+// Compact horizontal strip shown between the toolbar and the paper grid
+// when a paper is selected. Replaces the full-height right-column detail
+// view; the right column is now Prompt-only.
+function PaperDetailStrip({
+  paper, pending, onClose, onProcess, onRetry, onReprocess,
+}: {
+  paper: PaperRecord
+  pending: boolean
+  onClose: () => void
+  onProcess: () => void
+  onRetry: () => void
+  onReprocess: () => void
+}) {
+  return (
+    <div className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-3">
+      <div className="flex items-start gap-4">
+        {/* Thumbnail */}
+        <div className="w-14 h-[4.5rem] shrink-0 bg-[#0b0d12] rounded border border-slate-800 flex items-center justify-center overflow-hidden">
+          {paper.processed ? (
+            <img
+              src={firstPageUrl(paper.id)}
+              alt=""
+              className="max-w-full max-h-full object-contain"
+              onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+            />
+          ) : (
+            <FileText size={18} className="text-slate-700" />
+          )}
+        </div>
+
+        {/* Info */}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm text-white font-semibold leading-snug line-clamp-2 text-safe-wrap">
+              {paper.title || paper.filename}
+            </p>
             <button
-              onClick={() => setSelected(null)}
-              className="text-slate-500 hover:text-white text-sm shrink-0 rounded-lg px-2 py-1 hover:bg-slate-800/60 transition-colors"
+              onClick={onClose}
+              title="收起"
+              className="shrink-0 text-slate-500 hover:text-white text-sm rounded-md px-1.5 py-0.5 hover:bg-slate-800/60 transition-colors"
             >
               ✕
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-5 space-y-5">
-            {selected.processed && (
-              <img
-                src={firstPageUrl(selected.id)}
-                alt={selected.filename}
-                className="w-full rounded-lg border border-slate-800 shadow-lg"
-                onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-              />
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
+            <PaperStatus paper={paper} pending={pending} />
+            {paper.authors.length > 0 && (
+              <span className="line-clamp-1 max-w-[28rem] text-safe-wrap">
+                {paper.authors.slice(0, 4).join(', ')}
+                {paper.authors.length > 4 ? ' …' : ''}
+              </span>
             )}
-
-            <dl className="space-y-3 text-sm">
-              <Row label="文件">
-                <span className="text-slate-300 break-all text-xs">{selected.filename}</span>
-              </Row>
-              {selected.authors.length > 0 && (
-                <Row label="作者">
-                  <span className="text-slate-300 text-safe-wrap">{selected.authors.join(', ')}</span>
-                </Row>
-              )}
-              {selected.num_pages && (
-                <Row label="页数">
-                  <span className="text-slate-300 tabular-nums">{selected.num_pages}</span>
-                </Row>
-              )}
-              <Row label="状态">
-                <PaperStatus paper={selected} pending={isPending(selected)} />
-              </Row>
-              {selected.processed_at && (
-                <Row label="处理时间">
-                  <span className="text-slate-400 text-xs">
-                    {new Date(selected.processed_at).toLocaleString()}
-                  </span>
-                </Row>
-              )}
-            </dl>
-
-            {selected.error && (
-              <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-xs text-red-300 break-words leading-relaxed">
-                <p className="font-semibold mb-1">错误</p>
-                {selected.error}
-              </div>
+            {paper.num_pages && (
+              <span className="tabular-nums text-slate-400">{paper.num_pages} 页</span>
             )}
+            {paper.processed_at && (
+              <span title={paper.processed_at}>
+                于 {new Date(paper.processed_at).toLocaleString()} 处理
+              </span>
+            )}
+            <span className="font-mono text-slate-600 break-all">{paper.filename}</span>
+          </div>
 
-            {!selected.processed && !selected.error && (
+          {paper.error && (
+            <div className="mt-2 bg-red-500/10 border border-red-500/30 rounded-md px-2.5 py-1.5 text-[11px] text-red-300 break-words leading-relaxed">
+              <span className="font-semibold">错误：</span>{paper.error}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {!paper.processed && !paper.error && (
               <button
-                onClick={() => handleProcessOne(selected)}
-                disabled={isPending(selected)}
-                className="w-full flex items-center justify-center gap-2 text-sm bg-indigo-500 hover:bg-indigo-400 text-white py-2.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed font-medium"
+                onClick={onProcess}
+                disabled={pending}
+                className="inline-flex items-center gap-1 text-xs bg-indigo-500 hover:bg-indigo-400 text-white px-2.5 py-1 rounded-md transition-colors disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {isPending(selected) ? (
-                  <><Loader2 size={14} className="animate-spin" /> 处理中…</>
-                ) : (
-                  <><Play size={14} /> 立即处理</>
-                )}
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />} 立即处理
               </button>
             )}
-            {selected.error && (
+            {paper.error && (
               <button
-                onClick={() => handleRetry(selected)}
-                disabled={isPending(selected)}
-                className="w-full flex items-center justify-center gap-2 text-sm bg-amber-500 hover:bg-amber-400 text-white py-2.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed font-medium"
+                onClick={onRetry}
+                disabled={pending}
+                className="inline-flex items-center gap-1 text-xs bg-amber-500 hover:bg-amber-400 text-white px-2.5 py-1 rounded-md transition-colors disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {isPending(selected) ? (
-                  <><Loader2 size={14} className="animate-spin" /> 处理中…</>
-                ) : (
-                  <><RotateCw size={14} /> 重试</>
-                )}
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} 重试
               </button>
             )}
-            {selected.processed && (
+            {paper.processed && (
               <button
-                onClick={() => handleReprocess(selected)}
-                disabled={isPending(selected)}
-                className="w-full flex items-center justify-center gap-2 text-sm bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 py-2.5 rounded-lg transition-colors disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed font-medium"
+                onClick={onReprocess}
+                disabled={pending}
+                className="inline-flex items-center gap-1 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 px-2.5 py-1 rounded-md transition-colors disabled:opacity-40"
               >
-                {isPending(selected) ? (
-                  <><Loader2 size={14} className="animate-spin" /> 处理中…</>
-                ) : (
-                  <><RotateCw size={14} /> 重新处理</>
-                )}
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} 重新处理
               </button>
             )}
           </div>
-        </aside>
-      )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -593,15 +624,6 @@ function StatusDot({ paper, pending }: { paper: PaperRecord; pending: boolean })
   if (paper.processed) return <CheckCircle2 size={16} className="text-emerald-400 drop-shadow" />
   if (paper.error) return <XCircle size={16} className="text-red-400 drop-shadow" />
   return <Clock size={16} className="text-slate-500 drop-shadow" />
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-start gap-3">
-      <dt className="w-16 shrink-0 text-[11px] text-slate-500 pt-0.5 uppercase tracking-[0.12em]">{label}</dt>
-      <dd className="flex-1 min-w-0 text-sm">{children}</dd>
-    </div>
-  )
 }
 
 function getErrorMessage(error: unknown): string {

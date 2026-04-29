@@ -24,6 +24,10 @@ class Paper(Base):
 
     processed = Column(Boolean, default=False)
     processed_at = Column(DateTime, nullable=True)
+    # Which OpenAI model produced the most recent raw_llm_response. Useful in
+    # the Review page so the user can attribute extraction quality to model
+    # vs. prompt when re-reading later.
+    extraction_model = Column(String, nullable=True)
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)
