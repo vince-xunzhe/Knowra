@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import init_db
+from logging_utils import configure_app_logging
 from routers import papers, graph, config, prompt, note_images, wiki
+
+configure_app_logging()
 
 app = FastAPI(title="Knowra API", version="2.0.0")
 

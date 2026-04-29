@@ -49,10 +49,86 @@ ASSISTANT_INSTRUCTIONS = (
 
 ASSISTANT_NAME = "knowledge-tree-paper-extractor"
 RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
+LOCAL_TEXT_FALLBACK_MAX_CHARS = 32000
 
 
 def model_uses_responses_api(model: str) -> bool:
     return model in RESPONSES_ONLY_MODELS
+
+
+def _has_substantive_value(value) -> bool:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return False
+        return any(ch.isalnum() for ch in text)
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, list):
+        return any(_has_substantive_value(item) for item in value)
+    if isinstance(value, dict):
+        return any(_has_substantive_value(item) for item in value.values())
+    return bool(value)
+
+
+def extraction_quality_issues(extraction: dict) -> list[str]:
+    if not isinstance(extraction, dict):
+        return ["返回结果不是 JSON 对象"]
+
+    issues: list[str] = []
+    if not _has_substantive_value(extraction.get("title")):
+        issues.append("title 为空")
+    if not _has_substantive_value(extraction.get("authors")):
+        issues.append("authors 为空")
+
+    graph_payload_keys = (
+        "problem_area",
+        "techniques",
+        "datasets",
+        "baselines",
+        "key_findings",
+    )
+    if not any(_has_substantive_value(extraction.get(key)) for key in graph_payload_keys):
+        issues.append("图谱关键字段全空")
+
+    narrative_keys = (
+        "core_contribution",
+        "abstract_summary",
+        "problem",
+        "motivation",
+        "principle",
+        "innovations",
+        "experimental_gains",
+        "historical_position",
+        "limitations",
+        "pytorch_snippet",
+    )
+    if not any(_has_substantive_value(extraction.get(key)) for key in narrative_keys):
+        issues.append("叙事字段全空")
+
+    return issues
+
+
+def extraction_has_critical_issues(extraction: dict) -> bool:
+    critical = {"返回结果不是 JSON 对象", "title 为空", "图谱关键字段全空"}
+    return any(issue in critical for issue in extraction_quality_issues(extraction))
+
+
+def _build_local_text_fallback_prompt(prompt: str, fallback_text: str) -> str:
+    text = (fallback_text or "").strip()
+    if not text:
+        return prompt
+    if len(text) > LOCAL_TEXT_FALLBACK_MAX_CHARS:
+        text = text[:LOCAL_TEXT_FALLBACK_MAX_CHARS].rstrip() + "\n\n[...TRUNCATED LOCAL PDF TEXT...]"
+    return (
+        f"{prompt}\n\n"
+        "═══════════ 本地 PDF 文本兜底（仅当 file_search 不可靠时使用） ═══════════\n"
+        "如果你发现附件检索不到正文、标题或作者，禁止返回全空 JSON；"
+        "请改用下面提供的本地 PDF 文本尽量完整填写关键字段。\n\n"
+        "[LOCAL_PDF_TEXT_BEGIN]\n"
+        f"{text}\n"
+        "[LOCAL_PDF_TEXT_END]\n"
+    )
 
 
 # --- assistant lifecycle -----------------------------------------------------
@@ -241,6 +317,32 @@ def _run_with_responses_file_search(
     preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
     _log(f"responses id={response.id} raw_len={len(raw)} preview={preview!r}")
     return raw, response.id
+
+
+def _run_extraction_once(
+    client: OpenAI,
+    model: str,
+    file_id: str,
+    prompt: str,
+    cached_assistant_id: Optional[str] = None,
+    cached_vector_store_id: Optional[str] = None,
+) -> tuple[dict, str, str, str, str]:
+    assistant_id = ""
+    vector_store_id = cached_vector_store_id or ""
+
+    if model_uses_responses_api(model):
+        vector_store_id = _ensure_vector_store(
+            client, cached_vector_store_id, file_id
+        )
+        raw, thread_id = _run_with_responses_file_search(
+            client, model, vector_store_id, prompt
+        )
+    else:
+        assistant_id = _ensure_assistant(client, cached_assistant_id, model)
+        raw, thread_id = _run_and_collect(client, assistant_id, file_id, prompt)
+
+    parsed = _normalize_extraction(_parse_json_lenient(raw))
+    return parsed, raw, assistant_id, thread_id, vector_store_id
 
 
 # --- response cleaning -------------------------------------------------------
@@ -490,6 +592,7 @@ def extract_knowledge_from_paper(
     cached_file_id: Optional[str] = None,
     cached_assistant_id: Optional[str] = None,
     cached_vector_store_id: Optional[str] = None,
+    fallback_text: Optional[str] = None,
 ) -> tuple[dict, str, str, str, str, str]:
     """Run structured extraction on a single PDF via Assistants + file_search.
 
@@ -505,17 +608,39 @@ def extract_knowledge_from_paper(
     raw = ""
     thread_id = ""
     try:
-        if model_uses_responses_api(model):
-            vector_store_id = _ensure_vector_store(
-                client, cached_vector_store_id, file_id
+        parsed, raw, assistant_id, thread_id, vector_store_id = _run_extraction_once(
+            client,
+            model,
+            file_id,
+            prompt,
+            cached_assistant_id=cached_assistant_id,
+            cached_vector_store_id=cached_vector_store_id,
+        )
+        issues = extraction_quality_issues(parsed)
+        if issues and fallback_text and fallback_text.strip():
+            _log(
+                "extraction missing core content "
+                f"({', '.join(issues)}); retrying with local PDF text fallback"
             )
-            raw, thread_id = _run_with_responses_file_search(
-                client, model, vector_store_id, prompt
+            fallback_prompt = _build_local_text_fallback_prompt(prompt, fallback_text)
+            parsed, raw, retry_assistant_id, thread_id, vector_store_id = _run_extraction_once(
+                client,
+                model,
+                file_id,
+                fallback_prompt,
+                cached_assistant_id=assistant_id or cached_assistant_id,
+                cached_vector_store_id=vector_store_id or cached_vector_store_id,
             )
-        else:
-            assistant_id = _ensure_assistant(client, cached_assistant_id, model)
-            raw, thread_id = _run_and_collect(client, assistant_id, file_id, prompt)
-        parsed = _normalize_extraction(_parse_json_lenient(raw))
+            if retry_assistant_id:
+                assistant_id = retry_assistant_id
+            issues = extraction_quality_issues(parsed)
+        if extraction_has_critical_issues(parsed):
+            raise PaperExtractionError(
+                "抽取结果缺少关键内容: " + "；".join(issues),
+                raw=raw,
+                file_id=file_id,
+                assistant_id=assistant_id,
+            )
     except PaperExtractionError:
         raise
     except Exception as e:

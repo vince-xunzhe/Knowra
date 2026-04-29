@@ -4,7 +4,7 @@ import {
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon,
 } from 'lucide-react'
 import {
-  listPapers, processPaper, retryPaper, reprocessPaper, firstPageUrl, getStatus,
+  listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
   type PaperRecord,
 } from '../api/client'
 
@@ -29,6 +29,8 @@ export default function PapersPage() {
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
   const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [bulkProcessingPending, setBulkProcessingPending] = useState(false)
+  const [bulkRetrying, setBulkRetrying] = useState(false)
   const wasRunningRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -129,6 +131,75 @@ export default function PapersPage() {
     }
   }
 
+  const handleRetryFailedAll = async () => {
+    const failedPapers = papers.filter(p => p.error && !p.processed)
+    if (failedPapers.length === 0) {
+      setActionMessage('当前没有失败论文需要重试。')
+      return
+    }
+
+    const ok = confirm(
+      `确认重试全部 ${failedPapers.length} 篇失败论文？这会清空它们当前的错误状态和 OpenAI 缓存，并重新调用大模型。`,
+    )
+    if (!ok) return
+
+    const failedIds = failedPapers.map(p => p.id)
+    setBulkRetrying(true)
+    setPendingIds(prev => new Set([...prev, ...failedIds]))
+    setActionMessage(null)
+    try {
+      const result = await retryFailedPapers()
+      if ((result.retried || 0) > 0) {
+        setActionMessage(`已提交批量重试：${result.retried} 篇失败论文`)
+      } else {
+        setPendingIds(prev => {
+          const next = new Set(prev)
+          failedIds.forEach(id => next.delete(id))
+          return next
+        })
+        setActionMessage('当前没有失败论文需要重试。')
+      }
+    } catch (error) {
+      setPendingIds(prev => {
+        const next = new Set(prev)
+        failedIds.forEach(id => next.delete(id))
+        return next
+      })
+      setActionMessage('批量重试启动失败: ' + getErrorMessage(error))
+    } finally {
+      setBulkRetrying(false)
+    }
+  }
+
+  const handleProcessPendingAll = async () => {
+    const pendingPapers = papers.filter(p => !p.processed && !p.error)
+    if (pendingPapers.length === 0) {
+      setActionMessage('当前没有待处理论文需要重试。')
+      return
+    }
+
+    const ok = confirm(`确认处理全部 ${pendingPapers.length} 篇待处理论文？`)
+    if (!ok) return
+
+    const pendingPaperIds = pendingPapers.map(p => p.id)
+    setBulkProcessingPending(true)
+    setPendingIds(prev => new Set([...prev, ...pendingPaperIds]))
+    setActionMessage(null)
+    try {
+      await processAll()
+      setActionMessage(`已提交批量处理：${pendingPapers.length} 篇待处理论文`)
+    } catch (error) {
+      setPendingIds(prev => {
+        const next = new Set(prev)
+        pendingPaperIds.forEach(id => next.delete(id))
+        return next
+      })
+      setActionMessage('批量处理启动失败: ' + getErrorMessage(error))
+    } finally {
+      setBulkProcessingPending(false)
+    }
+  }
+
   const isPending = (p: PaperRecord) =>
     pendingIds.has(p.id) || !!(status?.running && status.current === p.filename)
 
@@ -205,6 +276,24 @@ export default function PapersPage() {
                   <ListIcon size={14} />
                 </button>
               </div>
+              <button
+                onClick={handleProcessPendingAll}
+                disabled={bulkProcessingPending || !!status?.running || stats.pending === 0}
+                className="inline-flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-200 transition-colors hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+                title={stats.pending > 0 ? `处理全部 ${stats.pending} 篇待处理论文` : '当前没有待处理论文'}
+              >
+                {bulkProcessingPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
+                重试全部待处理
+              </button>
+              <button
+                onClick={handleRetryFailedAll}
+                disabled={bulkRetrying || !!status?.running || stats.failed === 0}
+                className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
+                title={stats.failed > 0 ? `重试全部 ${stats.failed} 篇失败论文` : '当前没有失败论文'}
+              >
+                {bulkRetrying ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />}
+                重试全部失败
+              </button>
               <button
                 onClick={load}
                 className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors"

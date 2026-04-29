@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from database import get_db
+from logging_utils import get_logger
 from models import Paper, KnowledgeNode
 from config import load_config, save_config
 from path_utils import (
@@ -15,6 +16,8 @@ from services.scanner_service import scan_directory
 from services.pdf_service import extract_text, render_first_page
 from services.vlm_service import (
     extract_knowledge_from_paper,
+    extraction_has_critical_issues,
+    extraction_quality_issues,
     model_uses_responses_api,
     parse_extraction_response,
     run_chat_turn,
@@ -40,7 +43,53 @@ def _safe_parse(raw):
         return None
 
 
+def _hydrate_paper_metadata_from_raw(p: Paper) -> bool:
+    parsed = _safe_parse(p.raw_llm_response)
+    if not parsed:
+        return False
+
+    changed = False
+    parsed_title = (parsed.get("title") or "").strip()
+    parsed_authors = parsed.get("authors") or []
+
+    if parsed_title and ((not p.title) or p.title == p.filename):
+        p.title = parsed_title[:200]
+        changed = True
+    if parsed_authors and not (p.authors or []):
+        p.authors = parsed_authors
+        changed = True
+    return changed
+
+
+def _reconcile_processed_paper(p: Paper) -> bool:
+    changed = _hydrate_paper_metadata_from_raw(p)
+    if not p.processed or not p.raw_llm_response:
+        return changed
+    parsed = _safe_parse(p.raw_llm_response)
+    if not parsed:
+        return changed
+    issues = set(extraction_quality_issues(parsed))
+    if "title 为空" not in issues or "图谱关键字段全空" not in issues:
+        return changed
+
+    if p.processed:
+        p.processed = False
+        changed = True
+    if p.processed_at is not None:
+        p.processed_at = None
+        changed = True
+    next_error = (
+        "检测到空壳抽取结果：模型返回了结构完整但内容为空的 JSON。"
+        "请重试；若仍失败，建议重新处理以重建 OpenAI 文件索引。"
+    )
+    if p.error != next_error:
+        p.error = next_error
+        changed = True
+    return changed
+
+
 router = APIRouter(prefix="/api", tags=["papers"])
+logger = get_logger("papers")
 
 processing_state = {"running": False, "total": 0, "done": 0, "errors": 0, "current": ""}
 
@@ -148,10 +197,17 @@ def scan_papers(db: Session = Depends(get_db)):
 def list_papers(db: Session = Depends(get_db)):
     papers = db.query(Paper).order_by(Paper.created_at.desc()).all()
     changed = False
+    healed_papers: list[Paper] = []
     for paper in papers:
-        changed = _sync_bulk_record_state(paper) or changed
+        if not processing_state["running"]:
+            changed = _sync_bulk_record_state(paper) or changed
+        if _reconcile_processed_paper(paper):
+            healed_papers.append(paper)
+            changed = True
     if changed:
         db.commit()
+    for paper in healed_papers:
+        sync_record_from_paper(paper, event="auto_repair")
     return [
         {
             "id": p.id,
@@ -178,7 +234,11 @@ def get_paper(paper_id: int, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    _sync_paper_from_record_if_needed(db, p)
+    if not processing_state["running"]:
+        _sync_paper_from_record_if_needed(db, p)
+    if _reconcile_processed_paper(p):
+        db.commit()
+        sync_record_from_paper(p, event="auto_repair")
     return _serialize_paper_detail(p, db)
 
 
@@ -276,7 +336,16 @@ def _process_single(paper_id: int):
             cached_file_id=cached_file_id,
             cached_assistant_id=cached_assistant_id,
             cached_vector_store_id=cached_vector_store_id,
+            fallback_text=p.extracted_text or "",
         )
+
+        if not raw or not raw.strip():
+            raise PaperExtractionError(
+                "模型返回了空响应（可能是 file_search 没命中 PDF，或网络中断）。请重试，或检查 PDF 是否可读。",
+                raw=raw or "",
+                file_id=new_file_id or "",
+                assistant_id=new_assistant_id or "",
+            )
 
         # Persist the cached identifiers so subsequent runs skip the upload /
         # assistant creation round-trips.
@@ -337,6 +406,7 @@ def _process_single(paper_id: int):
                 p.openai_file_id = e.file_id
             p.error = str(e)[:500]
             db.commit()
+            logger.exception("paper processing failed during extraction paper_id=%s filename=%s", paper_id, p.filename if p else None)
             sync_record_from_paper(p, event="process_error")
         if e.assistant_id:
             try:
@@ -349,6 +419,7 @@ def _process_single(paper_id: int):
         if p:
             p.error = str(e)[:500]
             db.commit()
+            logger.exception("paper processing crashed paper_id=%s filename=%s", paper_id, p.filename if p else None)
             sync_record_from_paper(p, event="process_error")
         processing_state["errors"] += 1
     finally:
@@ -363,27 +434,24 @@ def _process_all_background():
             Paper.processed == False, Paper.error == None
         ).all()
         ids = [p.id for p in pending]
-        processing_state["total"] = len(ids)
-        processing_state["done"] = 0
-        processing_state["errors"] = 0
-        processing_state["running"] = True
     finally:
         db.close()
 
-    for pid in ids:
-        _process_single(pid)
-
-    processing_state["running"] = False
-    processing_state["current"] = ""
+    _process_many_background(ids)
 
 
 def _process_one_background(paper_id: int):
-    processing_state["total"] = 1
+    _process_many_background([paper_id])
+
+
+def _process_many_background(paper_ids: list[int]):
+    processing_state["total"] = len(paper_ids)
     processing_state["done"] = 0
     processing_state["errors"] = 0
     processing_state["running"] = True
     try:
-        _process_single(paper_id)
+        for paper_id in paper_ids:
+            _process_single(paper_id)
     finally:
         processing_state["running"] = False
         processing_state["current"] = ""
@@ -404,6 +472,25 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.thread_created_at = None
     db.commit()
     sync_record_from_paper(p, event="reprocess_prepare")
+
+
+def _reconcile_failed_papers(db: Session) -> list[Paper]:
+    papers = db.query(Paper).order_by(Paper.id.asc()).all()
+    healed: list[Paper] = []
+    failed: list[Paper] = []
+
+    for paper in papers:
+        if _reconcile_processed_paper(paper):
+            healed.append(paper)
+        if not paper.processed and paper.error:
+            failed.append(paper)
+
+    if healed:
+        db.commit()
+        for paper in healed:
+            sync_record_from_paper(paper, event="auto_repair")
+
+    return failed
 
 
 @router.post("/process")
@@ -433,12 +520,31 @@ def retry_paper(paper_id: int, background_tasks: BackgroundTasks, db: Session = 
         raise HTTPException(status_code=404, detail="Paper not found")
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
-    p.error = None
-    p.processed = False
-    db.commit()
-    sync_record_from_paper(p, event="retry_prepare")
+    _prepare_reprocess(db, p)
     background_tasks.add_task(_process_one_background, paper_id)
     return {"message": f"Retry started for {p.filename}"}
+
+
+@router.post("/papers/retry_failed")
+def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """Retry all failed papers in one batch."""
+    if processing_state["running"]:
+        return {"message": "Processing already running", **processing_state}
+
+    failed = _reconcile_failed_papers(db)
+    if not failed:
+        return {"message": "No failed papers to retry", "retried": 0}
+
+    ids: list[int] = []
+    for paper in failed:
+        _prepare_reprocess(db, paper)
+        ids.append(paper.id)
+
+    background_tasks.add_task(_process_many_background, ids)
+    return {
+        "message": f"Retry started for {len(ids)} failed papers",
+        "retried": len(ids),
+    }
 
 
 @router.post("/papers/{paper_id}/reprocess")
@@ -477,6 +583,9 @@ def update_paper_response(
 
     if not isinstance(extraction, dict):
         raise HTTPException(status_code=400, detail="Response JSON 必须是对象")
+    if extraction_has_critical_issues(extraction):
+        issues = "；".join(extraction_quality_issues(extraction))
+        raise HTTPException(status_code=400, detail=f"Response 缺少关键内容：{issues}")
 
     cfg = load_config()
     remove_nodes_for_paper(db, p.id)
