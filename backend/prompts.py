@@ -14,7 +14,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
 
 ═══════════ 关键字段清单（必须每一项都填写） ═══════════
 身份与分类（图谱节点合并依赖这些字段，命名要规范）：
-  title / authors / venue / year / problem_area / tech_stack_position / keywords
+  title / authors / venue / year / paper_category / problem_area / tech_stack_position / keywords
 图谱结构（决定知识图谱连边与相似度，不能为空）：
   techniques / datasets / baselines / contributions / key_findings
 叙事分析（深度解读，每段都要有实质内容，避免敷衍一句话）：
@@ -33,6 +33,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
   "authors": <string[]>,
   "venue": <string>,
   "year": <number|string>,
+  "paper_category": <string>,
   "problem_area": <string>,
   "tech_stack_position": <string>,
   "keywords": <string[]>,
@@ -92,6 +93,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
 - authors: 作者列表
 - venue: 会议/期刊（含年份前缀），如 "NeurIPS 2024"、"arXiv preprint"
 - year: 公开年份（数字优先）
+- paper_category: 请严格从以下分类中选择一个：`LLM` / `VLM` / `VLA` / `三维重建-静态` / `三维重建-动态` / `世界模型`；如果都不属于，填 `其他`
 - problem_area: 研究领域规范名，如 "NLP"、"CV"、"多模态"、"强化学习"、"图神经网络"
 - tech_stack_position: 在大模型技术栈里的定位，如 "基座模型"、"参数高效微调"、"推理优化"、"多模态对齐"、"表征学习"
 - keywords: **至少 5-10 个**最具代表性的术语，用于跨论文相似度匹配
@@ -136,7 +138,7 @@ DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在
 ═══════════ 输出前的自检清单（默念一遍再输出） ═══════════
 [ ] 顶层所有 key 都是 schema 里的英文 snake_case，没有出现任何中文 key 或半吊子英文变体
 [ ] 没有外层 wrapper（"报告" / "result" / "output" / "paper_identity_card"）
-[ ] 关键字段全部填写：title / authors / keywords / techniques / datasets / baselines / contributions / key_findings 都不为空
+[ ] 关键字段全部填写：title / authors / paper_category / keywords / techniques / datasets / baselines / contributions / key_findings 都不为空
 [ ] techniques 至少 3 条，datasets 至少 1 条，keywords 至少 5 个，key_findings 至少 2 条
 [ ] principle / innovations / historical_position / pytorch_snippet 都是对象结构，子 key 齐全
 [ ] principle.key_formulas 至少 2 条，且每条都有非空 formula

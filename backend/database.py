@@ -34,6 +34,10 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN chat_history JSON"))
         if "extraction_model" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN extraction_model VARCHAR"))
+        if "paper_category_model" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_model VARCHAR"))
+        if "paper_category_override" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_override VARCHAR"))
 
         node_cols = conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()
         node_existing = {row[1] for row in node_cols}

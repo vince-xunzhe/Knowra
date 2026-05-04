@@ -28,6 +28,13 @@ class Paper(Base):
     # the Review page so the user can attribute extraction quality to model
     # vs. prompt when re-reading later.
     extraction_model = Column(String, nullable=True)
+    # The paper's lane/category predicted by the extraction model. This is
+    # stored separately from raw_llm_response so users can override it
+    # without mutating the original model output.
+    paper_category_model = Column(String, nullable=True)
+    # Optional human override for the paper's lane/category. When present,
+    # wiki graph grouping prefers this over the model-predicted value.
+    paper_category_override = Column(String, nullable=True)
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)

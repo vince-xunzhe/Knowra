@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -25,6 +27,14 @@ from services.vlm_service import (
 )
 from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
 from services.note_images_gc import gc_on_notes_update
+from services.paper_category_service import (
+    PAPER_CATEGORY_OPTIONS,
+    derive_model_paper_category,
+    effective_paper_category,
+    paper_category_source,
+    sync_paper_category_fields,
+    normalize_paper_category,
+)
 from services.paper_record_service import (
     record_path_for_paper,
     record_relpath_for_paper,
@@ -57,6 +67,8 @@ def _hydrate_paper_metadata_from_raw(p: Paper) -> bool:
         changed = True
     if parsed_authors and not (p.authors or []):
         p.authors = parsed_authors
+        changed = True
+    if sync_paper_category_fields(p, parsed):
         changed = True
     return changed
 
@@ -102,6 +114,13 @@ class RawResponseUpdate(BaseModel):
 
 class NotesUpdate(BaseModel):
     notes: str
+
+
+class CategoryUpdate(BaseModel):
+    # Optional[str] instead of `str | None` — the project's runtime is
+    # Python 3.9, which does not support PEP 604 union syntax outside of
+    # `from __future__ import annotations` files.
+    category: Optional[str] = None
 
 
 class ChatMessageInput(BaseModel):
@@ -155,6 +174,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         p.first_page_image_path
         and resolve_artifact_path(p.first_page_image_path).exists()
     )
+    category = effective_paper_category(p, _safe_parse(p.raw_llm_response))
     return {
         "id": p.id,
         "filename": p.filename,
@@ -166,6 +186,10 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "processed": p.processed,
         "processed_at": p.processed_at.isoformat() if p.processed_at else None,
         "extraction_model": p.extraction_model,
+        "paper_category": category,
+        "paper_category_model": normalize_paper_category(p.paper_category_model),
+        "paper_category_override": normalize_paper_category(p.paper_category_override),
+        "paper_category_source": paper_category_source(p),
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
@@ -221,6 +245,10 @@ def list_papers(db: Session = Depends(get_db)):
             "num_pages": p.num_pages,
             "processed": p.processed,
             "processed_at": p.processed_at.isoformat() if p.processed_at else None,
+            "paper_category": effective_paper_category(p, _safe_parse(p.raw_llm_response)),
+            "paper_category_model": normalize_paper_category(p.paper_category_model),
+            "paper_category_override": normalize_paper_category(p.paper_category_override),
+            "paper_category_source": paper_category_source(p),
             "error": p.error,
             "created_at": p.created_at.isoformat() if p.created_at else None,
         }
@@ -375,6 +403,7 @@ def _process_single(paper_id: int):
         p.extraction_model = cfg["vlm_model"]
         p.title = (extraction.get("title") or p.filename)[:200]
         p.authors = extraction.get("authors") or []
+        p.paper_category_model = derive_model_paper_category(p, extraction)
 
         add_nodes_from_paper_extraction(
             extraction,
@@ -482,6 +511,7 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.processed_at = None
     p.raw_llm_response = None
     p.extraction_model = None
+    p.paper_category_model = None
     p.error = None
     # Drop cached OpenAI handles so reprocess re-uploads the PDF and opens a
     # fresh thread. Reusing a stale file_id against a new per-thread vector
@@ -612,6 +642,7 @@ def update_paper_response(
     p.raw_llm_response = body.raw_llm_response
     p.title = (extraction.get("title") or p.filename)[:200]
     p.authors = extraction.get("authors") or []
+    sync_paper_category_fields(p, extraction, overwrite_model=True)
     p.processed = True
     p.processed_at = datetime.now(timezone.utc)
     p.error = None
@@ -653,6 +684,36 @@ def update_paper_notes(
     except Exception:
         pass
     sync_record_from_paper(p, event="notes_update")
+    db.refresh(p)
+    return _serialize_paper_detail(p, db)
+
+
+@router.put("/papers/{paper_id}/category")
+def update_paper_category(
+    paper_id: int,
+    body: CategoryUpdate,
+    db: Session = Depends(get_db),
+):
+    """Save or clear a human override for the paper's lane/category."""
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
+
+    raw_value = (body.category or "").strip()
+    if raw_value:
+        normalized = normalize_paper_category(raw_value)
+        if not normalized or normalized not in PAPER_CATEGORY_OPTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"非法分类：{raw_value}。允许值：{', '.join(PAPER_CATEGORY_OPTIONS)}",
+            )
+        p.paper_category_override = normalized
+    else:
+        p.paper_category_override = None
+
+    db.commit()
+    sync_record_from_paper(p, event="category_override_update")
     db.refresh(p)
     return _serialize_paper_detail(p, db)
 

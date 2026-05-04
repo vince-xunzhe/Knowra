@@ -391,6 +391,8 @@ _TOP_KEY_MAP = {
     "会议": "venue", "发表": "venue", "venue": "venue",
     "年份": "year", "year": "year",
     # classification
+    "论文大类": "paper_category", "大类分类": "paper_category",
+    "大类": "paper_category", "paper_category": "paper_category",
     "研究领域": "problem_area", "problem_area": "problem_area",
     "大模型技术栈位置": "tech_stack_position",
     "技术栈位置": "tech_stack_position",

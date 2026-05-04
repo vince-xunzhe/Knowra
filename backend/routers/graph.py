@@ -10,6 +10,7 @@ from services.graph_service import (
     MANUAL_NODE_ORIGIN,
     _add_similarity_edges,
     get_graph_data,
+    get_hidden_graph_nodes,
     get_node_detail_data,
     node_is_hidden,
     normalize_source_paper_ids,
@@ -72,6 +73,11 @@ def _reconcile_curated_wiki(db: Session) -> None:
 @router.get("/graph")
 def get_graph(db: Session = Depends(get_db)):
     return get_graph_data(db)
+
+
+@router.get("/graph/hidden_nodes")
+def get_hidden_nodes(db: Session = Depends(get_db)):
+    return {"nodes": get_hidden_graph_nodes(db)}
 
 
 @router.get("/nodes/{node_id}")

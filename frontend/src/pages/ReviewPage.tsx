@@ -13,7 +13,7 @@ import {
   ZoomIn, ZoomOut, Minimize,
 } from 'lucide-react'
 import {
-  listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperNotes,
+  listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperCategory, updatePaperNotes,
   pdfFileUrl, firstPageUrl,
   sendPaperChat, resetPaperChat, uploadNoteImage,
   type PaperRecord, type PaperDetail,
@@ -55,6 +55,7 @@ interface PaperExtraction {
   authors?: string[]
   venue?: string
   year?: string | number
+  paper_category?: string
   abstract_summary?: string
   problem?: string
   motivation?: string
@@ -75,6 +76,9 @@ interface PaperExtraction {
   keywords?: string[]
 }
 
+const PAPER_CATEGORY_OPTIONS = ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] as const
+const CATEGORY_INHERIT = '__inherit__'
+
 export default function ReviewPage() {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -87,6 +91,9 @@ export default function ReviewPage() {
   const [rawDraft, setRawDraft] = useState('')
   const [rawError, setRawError] = useState<string | null>(null)
   const [savingRaw, setSavingRaw] = useState(false)
+  const [categoryDraft, setCategoryDraft] = useState<string>(CATEGORY_INHERIT)
+  const [categorySaving, setCategorySaving] = useState(false)
+  const [categoryError, setCategoryError] = useState<string | null>(null)
   const [reprocessing, setReprocessing] = useState(false)
 
   useEffect(() => {
@@ -141,11 +148,18 @@ export default function ReviewPage() {
     return parseExtractionResponse(rawResponse)
   }, [visibleDetail, rawResponse])
 
+  useEffect(() => {
+    if (!visibleDetail) return
+    setCategoryDraft(visibleDetail.paper_category_override || CATEGORY_INHERIT)
+    setCategoryError(null)
+  }, [visibleDetail])
+
   const selectPaper = (id: number) => {
     setSelectedId(id)
     setEditingRaw(false)
     setRawDraft('')
     setRawError(null)
+    setCategoryError(null)
   }
 
   const startRawEdit = () => {
@@ -186,11 +200,14 @@ export default function ReviewPage() {
     setReprocessing(true)
     try {
       await reprocessPaper(visibleDetail.id)
-      const updated = {
+      const updated: PaperDetail = {
         ...visibleDetail,
         processed: false,
         processed_at: null,
         extraction_model: null,
+        paper_category_model: null,
+        paper_category: visibleDetail.paper_category_override || null,
+        paper_category_source: visibleDetail.paper_category_override ? 'manual' : 'none',
         raw_llm_response: null,
         error: null,
         knowledge_nodes: [],
@@ -202,6 +219,24 @@ export default function ReviewPage() {
       setRawError(getApiErrorMessage(error))
     } finally {
       setReprocessing(false)
+    }
+  }
+
+  const saveCategory = async () => {
+    if (!visibleDetail) return
+    setCategorySaving(true)
+    setCategoryError(null)
+    try {
+      const updated = await updatePaperCategory(
+        visibleDetail.id,
+        categoryDraft === CATEGORY_INHERIT ? null : categoryDraft,
+      )
+      setDetail(updated)
+      setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
+    } catch (error) {
+      setCategoryError(getApiErrorMessage(error))
+    } finally {
+      setCategorySaving(false)
     }
   }
 
@@ -279,6 +314,11 @@ export default function ReviewPage() {
                       )}
                       <div className="flex flex-wrap items-center gap-2 text-xs">
                         <StatusBadge paper={p} />
+                        {p.paper_category && (
+                          <span className="rounded-md border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[10.5px] text-indigo-200">
+                            {p.paper_category}
+                          </span>
+                        )}
                         {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
                       </div>
                     </button>
@@ -377,6 +417,54 @@ export default function ReviewPage() {
                     <FileText size={13} className="text-slate-500" />
                     {visibleDetail.num_pages} 页
                   </span>
+                )}
+              </div>
+
+              {/* Compact category strip — taller helper text moved into the
+                  chip's title attribute so the row stays single-line where
+                  possible. */}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="text-slate-500">论文大类</span>
+                <span
+                  className="inline-flex items-center gap-1 rounded border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-indigo-200"
+                  title={
+                    visibleDetail.paper_category_source === 'manual'
+                      ? `人工覆盖${visibleDetail.paper_category_model ? `（模型原值：${visibleDetail.paper_category_model}）` : ''}`
+                      : visibleDetail.paper_category_source === 'model'
+                        ? '取自模型输出'
+                        : '未设置'
+                  }
+                >
+                  <Layers size={10} />
+                  {visibleDetail.paper_category || parsed?.paper_category || '未设置'}
+                  {visibleDetail.paper_category_source === 'manual' && (
+                    <span className="ml-0.5 text-[9px] text-indigo-300/70">人工</span>
+                  )}
+                </span>
+
+                <select
+                  value={categoryDraft}
+                  onChange={e => setCategoryDraft(e.target.value)}
+                  disabled={categorySaving}
+                  className="ml-auto rounded border border-slate-700/70 bg-slate-950/70 px-1.5 py-0.5 text-[11px] text-slate-200 focus:border-indigo-500/60 focus:outline-none disabled:opacity-50"
+                >
+                  <option value={CATEGORY_INHERIT}>
+                    跟随模型（{visibleDetail.paper_category_model || '未设置'}）
+                  </option>
+                  {PAPER_CATEGORY_OPTIONS.map(option => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={saveCategory}
+                  disabled={categorySaving}
+                  className="inline-flex items-center gap-1 rounded border border-slate-700/70 bg-slate-950/40 px-1.5 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-900 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {categorySaving ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
+                  保存
+                </button>
+                {categoryError && (
+                  <span className="basis-full text-[11px] text-red-300">{categoryError}</span>
                 )}
               </div>
             </header>
@@ -975,8 +1063,13 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
       )}
 
       {/* Problem area + tech stack position */}
-      {(data.problem_area || data.tech_stack_position) && (
+      {(detail.paper_category || data.problem_area || data.tech_stack_position) && (
         <div className="flex flex-wrap items-center gap-2">
+          {detail.paper_category && (
+            <span className="inline-flex items-center gap-1.5 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 text-sm font-medium text-indigo-200">
+              <Layers size={13} /> {detail.paper_category}
+            </span>
+          )}
           {data.tech_stack_position && (
             <span className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-sm font-medium text-emerald-200">
               <Layers size={13} /> {data.tech_stack_position}

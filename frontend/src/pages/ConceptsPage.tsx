@@ -2,26 +2,52 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  BookMarked, Loader2, RefreshCw, Search, FileText, Clock, Sparkles,
+  BookMarked, Loader2, RefreshCw, Search, FileText, Clock, Sparkles, Plus, X,
 } from 'lucide-react'
+import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import {
+  createManualConcept,
   listConceptPages,
   getConceptPage,
   listPaperPages,
   getPaperPage,
+  listHiddenGraphNodes,
   recompileConcept,
   recompileAllConcepts,
   recompileAllPaperPages,
+  getWikiGraph,
   getWikiStatus,
   getWikiFreshness,
+  restoreNode,
   searchWiki,
+  suppressNode,
+  type ManualConceptInput,
+  type GraphNode,
   type WikiPageMeta,
   type WikiPageDetail,
+  type WikiGraphData,
+  type WikiGraphNode,
   type WikiKind,
   type WikiCompileState,
   type WikiFreshnessSummary,
   type WikiSearchHit,
 } from '../api/client'
+
+type WikiView = WikiKind | 'graph'
+
+const HIDDEN_CATEGORY_STYLES: Record<string, string> = {
+  LLM: 'border-slate-500/35 bg-slate-500/10 text-slate-100',
+  VLM: 'border-indigo-500/35 bg-indigo-500/10 text-indigo-100',
+  VLA: 'border-sky-500/35 bg-sky-500/10 text-sky-100',
+  '三维重建-静态': 'border-amber-500/35 bg-amber-500/10 text-amber-100',
+  '三维重建-动态': 'border-fuchsia-500/35 bg-fuchsia-500/10 text-fuchsia-100',
+  '世界模型': 'border-violet-500/35 bg-violet-500/10 text-violet-100',
+  其他: 'border-slate-700/80 bg-slate-900/80 text-slate-200',
+}
+
+function hiddenCategoryStyle(category?: string | null) {
+  return HIDDEN_CATEGORY_STYLES[category || '其他'] || HIDDEN_CATEGORY_STYLES.其他
+}
 
 export default function ConceptsPage() {
   // The page hosts two kinds of wiki pages — paper (per-paper encyclopedia)
@@ -32,7 +58,7 @@ export default function ConceptsPage() {
   // Default is 'papers' because that's what a fresh user has after running
   // the extraction pipeline — concept pages only appear once they've also
   // hit the "重编译概念" button, and an empty default tab feels broken.
-  const [kind, setKind] = useState<WikiKind>('papers')
+  const [kind, setKind] = useState<WikiView>('papers')
   const [items, setItems] = useState<WikiPageMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [selectedFilename, setSelectedFilename] = useState<string | null>(null)
@@ -45,6 +71,14 @@ export default function ConceptsPage() {
   const [recompilingPapers, setRecompilingPapers] = useState(false)
   const [status, setStatus] = useState<WikiCompileState | null>(null)
   const [freshness, setFreshness] = useState<WikiFreshnessSummary | null>(null)
+  const [graph, setGraph] = useState<WikiGraphData | null>(null)
+  const [graphLoading, setGraphLoading] = useState(true)
+  const [hiddenNodes, setHiddenNodes] = useState<GraphNode[]>([])
+  const [hiddenLoading, setHiddenLoading] = useState(true)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editorLane, setEditorLane] = useState<string | null>(null)
+  const [editorSeedPaperIds, setEditorSeedPaperIds] = useState<number[]>([])
+  const [graphActionBusyId, setGraphActionBusyId] = useState<string | null>(null)
   // Phase 2A — when `searchHits` is non-null, the left panel renders global
   // FTS5 results across both kinds instead of the per-kind list. Cleared
   // back to null when the search input is empty.
@@ -64,8 +98,33 @@ export default function ConceptsPage() {
     }
   }, [])
 
+  const refreshGraph = useCallback(async () => {
+    try {
+      setGraph(await getWikiGraph())
+    } catch (error) {
+      console.error('Failed to load wiki graph', error)
+    } finally {
+      setGraphLoading(false)
+    }
+  }, [])
+
+  const refreshHiddenNodes = useCallback(async () => {
+    try {
+      setHiddenNodes(await listHiddenGraphNodes())
+    } catch (error) {
+      console.error('Failed to load hidden graph nodes', error)
+    } finally {
+      setHiddenLoading(false)
+    }
+  }, [])
+
   const load = useCallback(async () => {
     try {
+      if (kind === 'graph') {
+        setItems([])
+        setSelectedFilename(null)
+        return
+      }
       const next = kind === 'concepts' ? await listConceptPages() : await listPaperPages()
       setItems(next)
       // Pending selection from a search-hit click takes precedence over
@@ -97,6 +156,14 @@ export default function ConceptsPage() {
     void refreshFreshness()
   }, [refreshFreshness])
 
+  useEffect(() => {
+    void refreshGraph()
+  }, [refreshGraph])
+
+  useEffect(() => {
+    void refreshHiddenNodes()
+  }, [refreshHiddenNodes])
+
   // Poll compile status. Backend exposes a single global lock, so this
   // covers both "全量重编译概念" and "编译论文页". When running flips back
   // to false, we refresh the list so newly-compiled pages show up.
@@ -118,9 +185,13 @@ export default function ConceptsPage() {
         if (cancelled) return
         consecutiveErrors = 0
         setStatus(s)
+        if (s.running) {
+          void refreshGraph()
+        }
         if (wasRunningRef.current && !s.running) {
           void load()
           void refreshFreshness()
+          void refreshGraph()
         }
         wasRunningRef.current = s.running
       } catch {
@@ -140,11 +211,11 @@ export default function ConceptsPage() {
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [load, refreshFreshness])
+  }, [load, refreshFreshness, refreshGraph])
 
   useEffect(() => {
     let cancelled = false
-    if (!selectedFilename) {
+    if (kind === 'graph' || !selectedFilename) {
       setDetail(null)
       return
     }
@@ -217,16 +288,108 @@ export default function ConceptsPage() {
     setSearchHits(null)
   }
 
+  const handleGraphPick = useCallback((node: WikiGraphNode) => {
+    if (!node.filename || !node.page_kind) return
+    const targetKind: WikiKind = node.page_kind
+    if (targetKind !== kind) {
+      pendingSelectionRef.current = node.filename
+      setKind(targetKind)
+    } else {
+      setSelectedFilename(node.filename)
+    }
+  }, [kind])
+
+  const graphPaperCatalog = useMemo(() => (
+    (graph?.nodes || [])
+      .filter((node): node is WikiGraphNode & { kind: 'paper'; paper_id: number } =>
+        node.kind === 'paper' && node.paper_id != null,
+      )
+      .sort((a, b) => {
+        if ((a.year || 0) !== (b.year || 0)) return (a.year || 0) - (b.year || 0)
+        return (a.paper_id || 0) - (b.paper_id || 0)
+      })
+  ), [graph])
+
+  const handleOpenGraphConceptEditor = useCallback((category?: string | null, paperIds?: number[]) => {
+    setEditorLane(category || null)
+    setEditorSeedPaperIds([...(paperIds || [])])
+    setEditorOpen(true)
+  }, [])
+
+  const handleSaveGraphConcept = useCallback(async (payload: ManualConceptInput) => {
+    setGraphActionBusyId('create')
+    setActionMessage(null)
+    try {
+      await createManualConcept(payload)
+      setEditorOpen(false)
+      setEditorLane(null)
+      setEditorSeedPaperIds([])
+      setActionMessage('新概念已加入编译图谱。')
+      await refreshGraph()
+      void refreshHiddenNodes()
+      void refreshFreshness()
+    } catch (error) {
+      setActionMessage('新增概念失败：' + getErrorMessage(error))
+    } finally {
+      setGraphActionBusyId(null)
+    }
+  }, [refreshFreshness, refreshGraph, refreshHiddenNodes])
+
+  const handleSuppressGraphNode = useCallback(async (node: WikiGraphNode) => {
+    if (node.concept_id == null) return
+    const ok = confirm(`确认隐藏「${node.title}」？它会从当前编译图谱和后续概念编译里移除。`)
+    if (!ok) return
+    setGraphActionBusyId(node.id)
+    setActionMessage(null)
+    try {
+      await suppressNode(node.concept_id)
+      setActionMessage(`已隐藏概念：${node.title}`)
+      await Promise.all([refreshGraph(), refreshHiddenNodes()])
+      void refreshFreshness()
+    } catch (error) {
+      setActionMessage('隐藏概念失败：' + getErrorMessage(error))
+    } finally {
+      setGraphActionBusyId(null)
+    }
+  }, [refreshFreshness, refreshGraph, refreshHiddenNodes])
+
+  const handleRestoreHiddenNode = useCallback(async (node: GraphNode) => {
+    setGraphActionBusyId(node.id)
+    setActionMessage(null)
+    try {
+      await restoreNode(Number(node.id))
+      setActionMessage(`已恢复概念：${node.title}`)
+      await refreshGraph()
+      await refreshHiddenNodes()
+      void refreshFreshness()
+    } catch (error) {
+      setActionMessage('恢复概念失败：' + getErrorMessage(error))
+    } finally {
+      setGraphActionBusyId(null)
+    }
+  }, [refreshFreshness, refreshGraph, refreshHiddenNodes])
+
+  const selectedGraphId = useMemo(() => {
+    if (!detail) return null
+    if (detail.paper_id != null) return `paper:${detail.paper_id}`
+    if (detail.concept_id != null) return `concept:${detail.concept_id}`
+    return null
+  }, [detail])
+
   // Sets of stale ids for O(1) per-row lookups during list render.
   const staleIds = useMemo(() => {
-    if (!freshness) return new Set<number>()
+    if (!freshness || kind === 'graph') return new Set<number>()
     const bucket = kind === 'concepts' ? freshness.concepts.stale : freshness.papers.stale
     return new Set(bucket.map(it => kind === 'concepts'
       ? (it as { concept_id: number }).concept_id
       : (it as { paper_id: number }).paper_id))
   }, [freshness, kind])
 
-  const currentBucket = kind === 'concepts' ? freshness?.concepts : freshness?.papers
+  const currentBucket = kind === 'graph'
+    ? null
+    : kind === 'concepts'
+      ? freshness?.concepts
+      : freshness?.papers
   const staleCount = currentBucket?.stale_count ?? 0
   const missingCount = currentBucket?.missing_count ?? 0
   const orphanCount = currentBucket?.orphan_count ?? 0
@@ -299,7 +462,12 @@ export default function ConceptsPage() {
               </p>
             </div>
             <button
-              onClick={load}
+              onClick={() => {
+                void load()
+                void refreshFreshness()
+                void refreshGraph()
+                void refreshHiddenNodes()
+              }}
               className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors shrink-0"
               title="刷新"
             >
@@ -311,8 +479,9 @@ export default function ConceptsPage() {
           <div className="mt-3 flex bg-slate-900/60 border border-slate-700/60 rounded-xl p-0.5">
             {([
               { id: 'papers', label: '论文页' },
+              { id: 'graph', label: '编译图谱' },
               { id: 'concepts', label: '概念页' },
-            ] as { id: WikiKind; label: string }[]).map(t => (
+            ] as { id: WikiView; label: string }[]).map(t => (
               <button
                 key={t.id}
                 onClick={() => setKind(t.id)}
@@ -360,7 +529,7 @@ export default function ConceptsPage() {
             </button>
             <button
               onClick={handleRecompileAll}
-              disabled={recompilingAll || items.length === 0 || status?.running}
+              disabled={recompilingAll || !!status?.running}
               title="重新编译所有概念页 (data/wiki/concepts/)"
               className="flex items-center justify-center gap-1.5 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 px-2 py-1.5 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -371,11 +540,13 @@ export default function ConceptsPage() {
             </button>
           </div>
           <p className="mt-2 text-[10.5px] text-slate-600">
-            共 {items.length} 篇 · 排序：最近编译
+            {kind === 'graph'
+              ? `共 ${graph?.categories.length || 0} 个大类 · 时间轴视图`
+              : `共 ${items.length} 篇 · 排序：最近编译`}
           </p>
-          {needsAttention && !status?.running && (
+          {kind !== 'graph' && needsAttention && !status?.running && (
             <FreshnessBanner
-              kind={kind}
+              kind={kind as WikiKind}
               stale={staleCount}
               missing={missingCount}
               orphan={orphanCount}
@@ -390,7 +561,13 @@ export default function ConceptsPage() {
         </header>
 
         <div className="flex-1 overflow-y-auto px-2 py-2">
-          {searchHits !== null ? (
+          {kind === 'graph' ? (
+            <GraphSidebar
+              graph={graph}
+              loading={graphLoading}
+              status={status}
+            />
+          ) : searchHits !== null ? (
             // Phase 2A: global FTS5 results take over the list area while
             // the search input is non-empty. Tab is ignored — hits across
             // both kinds render with a small kind badge.
@@ -440,27 +617,162 @@ export default function ConceptsPage() {
           </div>
         )}
 
-        {detailLoading && !detail ? (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-            <Loader2 size={14} className="animate-spin mr-2" /> 加载中…
-          </div>
-        ) : !detail ? (
-          <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
-            {kind === 'concepts'
-              ? '从左侧选择一个概念页查看'
-              : '从左侧选择一篇论文页查看'}
-          </div>
-        ) : (
-          <WikiDetailPanel
-            kind={kind}
-            detail={detail}
-            recompiling={detail.concept_id != null && recompilingId === detail.concept_id}
-            onRecompile={() => {
-              const meta = items.find(it => it.filename === detail.filename)
-              if (meta) void handleRecompileOne(meta)
-            }}
+        {kind === 'graph' ? (
+          <WikiGraphPanel
+            graph={graph}
+            loading={graphLoading}
+            status={status}
+            selectedId={selectedGraphId}
+            onPick={handleGraphPick}
+            onSuppressNode={handleSuppressGraphNode}
+            suppressingNodeId={graphActionBusyId}
+            onOpenCreate={handleOpenGraphConceptEditor}
+            hiddenNodes={hiddenNodes}
+            hiddenLoading={hiddenLoading}
+            onRestoreNode={handleRestoreHiddenNode}
           />
+        ) : (
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {detailLoading && !detail ? (
+              <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+                <Loader2 size={14} className="animate-spin mr-2" /> 加载中…
+              </div>
+            ) : !detail ? (
+              <div className="flex-1 flex items-center justify-center text-slate-500 text-sm">
+                {kind === 'concepts'
+                  ? '从左侧列表或编译图谱选择一个概念页查看'
+                  : '从左侧列表或编译图谱选择一篇论文页查看'}
+              </div>
+            ) : (
+              <WikiDetailPanel
+                kind={kind as WikiKind}
+                detail={detail}
+                recompiling={detail.concept_id != null && recompilingId === detail.concept_id}
+                onRecompile={() => {
+                  const meta = items.find(it => it.filename === detail.filename)
+                  if (meta) void handleRecompileOne(meta)
+                }}
+              />
+            )}
+          </div>
         )}
+      </div>
+
+      <WikiConceptEditorModal
+        open={editorOpen}
+        busy={graphActionBusyId === 'create'}
+        lane={editorLane}
+        seedPaperIds={editorSeedPaperIds}
+        papers={graphPaperCatalog}
+        onClose={() => {
+          setEditorOpen(false)
+          setEditorLane(null)
+          setEditorSeedPaperIds([])
+        }}
+        onSubmit={handleSaveGraphConcept}
+      />
+    </div>
+  )
+}
+
+function WikiGraphPanel({
+  graph,
+  loading,
+  status,
+  selectedId,
+  onPick,
+  onSuppressNode,
+  suppressingNodeId,
+  onOpenCreate,
+  hiddenNodes,
+  hiddenLoading,
+  onRestoreNode,
+}: {
+  graph: WikiGraphData | null
+  loading: boolean
+  status: WikiCompileState | null
+  selectedId: string | null
+  onPick: (node: WikiGraphNode) => void
+  onSuppressNode: (node: WikiGraphNode) => void
+  suppressingNodeId: string | null
+  onOpenCreate: (category?: string | null, paperIds?: number[]) => void
+  hiddenNodes: GraphNode[]
+  hiddenLoading: boolean
+  onRestoreNode: (node: GraphNode) => void
+}) {
+  const updatedLabel = graph?.updated_at ? new Date(graph.updated_at).toLocaleTimeString() : null
+  const headline = status?.running
+    ? `${status.kind === 'papers' ? '论文页' : status.kind === 'concepts' ? '概念页' : 'Wiki'} 编译进行中`
+    : 'Wiki 知识图谱'
+
+  return (
+    <div className="flex h-full flex-col">
+      <header className="border-b border-slate-800/80 px-6 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="section-label mb-1">编译图谱</p>
+            <h2 className="text-base font-semibold tracking-tight text-white">{headline}</h2>
+            <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+              论文按技术大类分组，并沿时间轴串成链；数据集、技术和概念节点挂接到对应论文上。
+            </p>
+          </div>
+          <div className="text-right text-[11px] text-slate-500">
+            {updatedLabel ? <div>更新于 {updatedLabel}</div> : <div>尚未生成图谱</div>}
+            {status?.running && status.current && (
+              <div className="mt-1 text-indigo-300/90">{status.current}</div>
+            )}
+            <button
+              onClick={() => onOpenCreate(null, [])}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-2.5 py-1 text-[11px] text-teal-200 transition-colors hover:bg-teal-500/20"
+            >
+              <Plus size={11} />
+              新增概念
+            </button>
+          </div>
+        </div>
+        {graph && graph.categories.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {graph.categories.map(category => (
+              <span
+                key={category.name}
+                className="rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1 text-[10.5px] text-slate-400"
+              >
+                {category.name} · {category.paper_count} 论文 · {category.concept_count} 节点
+              </span>
+            ))}
+          </div>
+        )}
+      </header>
+
+      <div className="min-h-0 flex-1">
+        <div className="flex h-full flex-col overflow-hidden">
+          <div className="min-h-0 flex-1">
+            {loading ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                <Loader2 size={14} className="mr-2 animate-spin" /> 正在载入图谱…
+              </div>
+            ) : !graph || graph.nodes.length === 0 ? (
+              <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500">
+                还没有可展示的 wiki 图谱。先编译论文页或概念页，图谱会实时出现在这里。
+              </div>
+            ) : (
+              <WikiKnowledgeMap
+                data={graph}
+                selectedId={selectedId}
+                onPick={onPick}
+                onSuppressNode={onSuppressNode}
+                suppressingNodeId={suppressingNodeId}
+                onCreateConcept={onOpenCreate}
+              />
+            )}
+          </div>
+          <HiddenConceptsPanel
+            nodes={hiddenNodes}
+            loading={hiddenLoading}
+            busyNodeId={suppressingNodeId}
+            onRestoreNode={onRestoreNode}
+          />
+        </div>
       </div>
     </div>
   )
@@ -519,6 +831,339 @@ function WikiListItem({
         </div>
       </button>
     </li>
+  )
+}
+
+function GraphSidebar({
+  graph,
+  loading,
+  status,
+}: {
+  graph: WikiGraphData | null
+  loading: boolean
+  status: WikiCompileState | null
+}) {
+  if (loading) {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-slate-500">
+        <Loader2 size={14} className="mr-2 animate-spin" /> 载入图谱摘要…
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3 px-2">
+      <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-3 text-[11px] leading-relaxed text-slate-400">
+        <p className="text-slate-200 font-medium">编译图谱说明</p>
+        <p className="mt-1">
+          这里把已编译论文按技术大类分组，并沿年份串成时间链；每组下面的小框是挂接到这条论文链上的概念与相关节点。
+        </p>
+        {status?.running && status.current && (
+          <p className="mt-2 text-indigo-300/90">
+            正在更新：{status.current}
+          </p>
+        )}
+      </div>
+
+      {graph?.categories?.length ? (
+        <ul className="space-y-2">
+          {graph.categories.map(category => (
+            <li
+              key={category.name}
+              className="rounded-xl border border-slate-800 bg-slate-900/35 px-3 py-2.5"
+            >
+              <p className="text-sm font-medium text-slate-100">{category.name}</p>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {category.paper_count} 篇论文 · {category.concept_count} 个挂接节点
+              </p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="rounded-xl border border-dashed border-slate-800 px-3 py-8 text-center text-xs text-slate-500">
+          还没有可展示的大类
+        </div>
+      )}
+    </div>
+  )
+}
+
+function HiddenConceptsPanel({
+  nodes,
+  loading,
+  busyNodeId,
+  onRestoreNode,
+}: {
+  nodes: GraphNode[]
+  loading: boolean
+  busyNodeId: string | null
+  onRestoreNode: (node: GraphNode) => void
+}) {
+  const sortedNodes = useMemo(() => (
+    [...nodes].sort((aNode, bNode) => {
+      const categoryCompare = (aNode.category || '其他').localeCompare(bNode.category || '其他', 'zh-Hans-CN')
+      if (categoryCompare !== 0) return categoryCompare
+      return aNode.title.localeCompare(bNode.title, 'zh-Hans-CN')
+    })
+  ), [nodes])
+
+  return (
+    <section className="shrink-0 border-t border-slate-800/80 bg-slate-950/92 px-5 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-medium text-slate-100">已隐藏概念</h3>
+          <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-500">
+            颜色代表所属大类，点右侧 `+` 恢复。
+          </p>
+        </div>
+        <span className="rounded-lg border border-slate-800 bg-slate-900/60 px-2 py-1 text-[10.5px] text-slate-500">
+          {nodes.length} 个
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="mt-2 flex items-center text-xs text-slate-500">
+          <Loader2 size={13} className="mr-2 animate-spin" /> 载入隐藏概念…
+        </div>
+      ) : sortedNodes.length === 0 ? (
+        <div className="mt-2 rounded-xl border border-dashed border-slate-800 bg-slate-900/35 px-3 py-2.5 text-[11px] text-slate-500">
+          暂时没有已隐藏的概念。
+        </div>
+      ) : (
+        <div className="mt-2 overflow-x-auto pb-1">
+          <div className="flex min-w-max items-center gap-1.5 pr-1">
+          {sortedNodes.map(node => (
+            <div
+              key={node.id}
+              className={`flex items-center gap-1 rounded-md border px-2 py-1 ${hiddenCategoryStyle(node.category)}`}
+              title={`${node.title} · ${node.category || '其他'}`}
+            >
+              <div className="min-w-0">
+                <p className="max-w-[9rem] truncate text-[11.5px] font-medium leading-4">
+                  {node.title}
+                </p>
+              </div>
+              <button
+                onClick={() => onRestoreNode(node)}
+                disabled={busyNodeId === node.id}
+                className="shrink-0 rounded p-0.5 opacity-70 transition hover:bg-black/10 hover:opacity-100 disabled:opacity-50"
+                title="恢复这个概念"
+              >
+                {busyNodeId === node.id ? <Loader2 size={10} className="animate-spin" /> : <Plus size={10} />}
+              </button>
+            </div>
+          ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function WikiConceptEditorModal({
+  open,
+  busy,
+  lane,
+  seedPaperIds,
+  papers,
+  onClose,
+  onSubmit,
+}: {
+  open: boolean
+  busy: boolean
+  lane: string | null
+  seedPaperIds: number[]
+  papers: (WikiGraphNode & { kind: 'paper'; paper_id: number })[]
+  onClose: () => void
+  onSubmit: (payload: ManualConceptInput) => Promise<void>
+}) {
+  const [title, setTitle] = useState('')
+  const [content, setContent] = useState('')
+  const [tagsText, setTagsText] = useState('')
+  const [paperQuery, setPaperQuery] = useState('')
+  const [selectedPaperIds, setSelectedPaperIds] = useState<number[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    setTitle('')
+    setContent(lane ? `归入「${lane}」这条论文链的人工概念。` : '')
+    setTagsText(lane && lane !== '其他' ? lane : '')
+    setPaperQuery('')
+    setSelectedPaperIds(seedPaperIds)
+  }, [open, lane, seedPaperIds])
+
+  if (!open) return null
+
+  const filteredPapers = papers.filter(paper => {
+    const q = paperQuery.trim().toLowerCase()
+    if (!q) return true
+    return paper.title.toLowerCase().includes(q)
+      || (paper.filename || '').toLowerCase().includes(q)
+      || String(paper.paper_id).includes(q)
+  })
+
+  const togglePaper = (paperId: number) => {
+    setSelectedPaperIds(current => (
+      current.includes(paperId)
+        ? current.filter(id => id !== paperId)
+        : [...current, paperId]
+    ))
+  }
+
+  const submit = async () => {
+    await onSubmit({
+      title: title.trim(),
+      content: content.trim(),
+      paper_ids: selectedPaperIds,
+      tags: tagsText.split(',').map(value => value.trim()).filter(Boolean),
+    })
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/80 px-4 backdrop-blur-sm"
+      onClick={e => {
+        if (e.target === e.currentTarget && !busy) onClose()
+      }}
+    >
+      <div className="flex h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-[#0f1117] shadow-2xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-6 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white tracking-tight">新增概念</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              手动概念会直接进入当前编译图谱，并在后续概念编译时使用你勾选的论文作为证据源。
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-lg p-2 text-slate-500 hover:bg-slate-800/70 hover:text-slate-200 disabled:opacity-50"
+          >
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="grid flex-1 gap-0 overflow-hidden lg:grid-cols-[minmax(0,0.95fr)_minmax(20rem,1.05fr)]">
+          <div className="overflow-y-auto border-b border-slate-800 px-6 py-5 lg:border-b-0 lg:border-r">
+            <div className="space-y-4">
+              {lane && (
+                <div className="rounded-xl border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs text-teal-200">
+                  默认挂到「{lane}」这条论文链
+                </div>
+              )}
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">概念名称</label>
+                <input
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="例如：闭环驾驶世界模型 / 3D grounding"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">概念简介</label>
+                <textarea
+                  value={content}
+                  onChange={e => setContent(e.target.value)}
+                  rows={8}
+                  placeholder="写下你想保留的定义、边界或判断标准。"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm text-slate-300">标签</label>
+                <input
+                  value={tagsText}
+                  onChange={e => setTagsText(e.target.value)}
+                  placeholder="逗号分隔，例如 世界模型, 驾驶"
+                  className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex min-h-0 flex-col overflow-hidden px-6 py-5">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-slate-200">关联论文</p>
+                <p className="text-xs text-slate-500">这些论文会成为后续概念编译的依据。</p>
+              </div>
+              <span className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-400">
+                已选 {selectedPaperIds.length}
+              </span>
+            </div>
+            <input
+              value={paperQuery}
+              onChange={e => setPaperQuery(e.target.value)}
+              placeholder="按标题 / 文件名 / paper id 搜索"
+              className="mb-3 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
+            />
+            <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/40 p-2">
+              <div className="space-y-2">
+                {filteredPapers.map(paper => {
+                  const checked = selectedPaperIds.includes(paper.paper_id)
+                  return (
+                    <label
+                      key={paper.id}
+                      className={`block cursor-pointer rounded-xl border px-3 py-3 transition-colors ${
+                        checked
+                          ? 'border-teal-500/40 bg-teal-500/10'
+                          : 'border-slate-800 bg-slate-900/40 hover:border-slate-700 hover:bg-slate-900/70'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => togglePaper(paper.paper_id)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-teal-400"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm leading-snug text-slate-100 text-safe-wrap">
+                            {paper.title}
+                          </p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
+                            paper #{paper.paper_id} · {paper.category || '其他'}
+                          </p>
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+                {filteredPapers.length === 0 && (
+                  <div className="rounded-xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
+                    没有匹配的论文
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 border-t border-slate-800 px-6 py-4">
+          <p className="text-xs leading-relaxed text-slate-500">
+            这里新增的是“人工概念层”，不会改动模型原始抽取结果。
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              disabled={busy}
+              className="rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+            >
+              取消
+            </button>
+            <button
+              onClick={submit}
+              disabled={busy || !title.trim()}
+              className="inline-flex items-center gap-2 rounded-xl bg-teal-500 px-4 py-2 text-sm font-medium text-white hover:bg-teal-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+              {busy ? '保存中…' : '创建概念'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 

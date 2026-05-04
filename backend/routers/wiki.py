@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from config import load_config
 from database import get_db
 from models import KnowledgeNode
+from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
 from services.wiki_compiler import (
     count_publishable_concepts,
@@ -54,6 +55,8 @@ compile_state: dict = {
     "finished_at": None,
     "last_error": None,  # most recent error message, for surfacing in UI
     "model": None,       # which compile model is being used
+    "current_item_id": None,
+    "current_item_kind": None,  # "paper" | "concept" | None
 }
 
 
@@ -77,9 +80,11 @@ def _begin(kind: str, total: int, model: str) -> None:
         })
 
 
-def _set_current(label: str) -> None:
+def _set_current(label: str, item_id: Optional[int] = None, item_kind: Optional[str] = None) -> None:
     with _state_lock:
         compile_state["current"] = label
+        compile_state["current_item_id"] = item_id
+        compile_state["current_item_kind"] = item_kind
 
 
 def _tick(success: bool, err: Optional[BaseException] = None) -> None:
@@ -95,6 +100,8 @@ def _finish() -> None:
     with _state_lock:
         compile_state["running"] = False
         compile_state["current"] = ""
+        compile_state["current_item_id"] = None
+        compile_state["current_item_kind"] = None
         compile_state["finished_at"] = _now_iso()
 
 
@@ -115,6 +122,8 @@ def _try_acquire(kind: str, total: int, model: str) -> bool:
             "finished_at": None,
             "last_error": None,
             "model": model,
+            "current_item_id": None,
+            "current_item_kind": None,
         })
         return True
 
@@ -184,6 +193,14 @@ def get_freshness(db: Session = Depends(get_db)):
     return compute_freshness_summary(db)
 
 
+@router.get("/graph")
+def get_wiki_graph(db: Session = Depends(get_db)):
+    with _state_lock:
+        active_kind = compile_state.get("current_item_kind")
+        active_id = compile_state.get("current_item_id")
+    return build_wiki_graph(db, active_kind=active_kind, active_id=active_id)
+
+
 # --- search (Phase 2A) ------------------------------------------------------
 
 @router.get("/search")
@@ -230,7 +247,11 @@ def _drive_concept_recompile():
             compile_state.update({"total": total, "model": model})
 
         def on_progress(idx, total, node, path, err):
-            _set_current(f"概念 [{idx}/{total}] · {node.title}")
+            _set_current(
+                f"概念 [{idx}/{total}] · {node.title}",
+                item_id=node.id,
+                item_kind="concept",
+            )
             _tick(success=(err is None), err=err)
 
         compile_all_concept_pages(db, api_key, model, on_progress=on_progress)
@@ -270,7 +291,11 @@ def _drive_paper_recompile():
 
         def on_progress(idx, total, paper, path, err):
             label = paper.title or paper.filename or f"paper-{paper.id}"
-            _set_current(f"论文 [{idx}/{total}] · {label}")
+            _set_current(
+                f"论文 [{idx}/{total}] · {label}",
+                item_id=paper.id,
+                item_kind="paper",
+            )
             _tick(success=(err is None), err=err)
 
         compile_all_paper_pages(db, api_key, model, on_progress=on_progress)

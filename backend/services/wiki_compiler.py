@@ -33,6 +33,7 @@ from services.graph_service import (
     node_origin,
     normalize_source_paper_ids,
 )
+from services.paper_category_service import effective_paper_category
 from services.vlm_service import model_uses_responses_api
 
 
@@ -495,6 +496,7 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         "paper_id": paper.id,
         "slug": slug,
         "authors": list(paper.authors or []),
+        "paper_category": effective_paper_category(paper, extraction if isinstance(extraction, dict) else None),
         "compiled_at": _now_iso(),
         "compile_model": model,
         "source_signature": signature,

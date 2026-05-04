@@ -38,6 +38,13 @@ function compactLabel(title: string, maxChars: number) {
   return `${normalized.slice(0, maxChars - 1)}…`
 }
 
+function graphRepulsion(nodeCount: number) {
+  if (nodeCount >= 90) return 32000
+  if (nodeCount >= 50) return 28000
+  if (nodeCount >= 24) return 24000
+  return 20000
+}
+
 export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
@@ -86,26 +93,26 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             'font-weight': 500,
             'text-valign': 'bottom',
             'text-halign': 'center',
-            'text-margin-y': 10,
-            width: 48,
-            height: 48,
+            'text-margin-y': 12,
+            width: 52,
+            height: 52,
             'text-wrap': 'wrap',
-            'text-max-width': '96px',
+            'text-max-width': '112px',
             'border-width': 2,
             'border-color': '#0b0d12',
             'text-outline-width': 0,
             'text-background-color': '#020617',
-            'text-background-opacity': 0.88,
+            'text-background-opacity': 0.92,
             'text-background-shape': 'roundrectangle',
-            'text-background-padding': '4px',
+            'text-background-padding': '5px',
             'overlay-opacity': 0,
           },
         },
         {
           selector: 'node[node_type = "paper"]',
           style: {
-            width: 56,
-            height: 56,
+            width: 60,
+            height: 60,
             'font-weight': 600,
           },
         },
@@ -114,21 +121,21 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           style: {
             'border-width': 3,
             'border-color': '#ffffff',
-            width: 64,
-            height: 64,
+            width: 70,
+            height: 70,
             'font-size': '13px',
-            'text-max-width': '120px',
+            'text-max-width': '132px',
           },
         },
         {
           selector: 'edge',
           style: {
-            width: 1.2,
+            width: 1.1,
             'line-color': '#334155',
-            'line-opacity': 0.7,
+            'line-opacity': 0.5,
             'target-arrow-color': '#475569',
             'target-arrow-shape': 'triangle',
-            'arrow-scale': 0.8,
+            'arrow-scale': 0.75,
             'curve-style': 'bezier',
             label: 'data(label)',
             'font-size': '10px',
@@ -139,19 +146,33 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           },
         },
         {
+          selector: 'edge[relation_type = "similar"]',
+          style: {
+            width: 0.8,
+            'line-style': 'dashed',
+            'line-color': '#1e293b',
+            'line-opacity': 0.18,
+            'target-arrow-color': '#1e293b',
+            'arrow-scale': 0.55,
+          },
+        },
+        {
           selector: 'edge[weight >= 0.9]',
-          style: { 'line-color': '#64748b', width: 2, 'line-opacity': 0.9 },
+          style: { 'line-color': '#64748b', width: 1.6, 'line-opacity': 0.72 },
         },
       ],
       layout: {
         name: 'cose',
         animate: false,
-        nodeRepulsion: () => 15000,
-        idealEdgeLength: () => 120,
-        edgeElasticity: () => 100,
-        gravity: 0.28,
-        numIter: 1400,
-        padding: 40,
+        fit: true,
+        nodeRepulsion: () => graphRepulsion(data.nodes.length),
+        idealEdgeLength: edge => edge.data('relation_type') === 'similar' ? 210 : 175,
+        edgeElasticity: edge => edge.data('relation_type') === 'similar' ? 65 : 130,
+        nodeOverlap: 20,
+        componentSpacing: 170,
+        gravity: 0.16,
+        numIter: 2000,
+        padding: 90,
         nodeDimensionsIncludeLabels: true,
         randomize: false,
       } as cytoscape.LayoutOptions,
@@ -199,7 +220,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
         </div>
       </div>
       <div className="absolute bottom-4 right-4 bg-slate-900/82 backdrop-blur rounded-xl px-3.5 py-2 border border-slate-800 text-xs text-slate-500 leading-relaxed max-w-[15rem] text-right">
-        标签已做压缩显示，放大或点击节点可获得更完整的上下文。
+        默认已经拉开排布；拖动画布和滚轮缩放可以继续查看稀疏布局里的细节。
       </div>
     </div>
   )

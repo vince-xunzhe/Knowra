@@ -11,6 +11,10 @@ export interface PaperRecord {
   num_pages: number | null
   processed: boolean
   processed_at: string | null
+  paper_category: string | null
+  paper_category_model: string | null
+  paper_category_override: string | null
+  paper_category_source: 'manual' | 'model' | 'none'
   error: string | null
   created_at: string | null
 }
@@ -59,6 +63,7 @@ export interface GraphNode {
   title: string
   content: string
   node_type: NodeType
+  category?: string | null
   origin: 'auto' | 'manual'
   hidden: boolean
   concept_candidate: boolean
@@ -145,6 +150,8 @@ export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.da
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
 export const updatePaperResponse = (id: number, raw_llm_response: string) =>
   api.put<PaperDetail>(`/papers/${id}/response`, { raw_llm_response }).then(r => r.data)
+export const updatePaperCategory = (id: number, category: string | null) =>
+  api.put<PaperDetail>(`/papers/${id}/category`, { category }).then(r => r.data)
 export const updatePaperNotes = (id: number, notes: string) =>
   api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
@@ -171,6 +178,8 @@ export const uploadNoteImage = (file: File) => {
 
 // Graph
 export const getGraph = () => api.get<GraphData>('/graph').then(r => r.data)
+export const listHiddenGraphNodes = () =>
+  api.get<{ nodes: GraphNode[] }>('/graph/hidden_nodes').then(r => r.data.nodes)
 export const getNode = (id: number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
 export const searchNodes = (q: string) =>
   api.get<GraphNode[]>('/search', { params: { q } }).then(r => r.data)
@@ -261,10 +270,55 @@ export interface WikiCompileState {
   finished_at: string | null
   last_error: string | null
   model: string | null
+  current_item_id?: number | null
+  current_item_kind?: 'paper' | 'concept' | null
 }
 
 export const getWikiStatus = () =>
   api.get<WikiCompileState>('/wiki/status', { timeout: 8000 }).then(r => r.data)
+
+export interface WikiGraphNode {
+  id: string
+  kind: 'group' | 'paper' | 'concept'
+  title: string
+  subtitle?: string | null
+  year?: number | null
+  filename?: string | null
+  page_kind?: 'papers' | 'concepts' | null
+  paper_id?: number | null
+  concept_id?: number | null
+  node_type?: string | null
+  category?: string | null
+  compiled_at?: string | null
+  x: number
+  y: number
+  active: boolean
+}
+
+export interface WikiGraphEdge {
+  id: string
+  source: string
+  target: string
+  relation_type: 'timeline' | 'supports' | string
+  node_type?: string | null
+  category?: string | null
+}
+
+export interface WikiGraphSummary {
+  name: string
+  paper_count: number
+  concept_count: number
+}
+
+export interface WikiGraphData {
+  updated_at: string
+  categories: WikiGraphSummary[]
+  nodes: WikiGraphNode[]
+  edges: WikiGraphEdge[]
+}
+
+export const getWikiGraph = () =>
+  api.get<WikiGraphData>('/wiki/graph', { timeout: 12000 }).then(r => r.data)
 
 // Freshness — tells the UI which wiki .md files are out-of-date relative to
 // the raw layer (DB). Drives the "X items need recompiling" banner so the

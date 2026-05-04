@@ -1,8 +1,10 @@
 from __future__ import annotations
+import json
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from models import Paper, KnowledgeNode, KnowledgeEdge
+from services.paper_category_service import PAPER_CATEGORY_OTHER, effective_paper_category
 from services.vlm_service import get_embedding, cosine_similarity
 
 MAX_TITLE_LEN = 24
@@ -422,6 +424,34 @@ def _paper_nodes_by_paper_id(nodes: list[KnowledgeNode]) -> dict[int, KnowledgeN
     return out
 
 
+def _paper_category_by_id(db: Session, paper_ids: set[int]) -> dict[int, str]:
+    if not paper_ids:
+        return {}
+    out: dict[int, str] = {}
+    papers = db.query(Paper).filter(Paper.id.in_(list(paper_ids))).all()
+    for paper in papers:
+        extraction = None
+        if paper.raw_llm_response:
+            try:
+                extraction = json.loads(paper.raw_llm_response)
+            except (TypeError, json.JSONDecodeError):
+                extraction = None
+        out[paper.id] = effective_paper_category(paper, extraction)
+    return out
+
+
+def _majority_category(source_paper_ids: list[int], paper_categories: dict[int, str]) -> str:
+    counts: dict[str, int] = {}
+    for pid in source_paper_ids:
+        category = paper_categories.get(pid)
+        if not category:
+            continue
+        counts[category] = counts.get(category, 0) + 1
+    if not counts:
+        return PAPER_CATEGORY_OTHER
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
 def _manual_synthetic_edges(nodes: list[KnowledgeNode]) -> list[dict]:
     paper_nodes = _paper_nodes_by_paper_id(nodes)
     out: list[dict] = []
@@ -464,6 +494,32 @@ def get_graph_data(db: Session) -> dict:
             for e in edges
         ] + synthetic_edges,
     }
+
+
+def get_hidden_graph_nodes(db: Session) -> list[dict]:
+    processed_ids = _processed_paper_ids(db)
+    hidden_nodes = [
+        node for node in db.query(KnowledgeNode).all()
+        if node_is_hidden(node) and (node.node_type or "") != "paper"
+    ]
+    paper_categories = _paper_category_by_id(
+        db,
+        {
+            pid
+            for node in hidden_nodes
+            for pid in normalize_source_paper_ids(node.source_paper_ids)
+        },
+    )
+    hidden_nodes.sort(key=lambda node: ((node.node_type or ""), (node.title or "").lower()))
+    serialized = []
+    for node in hidden_nodes:
+        data = _serialize_graph_node(node, processed_ids)
+        data["category"] = _majority_category(
+            normalize_source_paper_ids(node.source_paper_ids),
+            paper_categories,
+        )
+        serialized.append(data)
+    return serialized
 
 
 def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
