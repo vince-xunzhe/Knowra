@@ -43,6 +43,36 @@ Knowra 是一个本地优先的 AI 研究工作台，帮助用户从论文和领
 
 如果你想看一篇论文如何从 PDF 进入系统并最终变成图谱节点和边，可以直接看 [架构说明](docs/ARCHITECTURE.md) 里的链路图。
 
+## Wiki 编译
+
+每篇已处理论文都可以编译成一份 markdown wiki 条目（`data/wiki/papers/{id}-{slug}.md`）。这一步**不会重读 PDF、不会调 file_search**，只是把 DB 里已抽取好的 JSON 让 LLM 改写成中文叙事 markdown，并对涉及到的方法、概念、数据集名称打上 `[[…]]` backlink 标记，便于 Obsidian 等工具浏览。
+
+```mermaid
+flowchart TD
+    A["DB: paper.raw_llm_response<br/>抽取 JSON"] --> P
+    B["DB: paper.title / authors / filename"] --> P
+    C["DB: paper.notes<br/>用户笔记"] --> P
+    P["_paper_user_prompt()"] --> L
+    S["PAPER_PAGE_SYSTEM<br/>固定 system prompt"] --> L
+    L["chat.completions.create<br/>model=gpt-5.4"] --> M["markdown body"]
+    M --> F["拼上 YAML frontmatter"]
+    F --> O[("data/wiki/papers/{id}-{slug}.md")]
+```
+
+概念页（`data/wiki/concepts/{id}-{slug}.md`）走类似流程，但输入是「概念名 + 简介 + 涉及该概念的多篇论文片段」，目标是横向综述（共识、分歧、未解），而不是改写单篇：
+
+```mermaid
+flowchart TD
+    K["DB: KnowledgeNode<br/>title / node_type / content / source_paper_ids"] --> P
+    R["DB: Paper.raw_llm_response<br/>(每个 source_paper_id)"] --> SN["_snippet_for_paper()<br/>抽取 8 个高信号字段"]
+    SN --> P["_concept_user_prompt()"]
+    SP["CONCEPT_PAGE_SYSTEM<br/>固定 system prompt"] --> L
+    P --> L["chat.completions.create<br/>model=gpt-5.4, max_tokens=1500"]
+    L --> M["markdown body<br/>含 [[paper:{id}]] 内联引用"]
+    M --> F["拼上 YAML frontmatter"]
+    F --> O[("data/wiki/concepts/{id}-{slug}.md")]
+```
+
 ## 数据架构
 
 Knowra 使用 SQLite 和本地文件系统保存运行数据。

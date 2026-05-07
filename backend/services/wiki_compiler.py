@@ -886,7 +886,6 @@ def compute_freshness_summary(db: Session) -> dict:
     for paper in papers:
         title = paper.title or paper.filename or f"paper-{paper.id}"
         expected_name = _paper_page_path(paper).name
-        current_signature = _paper_compile_signature(paper)
         candidates = paper_pages_by_id.get(paper.id) or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
@@ -896,6 +895,10 @@ def compute_freshness_summary(db: Session) -> dict:
                 "processed_at": _to_aware(paper.processed_at).isoformat() if paper.processed_at else None,
             })
             continue
+        # Reuse the model that produced this .md so the recomputed signature
+        # matches the one stored in frontmatter (otherwise freshness drifts
+        # forever even right after compile).
+        current_signature = _paper_compile_signature(paper, wiki.get("compile_model"))
         compiled_at = _parse_iso(wiki.get("compiled_at"))
         processed_at = _to_aware(paper.processed_at)
         reasons: List[str] = []
@@ -935,7 +938,6 @@ def compute_freshness_summary(db: Session) -> dict:
     for node in nodes:
         expected_name = _concept_page_path(node).name
         source_papers = _published_concept_source_papers(node, db)
-        current_signature = _concept_compile_signature(node, source_papers)
         candidates = concept_pages_by_id.get(node.id) or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
@@ -945,6 +947,7 @@ def compute_freshness_summary(db: Session) -> dict:
                 "node_type": node.node_type,
             })
             continue
+        current_signature = _concept_compile_signature(node, source_papers, wiki.get("compile_model"))
         compiled_at = _parse_iso(wiki.get("compiled_at"))
         # Newest processed_at among source papers — that's the "last time
         # the raw evidence under this concept changed".

@@ -43,6 +43,36 @@ For installation, runtime dependencies, and startup commands, see [Install](INST
 
 For the end-to-end pipeline from a PDF to graph nodes and edges, see [Architecture](docs/ARCHITECTURE.md).
 
+## Wiki Compilation
+
+Every processed paper can be compiled into a markdown wiki entry at `data/wiki/papers/{id}-{slug}.md`. This step **does not re-read the PDF and does not call file_search** — it just asks the LLM to rewrite the already-extracted JSON in DB into Chinese narrative markdown, tagging method / concept / dataset names with `[[…]]` backlink markers so tools like Obsidian can navigate between papers and concepts.
+
+```mermaid
+flowchart TD
+    A["DB: paper.raw_llm_response<br/>extracted JSON"] --> P
+    B["DB: paper.title / authors / filename"] --> P
+    C["DB: paper.notes<br/>user notes"] --> P
+    P["_paper_user_prompt()"] --> L
+    S["PAPER_PAGE_SYSTEM<br/>fixed system prompt"] --> L
+    L["chat.completions.create<br/>model=gpt-5.4"] --> M["markdown body"]
+    M --> F["wrap with YAML frontmatter"]
+    F --> O[("data/wiki/papers/{id}-{slug}.md")]
+```
+
+Concept pages (`data/wiki/concepts/{id}-{slug}.md`) follow a similar flow, but the input is a concept name plus the relevant snippets from every paper that touches it, and the LLM writes a cross-paper synthesis (consensus, disagreements, open questions) instead of rewriting a single paper:
+
+```mermaid
+flowchart TD
+    K["DB: KnowledgeNode<br/>title / node_type / content / source_paper_ids"] --> P
+    R["DB: Paper.raw_llm_response<br/>(per source_paper_id)"] --> SN["_snippet_for_paper()<br/>pick 8 high-signal fields"]
+    SN --> P["_concept_user_prompt()"]
+    SP["CONCEPT_PAGE_SYSTEM<br/>fixed system prompt"] --> L
+    P --> L["chat.completions.create<br/>model=gpt-5.4, max_tokens=1500"]
+    L --> M["markdown body<br/>with [[paper:{id}]] inline refs"]
+    M --> F["wrap with YAML frontmatter"]
+    F --> O[("data/wiki/concepts/{id}-{slug}.md")]
+```
+
 ## Data Model
 
 Knowra stores runtime data in SQLite and the local filesystem.
