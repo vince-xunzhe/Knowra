@@ -402,6 +402,85 @@ export const searchWiki = (q: string, limit = 20) =>
     timeout: 10000,
   }).then(r => r.data)
 
+// --- Wiki Ask agent + index --------------------------------------------
+
+export interface AskTraceStep {
+  step: number
+  tool: 'list_wiki_index' | 'search_wiki' | 'read_wiki' | string
+  args: Record<string, unknown>
+  result_summary: string
+  duration_ms: number
+}
+
+export interface AskResponse {
+  answer: string
+  cited_files: string[]
+  trace: AskTraceStep[]
+  model: string
+  duration_ms: number
+  steps: number
+}
+
+export const askWiki = (
+  question: string,
+  history?: { role: 'user' | 'assistant'; content: string }[],
+) =>
+  api
+    .post<AskResponse>(
+      '/wiki/ask',
+      { question, history },
+      { timeout: 600000 }, // agent loops can run minutes on cold cache
+    )
+    .then(r => r.data)
+
+export interface WikiIndexStatus {
+  exists: boolean
+  path: string
+  size: number
+  modified_at?: string
+  indexed_at?: string | null
+  indexed_papers?: number | null
+  indexed_concepts?: number | null
+  current_papers?: number
+  current_concepts?: number
+  /** True when index.md exists but its recorded counts don't match the
+   *  current wiki — user should rebuild for the agent to see new pages. */
+  stale?: boolean
+}
+
+export const getWikiIndexStatus = () =>
+  api.get<WikiIndexStatus>('/wiki/index/status').then(r => r.data)
+
+export const getWikiIndex = () =>
+  api
+    .get<{ text: string; summary: WikiIndexStatus }>('/wiki/index')
+    .then(r => r.data)
+
+export const rebuildWikiIndex = () =>
+  api
+    .post<{ path: string; size: number }>(
+      '/wiki/index/rebuild',
+      undefined,
+      { timeout: 300000 },
+    )
+    .then(r => r.data)
+
+export interface SynthesisConceptInput {
+  title: string
+  body: string
+  source_question?: string
+  source_paper_ids?: number[]
+  tags?: string[]
+}
+
+export const createSynthesisConcept = (payload: SynthesisConceptInput) =>
+  api
+    .post<{ concept_id: number; filename: string; path: string }>(
+      '/wiki/concepts/from_synthesis',
+      payload,
+    )
+    .then(r => r.data)
+
 // --- Concept promotion -----------------------------------------------------
 //
 // Concept-eligible nodes (technique / dataset / problem_area / concept) move

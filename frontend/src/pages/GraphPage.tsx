@@ -1,5 +1,15 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Search, RefreshCw, Play, ScanLine, Loader2, Filter, X, Plus } from 'lucide-react'
+import {
+  Search,
+  RefreshCw,
+  Play,
+  ScanLine,
+  Loader2,
+  Filter,
+  X,
+  Plus,
+  Sparkles,
+} from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
 import RejectedRescueModal from '../components/RejectedRescueModal'
@@ -7,6 +17,7 @@ import CandidatePanel from '../components/CandidatePanel'
 import PipelineStatusBar from '../components/PipelineStatusBar'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import ConceptListView from '../components/ConceptListView'
+import AskDrawer from '../components/AskDrawer'
 import {
   createManualConcept,
   getGraph,
@@ -74,6 +85,7 @@ export default function GraphPage() {
   //   all       — also surface rejected nodes (ghosted) for rescue
   const [candidateMode, setCandidateMode] = useState<'off' | 'pending' | 'all'>('off')
   const [rescueOpen, setRescueOpen] = useState(false)
+  const [askOpen, setAskOpen] = useState(false)
   // Three flavors of view:
   //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
   //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
@@ -510,6 +522,15 @@ export default function GraphPage() {
             )}
 
             <button
+              onClick={() => setAskOpen(true)}
+              title="向知识库提问 — agent 会跨论文综合答复"
+              className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 px-3.5 py-2 rounded-xl transition-colors shrink-0 shadow-lg shadow-indigo-500/20"
+            >
+              <Sparkles size={14} />
+              Ask
+            </button>
+
+            <button
               onClick={handleScan}
               disabled={scanning}
               className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-3.5 py-2 rounded-xl transition-colors disabled:opacity-50 shrink-0"
@@ -773,6 +794,16 @@ export default function GraphPage() {
             setCandidateMode('pending')
             setSelectedNode(node)
           }
+        }}
+      />
+
+      <AskDrawer
+        open={askOpen}
+        onClose={() => setAskOpen(false)}
+        onSynthesisCreated={async () => {
+          // New synthesis concept is auto-promoted manual; reload the
+          // graph so it shows up in 节点图谱 / 概念 immediately.
+          await loadGraph()
         }}
       />
 
