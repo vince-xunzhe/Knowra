@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import init_db, SessionLocal
 from logging_utils import configure_app_logging
 from models import Paper
-from routers import papers, graph, config, prompt, note_images, wiki
+from routers import papers, graph, config, prompt, note_images, wiki, promotion
 from services.paper_category_service import sync_paper_category_fields
 from services.vlm_service import parse_extraction_response
 
@@ -25,6 +25,7 @@ app.include_router(config.router)
 app.include_router(prompt.router)
 app.include_router(note_images.router)
 app.include_router(wiki.router)
+app.include_router(promotion.router)
 
 
 @app.on_event("startup")

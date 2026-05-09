@@ -1,7 +1,7 @@
 import os
 import json
 from pathlib import Path
-from prompts import DEFAULT_PAPER_PROMPT
+from prompts import DEFAULT_PAPER_PROMPT, DEFAULT_PROMOTION_PROMPT
 from path_utils import PAPERS_DIR, portable_data_path, resolve_papers_directory
 
 CONFIG_FILE = Path(__file__).parent.parent / "data" / "config.json"
@@ -74,6 +74,12 @@ def load_config() -> dict:
         "similarity_threshold": 0.6,
         "use_first_page_image": True,   # kept for backwards-compat; ignored by the Assistants pipeline
         "extraction_prompt": DEFAULT_PAPER_PROMPT,
+        # User-editable system prompt for the concept-promotion LLM stage.
+        # Default is the built-in template so first-time users get the
+        # heuristic + Agent pipeline out of the box. Setting it to ""
+        # via the editor is the explicit "skip Agent, only run heuristic"
+        # opt-out — preserved for back-compat and power users.
+        "promotion_prompt": DEFAULT_PROMOTION_PROMPT,
         "openai_assistant_id": None,    # cached Assistants API assistant id, reused across runs
     }
     if CONFIG_FILE.exists():

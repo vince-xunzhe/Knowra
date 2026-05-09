@@ -13,6 +13,21 @@ MANUAL_NODE_ORIGIN = "manual"
 MANUAL_LINK_RELATION = "curated_link"
 AUTO_CONCEPT_NODE_TYPES = {"technique", "dataset", "problem_area", "concept"}
 
+# Promotion lifecycle. Concept-eligible nodes start as `pending` and need to
+# pass either heuristic or LLM review (or be promoted by the user) before
+# they show up in the curated graph or get a wiki concept page. Paper
+# nodes are tagged `promoted` at creation since they don't go through
+# curation.
+PROMOTION_PENDING = "pending"
+PROMOTION_PROMOTED = "promoted"
+PROMOTION_REJECTED = "rejected"
+PROMOTION_STATUSES = {PROMOTION_PENDING, PROMOTION_PROMOTED, PROMOTION_REJECTED}
+
+PROMOTED_BY_HEURISTIC = "heuristic"
+PROMOTED_BY_LLM = "llm"
+PROMOTED_BY_USER = "user"
+PROMOTED_BY_LEGACY = "legacy"
+
 
 def _normalize_name(s: str) -> str:
     return (s or "").strip().lower()
@@ -47,28 +62,38 @@ def node_is_hidden(node: KnowledgeNode) -> bool:
     return bool(getattr(node, "hidden", False))
 
 
+def promotion_status(node: KnowledgeNode) -> str:
+    raw = (getattr(node, "promotion_status", None) or PROMOTION_PENDING).strip().lower()
+    return raw if raw in PROMOTION_STATUSES else PROMOTION_PENDING
+
+
 def is_concept_candidate_node(node: KnowledgeNode) -> bool:
-    return (node.node_type or "") != "paper"
+    """A node that is conceptually allowed to be promoted to a wiki concept.
+    Paper nodes are deliberately excluded — they have their own rendering
+    path."""
+    return (node.node_type or "") in AUTO_CONCEPT_NODE_TYPES
 
 
 def is_publishable_concept_node(
     node: KnowledgeNode,
     processed_paper_ids: Optional[set[int]] = None,
 ) -> bool:
+    """The single gate that decides whether a concept page gets compiled.
+    After the concept-first redesign, this is just a thin wrapper around
+    `promotion_status == promoted` plus a sanity check that at least one
+    source paper is still processed (otherwise the concept has nothing to
+    cite)."""
     if node_is_hidden(node):
+        return False
+    if not is_concept_candidate_node(node):
+        return False
+    if promotion_status(node) != PROMOTION_PROMOTED:
         return False
 
     source_ids = normalize_source_paper_ids(node.source_paper_ids)
     if processed_paper_ids is not None:
         source_ids = [pid for pid in source_ids if pid in processed_paper_ids]
-    if not source_ids:
-        return False
-
-    origin = node_origin(node)
-    if origin == MANUAL_NODE_ORIGIN:
-        return (node.node_type or "") == "concept"
-
-    return (node.node_type or "") in AUTO_CONCEPT_NODE_TYPES and len(set(source_ids)) >= 2
+    return bool(source_ids)
 
 
 def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[KnowledgeNode]:
@@ -113,13 +138,19 @@ def _upsert_node(
     existing = _find_existing_node(db, title, aliases)
     if existing:
         ids = list(existing.source_paper_ids or [])
-        if paper_id not in ids:
+        ids_changed = paper_id not in ids
+        if ids_changed:
             ids.append(paper_id)
             existing.source_paper_ids = ids
         existing.tags = list({*(existing.tags or []), *tags, *aliases})
         # Enrich content if existing is shorter
         if content and len(content) > len(existing.content or ""):
             existing.content = content
+        # New source paper changes the candidate's evidence base — the
+        # promotion service uses this to decide who needs re-evaluation
+        # (see _select_for_eval). User-overridden status is preserved.
+        if ids_changed and promotion_status(existing) == PROMOTION_PENDING:
+            existing.last_promotion_eval_at = None
         db.commit()
         return existing
 
@@ -128,6 +159,13 @@ def _upsert_node(
     except Exception:
         embedding = None
 
+    # Concept-eligible types start at `pending` and need promotion review.
+    # Paper is auto-promoted because it isn't curated.
+    initial_status = (
+        PROMOTION_PENDING
+        if node_type in AUTO_CONCEPT_NODE_TYPES
+        else PROMOTION_PROMOTED
+    )
     node = KnowledgeNode(
         title=title,
         content=content,
@@ -137,6 +175,7 @@ def _upsert_node(
         tags=list({*tags, *aliases}),
         embedding=embedding,
         source_paper_ids=[paper_id],
+        promotion_status=initial_status,
     )
     db.add(node)
     db.flush()
@@ -193,8 +232,8 @@ def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
     """Detach or delete graph nodes that were created from one paper.
 
     Shared nodes stay in the graph with this paper id removed from their
-    source list. Paper-only nodes, including findings, are deleted with their
-    connected edges so a reprocess or manual repair does not duplicate them.
+    source list. Paper-only nodes are deleted with their connected edges so a
+    reprocess or manual repair does not duplicate them.
     """
     nodes_to_delete: list[KnowledgeNode] = []
     removed = 0
@@ -239,7 +278,7 @@ def add_nodes_from_paper_extraction(
 ) -> list:
     """
     Convert paper extraction into knowledge nodes + edges.
-    Node types: paper, technique, dataset, problem_area, finding, keyword
+    Node types: paper, technique, dataset, problem_area, keyword
     """
     name_to_node: dict = {}
     keywords = extraction.get("keywords", []) or []
@@ -352,34 +391,11 @@ def add_nodes_from_paper_extraction(
         if paper_node:
             _add_edge(db, paper_node.id, existing.id, "compared_to", 1.0)
 
-    # --- Key findings (unique per paper, no merging) ---
-    for f in extraction.get("key_findings", []) or []:
-        if isinstance(f, str):
-            short, detail = f[:MAX_TITLE_LEN], f
-        elif isinstance(f, dict):
-            short = (f.get("short") or "").strip()
-            detail = (f.get("detail") or short).strip()
-            if not short and detail:
-                short = detail[:MAX_TITLE_LEN]
-        else:
-            continue
-        if not detail or len(detail) < 5:
-            continue
-        node = KnowledgeNode(
-            title=_truncate_title(short),
-            content=detail,
-            node_type="finding",
-            tags=tag_base,
-            source_paper_ids=[paper_id],
-        )
-        try:
-            node.embedding = get_embedding(detail, api_key, embedding_model)
-        except Exception:
-            node.embedding = None
-        db.add(node)
-        db.flush()
-        if paper_node:
-            _add_edge(db, paper_node.id, node.id, "finding", 1.0)
+    # `finding` nodes were dropped — they bloated the graph with one
+    # node per per-paper bullet, no cross-paper merging, and added little
+    # signal that wasn't already in the paper page itself. The
+    # `key_findings` field in the extraction JSON is still used by the
+    # paper-page LLM compile to build the "关键发现" section.
 
     db.commit()
 
@@ -399,6 +415,7 @@ def _processed_paper_ids(db: Session) -> set[int]:
 
 
 def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) -> dict:
+    last_eval = getattr(node, "last_promotion_eval_at", None)
     return {
         "id": str(node.id),
         "title": node.title,
@@ -408,6 +425,10 @@ def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) ->
         "hidden": node_is_hidden(node),
         "concept_candidate": is_concept_candidate_node(node),
         "publishable_concept": is_publishable_concept_node(node, processed_paper_ids),
+        "promotion_status": promotion_status(node),
+        "promoted_by": getattr(node, "promoted_by", None),
+        "promotion_reason": getattr(node, "promotion_reason", None),
+        "last_promotion_eval_at": last_eval.isoformat() if last_eval else None,
         "tags": node.tags or [],
         "source_paper_ids": normalize_source_paper_ids(node.source_paper_ids),
         "created_at": node.created_at.isoformat() if node.created_at else None,
@@ -472,15 +493,38 @@ def _manual_synthetic_edges(nodes: list[KnowledgeNode]) -> list[dict]:
     return out
 
 
-def get_graph_data(db: Session) -> dict:
+def _node_visible_in_curated_graph(node: KnowledgeNode) -> bool:
+    """Curated graph view = papers always + concept nodes only when
+    promoted. Pending/rejected concept nodes plus hidden ones are
+    filtered out. Unknown / legacy types (no longer created but may
+    persist in old DBs) are kept visible to avoid silent data loss."""
+    if node_is_hidden(node):
+        return False
+    if (node.node_type or "") == "paper":
+        return True
+    if not is_concept_candidate_node(node):
+        return True
+    return promotion_status(node) == PROMOTION_PROMOTED
+
+
+def get_graph_data(db: Session, *, include_candidates: bool = False) -> dict:
+    """Curated graph by default; pass include_candidates=True to also surface
+    pending/rejected concept nodes for the review UI."""
     processed_ids = _processed_paper_ids(db)
-    nodes = [n for n in db.query(KnowledgeNode).all() if not node_is_hidden(n)]
+    all_nodes = db.query(KnowledgeNode).all()
+    if include_candidates:
+        nodes = [n for n in all_nodes if not node_is_hidden(n)]
+    else:
+        nodes = [n for n in all_nodes if _node_visible_in_curated_graph(n)]
     node_ids = {n.id for n in nodes}
     edges = [
         e for e in db.query(KnowledgeEdge).all()
         if e.source_id in node_ids and e.target_id in node_ids
     ]
-    synthetic_edges = _manual_synthetic_edges(nodes)
+    synthetic_edges = [
+        edge for edge in _manual_synthetic_edges(nodes)
+        if int(edge["source"]) in node_ids and int(edge["target"]) in node_ids
+    ]
     return {
         "nodes": [_serialize_graph_node(n, processed_ids) for n in nodes],
         "edges": [

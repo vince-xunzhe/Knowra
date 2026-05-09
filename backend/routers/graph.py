@@ -5,13 +5,18 @@ from database import get_db
 from models import Paper, KnowledgeNode, KnowledgeEdge
 from config import load_config
 from services import wiki_search as wiki_search_service
+from services import promotion_service
 from services.graph_service import (
     AUTO_NODE_ORIGIN,
     MANUAL_NODE_ORIGIN,
+    PROMOTED_BY_USER,
+    PROMOTION_PROMOTED,
+    PROMOTION_REJECTED,
     _add_similarity_edges,
     get_graph_data,
     get_hidden_graph_nodes,
     get_node_detail_data,
+    is_concept_candidate_node,
     node_is_hidden,
     normalize_source_paper_ids,
 )
@@ -71,8 +76,11 @@ def _reconcile_curated_wiki(db: Session) -> None:
 
 
 @router.get("/graph")
-def get_graph(db: Session = Depends(get_db)):
-    return get_graph_data(db)
+def get_graph(
+    db: Session = Depends(get_db),
+    include_candidates: bool = False,
+):
+    return get_graph_data(db, include_candidates=include_candidates)
 
 
 @router.get("/graph/hidden_nodes")
@@ -104,6 +112,10 @@ def create_manual_concept(body: ManualConceptInput, db: Session = Depends(get_db
         tags=_normalize_tags(body.tags),
         source_paper_ids=paper_ids,
         embedding=None,
+        # User-created concepts skip LLM review per design decision #4 —
+        # the user's intent is the strongest signal we have.
+        promotion_status=PROMOTION_PROMOTED,
+        promoted_by=PROMOTED_BY_USER,
     )
     db.add(node)
     db.commit()
@@ -142,24 +154,31 @@ def update_manual_concept(
 
 @router.post("/graph/nodes/{node_id}/suppress")
 def suppress_node(node_id: int, db: Session = Depends(get_db)):
+    """Legacy endpoint — kept for back-compat with any external scripts.
+    Now routes through the promotion lifecycle (status=rejected,
+    promoted_by=user) so the rescue UI can recall the node, and so the
+    stored evidence stays consistent with the rest of the system."""
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-    if node.node_type == "paper":
-        raise HTTPException(status_code=400, detail="论文节点不能直接删除")
-
-    node.hidden = True
+    if not is_concept_candidate_node(node):
+        raise HTTPException(status_code=400, detail="只有概念候选节点可以淘汰")
+    promotion_service.set_status_by_user(node, status=PROMOTION_REJECTED)
     db.commit()
     _reconcile_curated_wiki(db)
-    return {"message": "节点已从概念层移除", "node_id": node.id}
+    return {"message": "节点已淘汰", "node_id": node.id}
 
 
 @router.post("/graph/nodes/{node_id}/restore")
 def restore_node(node_id: int, db: Session = Depends(get_db)):
+    """Legacy endpoint — now resets the promotion lifecycle (status=pending,
+    promoted_by=None) so the node re-enters the eval queue. The old
+    `hidden` flag is also cleared in case anything still reads it."""
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
-
+    if is_concept_candidate_node(node):
+        promotion_service.reset_status(node)
     node.hidden = False
     db.commit()
     _reconcile_curated_wiki(db)

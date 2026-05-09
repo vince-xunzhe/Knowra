@@ -7,7 +7,6 @@ const NODE_COLORS: Record<string, string> = {
   technique: '#22c55e',
   dataset: '#f59e0b',
   problem_area: '#06b6d4',
-  finding: '#a855f7',
   concept: '#14b8a6',
   entity: '#ec4899',
   topic: '#6366f1',
@@ -19,7 +18,6 @@ const NODE_LABELS: Record<string, string> = {
   technique: '技术',
   dataset: '数据集',
   problem_area: '研究领域',
-  finding: '发现',
   concept: '概念',
   entity: '实体',
   topic: '主题',
@@ -69,6 +67,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             label: compactLabel(n.title, n.node_type === 'paper' ? 28 : 18),
             fullTitle: n.title,
             node_type: n.node_type,
+            // promotion_status drives the candidate-mode visual layer:
+            // pending nodes get a dashed border + lower opacity so the eye
+            // immediately separates "needs review" from "already decided".
+            promotion_status: n.promotion_status || 'promoted',
+            promoted_by: n.promoted_by || '',
             color: NODE_COLORS[n.node_type] || '#94a3b8',
           },
         })),
@@ -116,11 +119,35 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             'font-weight': 600,
           },
         },
+        // Pending: dashed amber border + slight transparency, so the user sees
+        // "this is in review" at a glance.
+        {
+          selector: 'node[promotion_status = "pending"]',
+          style: {
+            'border-style': 'dashed',
+            'border-width': 2,
+            'border-color': '#fbbf24',
+            'background-opacity': 0.55,
+          },
+        },
+        // Rejected: ghosted out — only visible when the rescue panel
+        // explicitly asks for them.
+        {
+          selector: 'node[promotion_status = "rejected"]',
+          style: {
+            'background-opacity': 0.18,
+            'border-color': '#475569',
+            'border-style': 'dotted',
+            color: '#475569',
+          },
+        },
         {
           selector: 'node:selected, node.highlighted',
           style: {
             'border-width': 3,
             'border-color': '#ffffff',
+            'border-style': 'solid',
+            'background-opacity': 1,
             width: 70,
             height: 70,
             'font-size': '13px',
@@ -204,23 +231,20 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
-      {/* Legend */}
-      <div className="absolute bottom-4 left-4 bg-slate-900/82 backdrop-blur rounded-2xl p-3.5 border border-slate-800 shadow-xl max-w-[12rem]">
-        <p className="section-label mb-2">节点类型</p>
-        <div className="space-y-1.5">
-          {['paper', 'concept', 'technique', 'dataset', 'problem_area', 'finding'].map(type => (
-            <div key={type} className="flex items-center gap-2">
+      {/* Legend — compact horizontal strip at bottom-right; the bottom-left
+          area is reserved for the CandidatePanel floating card. */}
+      <div className="absolute bottom-3 right-3 bg-slate-900/70 backdrop-blur rounded-lg px-2.5 py-1.5 border border-slate-800/80">
+        <div className="flex items-center gap-3">
+          {['paper', 'concept', 'technique', 'dataset', 'problem_area'].map(type => (
+            <div key={type} className="flex items-center gap-1.5">
               <span
-                className="w-2.5 h-2.5 rounded-full inline-block"
+                className="w-2 h-2 rounded-full inline-block"
                 style={{ background: NODE_COLORS[type] }}
               />
-              <span className="text-xs text-slate-300">{NODE_LABELS[type]}</span>
+              <span className="text-[10.5px] text-slate-400">{NODE_LABELS[type]}</span>
             </div>
           ))}
         </div>
-      </div>
-      <div className="absolute bottom-4 right-4 bg-slate-900/82 backdrop-blur rounded-xl px-3.5 py-2 border border-slate-800 text-xs text-slate-500 leading-relaxed max-w-[15rem] text-right">
-        默认已经拉开排布；拖动画布和滚轮缩放可以继续查看稀疏布局里的细节。
       </div>
     </div>
   )

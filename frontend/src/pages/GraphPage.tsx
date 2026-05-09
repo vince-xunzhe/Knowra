@@ -1,21 +1,30 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
-import { Search, RefreshCw, Play, ScanLine, Loader2, Filter, X, Plus, Layers3 } from 'lucide-react'
+import { Search, RefreshCw, Play, ScanLine, Loader2, Filter, X, Plus } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
+import RejectedRescueModal from '../components/RejectedRescueModal'
+import CandidatePanel from '../components/CandidatePanel'
+import PipelineStatusBar from '../components/PipelineStatusBar'
+import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import {
   createManualConcept,
   getGraph,
   getStatus,
+  getWikiGraph,
   listPapers,
   processAll,
   scanPapers,
   searchNodes,
-  suppressNode,
+  searchWiki,
   updateManualConcept,
   type GraphData,
   type GraphNode,
   type ManualConceptInput,
   type PaperRecord,
+  type PromotionStatus,
+  type WikiGraphData,
+  type WikiGraphNode,
+  type WikiSearchHit,
 } from '../api/client'
 
 interface ProcStatus {
@@ -33,7 +42,6 @@ const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
   { id: 'technique', label: '技术', color: '#22c55e' },
   { id: 'dataset', label: '数据集', color: '#f59e0b' },
   { id: 'problem_area', label: '研究领域', color: '#06b6d4' },
-  { id: 'finding', label: '发现', color: '#a855f7' },
 ]
 
 export default function GraphPage() {
@@ -41,8 +49,29 @@ export default function GraphPage() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<GraphNode[]>([])
+  const [wikiHits, setWikiHits] = useState<WikiSearchHit[]>([])
+  // Drawer initial tab — set when a wiki search hit is clicked so the
+  // drawer opens directly on the rendered .md instead of the detail view.
+  const [drawerInitialTab, setDrawerInitialTab] = useState<'detail' | 'wiki'>('detail')
   const [typeFilter, setTypeFilter] = useState('all')
-  const [viewMode, setViewMode] = useState<'curated' | 'all'>('curated')
+  // Candidate mode is the single knob that controls graph composition.
+  // It used to coexist with a `viewMode` (策展图 / 全量图) toggle, but the
+  // two filters had overlapping semantics — `candidateMode='off'` already
+  // means "only promoted concepts + papers", which is exactly what the
+  // old curated view did. We removed the redundant toggle so the user
+  // doesn't have to reason about two cascaded filters.
+  //   off       — only promoted concepts + papers (curated view)
+  //   pending   — also surface pending nodes (dashed amber border)
+  //   all       — also surface rejected nodes (ghosted) for rescue
+  const [candidateMode, setCandidateMode] = useState<'off' | 'pending' | 'all'>('off')
+  const [rescueOpen, setRescueOpen] = useState(false)
+  // Two flavors of graph: the structured Cytoscape view (KnowledgeGraph)
+  // and the compile-aware swim-lane (WikiKnowledgeMap). Toggle in the
+  // header so the user can flip between "what's in the DB" and "what
+  // the wiki layer compiled from it".
+  const [viewKind, setViewKind] = useState<'graph' | 'compiled'>('graph')
+  const [wikiGraph, setWikiGraph] = useState<WikiGraphData | null>(null)
+  const [wikiGraphLoading, setWikiGraphLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -55,11 +84,15 @@ export default function GraphPage() {
   const [editingNode, setEditingNode] = useState<GraphNode | null>(null)
   const [actionBusyId, setActionBusyId] = useState<string | null>(null)
   const wasRunningRef = useRef(false)
+  // Mirror of graphData kept in a ref so async callbacks (rescue → focus)
+  // can read the freshest version without re-binding.
+  const graphDataRef = useRef<GraphData | null>(null)
 
   const loadGraph = useCallback(async () => {
     try {
-      const data = await getGraph()
+      const data = await getGraph(candidateMode !== 'off')
       setGraphData(data)
+      graphDataRef.current = data
       setSelectedNode(prev => {
         if (!prev) return prev
         return data.nodes.find(n => n.id === prev.id) || null
@@ -68,15 +101,19 @@ export default function GraphPage() {
       console.error('Failed to load graph', error)
     }
     setLoading(false)
-  }, [])
+  }, [candidateMode])
 
   useEffect(() => {
     let cancelled = false
     const loadInitial = async () => {
       try {
-        const [data, papers] = await Promise.all([getGraph(), listPapers()])
+        const [data, papers] = await Promise.all([
+          getGraph(candidateMode !== 'off'),
+          listPapers(),
+        ])
         if (cancelled) return
         setGraphData(data)
+        graphDataRef.current = data
         setPaperCatalog(papers)
       } catch (error) {
         console.error('Failed to load graph', error)
@@ -87,7 +124,7 @@ export default function GraphPage() {
 
     void loadInitial()
     return () => { cancelled = true }
-  }, [])
+  }, [candidateMode])
 
   useEffect(() => {
     let cancelled = false
@@ -117,17 +154,22 @@ export default function GraphPage() {
   }, [loadGraph])
 
   const visibleData = useMemo(() => {
-    if (viewMode === 'all') return graphData
-    const nodeIds = new Set(
-      graphData.nodes
-        .filter(n => n.node_type === 'paper' || n.publishable_concept)
-        .map(n => n.id)
-    )
-    return {
-      nodes: graphData.nodes.filter(n => nodeIds.has(n.id)),
-      edges: graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
+    // Backend already filters by candidateMode (include_candidates flag);
+    // the only frontend job left is the optional "hide rejected" pass
+    // when the user picked +待评 instead of +已淘汰.
+    if (candidateMode === 'pending') {
+      const nodeIds = new Set(
+        graphData.nodes
+          .filter(n => n.promotion_status !== 'rejected')
+          .map(n => n.id),
+      )
+      return {
+        nodes: graphData.nodes.filter(n => nodeIds.has(n.id)),
+        edges: graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
+      }
     }
-  }, [graphData, viewMode])
+    return graphData
+  }, [graphData, candidateMode])
 
   const filteredData = useMemo(() => {
     if (typeFilter === 'all') {
@@ -145,21 +187,89 @@ export default function GraphPage() {
 
   const handleSearch = async (q: string) => {
     setSearchQuery(q)
-    if (q.trim().length < 1) { setSearchResults([]); return }
+    const trimmed = q.trim()
+    if (trimmed.length < 1) {
+      setSearchResults([])
+      setWikiHits([])
+      return
+    }
+    // Two parallel searches: structured node lookup (fast, by title/alias)
+    // and wiki FTS (full-text over compiled .md). Wiki search needs ≥2
+    // chars per backend tokenizer.
     try {
-      const results = await searchNodes(q)
-      setSearchResults(results)
+      const [nodes, wiki] = await Promise.all([
+        searchNodes(trimmed),
+        trimmed.length >= 2
+          ? searchWiki(trimmed, 12).catch(() => ({ query: trimmed, hits: [] as WikiSearchHit[] }))
+          : Promise.resolve({ query: trimmed, hits: [] as WikiSearchHit[] }),
+      ])
+      setSearchResults(nodes)
+      setWikiHits(wiki.hits)
     } catch (error) {
-      console.error('Failed to search nodes', error)
+      console.error('Failed to search', error)
     }
   }
 
   const focusNode = useCallback((node: GraphNode) => {
-    if (viewMode === 'curated' && node.node_type !== 'paper' && !node.publishable_concept) {
-      setViewMode('all')
+    // If focusing a node that's currently filtered out (a pending /
+    // rejected concept while candidateMode='off'), widen the candidate
+    // mode just enough to make it visible — otherwise the user clicks
+    // the search hit and nothing happens on screen.
+    if (candidateMode === 'off' && node.promotion_status && node.promotion_status !== 'promoted') {
+      setCandidateMode(node.promotion_status === 'rejected' ? 'all' : 'pending')
     }
     setSelectedNode(node)
-  }, [viewMode])
+  }, [candidateMode])
+
+  // Lazy-load the compiled-graph view; only fetched when the user toggles
+  // into it, refreshed alongside the main graph after compile finishes.
+  useEffect(() => {
+    if (viewKind !== 'compiled') return
+    let cancelled = false
+    setWikiGraphLoading(true)
+    getWikiGraph()
+      .then(data => { if (!cancelled) setWikiGraph(data) })
+      .catch(error => { console.error('Failed to load wiki graph', error) })
+      .finally(() => { if (!cancelled) setWikiGraphLoading(false) })
+    return () => { cancelled = true }
+  }, [viewKind])
+
+  // When the user clicks a node in the WikiKnowledgeMap, jump to the
+  // matching DB graph node + open Wiki tab. Falls through silently if
+  // the wiki graph references something the DB graph doesn't have
+  // (orphan compile, manual concept stub etc.).
+  const handleWikiGraphPick = useCallback(
+    (wikiNode: WikiGraphNode) => {
+      const targetId = wikiNode.paper_id ?? wikiNode.concept_id
+      if (targetId == null) return
+      const node = graphData.nodes.find(n => n.id === String(targetId))
+      if (node) {
+        setDrawerInitialTab('wiki')
+        focusNode(node)
+      }
+    },
+    [graphData.nodes, focusNode],
+  )
+
+  // Convert the leading `0042-...md` filename → graph node id. Wiki pages
+  // never carry the DB id directly, but their slug always starts with the
+  // zero-padded id, so this is the cheapest map.
+  const handleWikiHitClick = useCallback(
+    (hit: WikiSearchHit) => {
+      const match = /^(\d+)-/.exec(hit.filename)
+      if (!match) return
+      const id = String(parseInt(match[1], 10))
+      const targetNode = graphData.nodes.find(n => n.id === id)
+      if (targetNode) {
+        setDrawerInitialTab('wiki')
+        focusNode(targetNode)
+        setSearchQuery('')
+        setSearchResults([])
+        setWikiHits([])
+      }
+    },
+    [graphData.nodes, focusNode],
+  )
 
   const handleScan = async () => {
     setScanning(true)
@@ -211,8 +321,9 @@ export default function GraphPage() {
       focusNode(response.node)
       setEditorOpen(false)
       setEditingNode(null)
-      setViewMode('curated')
-      setProcessResult(editingNode ? '概念已更新。' : '新概念已加入策展图。')
+      // Manually-created concepts are auto-promoted, so they appear in
+      // the default (candidateMode='off') view without further toggling.
+      setProcessResult(editingNode ? '概念已更新。' : '新概念已加入图谱。')
     } catch (error) {
       setProcessResult('概念保存失败: ' + getErrorMessage(error))
     } finally {
@@ -220,21 +331,21 @@ export default function GraphPage() {
     }
   }
 
-  const handleSuppressNode = async (node: GraphNode) => {
-    const ok = confirm(`确认将「${node.title}」从概念层移除？`)
-    if (!ok) return
-    setActionBusyId(node.id)
-    try {
-      await suppressNode(Number(node.id))
-      await loadGraph()
-      if (selectedNode?.id === node.id) setSelectedNode(null)
-      setProcessResult('节点已从概念层移除。')
-    } catch (error) {
-      setProcessResult('移除节点失败: ' + getErrorMessage(error))
-    } finally {
-      setActionBusyId(null)
-    }
-  }
+  // Optimistically reflect a status change made in the drawer so the
+  // Cytoscape style updates without a full reload (which would lose
+  // viewport / selection state). The bulk reload still happens on next
+  // explicit action.
+  const handlePromotionChanged = useCallback(
+    (nodeId: string, status: PromotionStatus) => {
+      setGraphData(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n =>
+          n.id === nodeId ? { ...n, promotion_status: status } : n,
+        ),
+      }))
+    },
+    [],
+  )
 
   const nodeTypeCounts = NODE_TYPE_FILTERS.reduce((acc, f) => {
     acc[f.id] = f.id === 'all'
@@ -259,19 +370,19 @@ export default function GraphPage() {
           />
         </div>
       )}
+
+      {/* Pipeline status bar — surfaces wiki-compile state above the graph
+          so the user always sees how fresh the layer below the graph is. */}
+      <PipelineStatusBar onCompileFinished={loadGraph} />
+
       {/* Toolbar */}
-      <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-4">
+      <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-2.5">
         <div className="flex flex-wrap items-start gap-4">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <h1 className="text-lg font-semibold text-white tracking-tight">知识图谱</h1>
-              <span className="text-xs text-slate-500 tabular-nums">
-                {filteredData.nodes.length} 节点 · {filteredData.edges.length} 边
-              </span>
-            </div>
-            <p className="text-sm text-slate-500 mt-1">
-              默认进入策展视图：聚焦论文与可发布概念，支持人工补概念、隐藏碎概念，再进入 wiki 编译。
-            </p>
+          <div className="min-w-0 flex items-baseline gap-2">
+            <h1 className="text-base font-semibold text-white tracking-tight">知识图谱</h1>
+            <span className="text-xs text-slate-500 tabular-nums">
+              {filteredData.nodes.length} 节点 · {filteredData.edges.length} 边
+            </span>
           </div>
 
           {/* Search */}
@@ -279,40 +390,86 @@ export default function GraphPage() {
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-500" />
             {!searchQuery && (
               <span className="pointer-events-none absolute left-9 top-1/2 z-10 -translate-y-1/2 text-sm leading-none text-slate-500">
-                搜索知识节点
+                搜索节点 / wiki 全文
               </span>
             )}
             <input
               type="text"
-              aria-label="搜索知识节点"
+              aria-label="搜索节点 / wiki 全文"
               value={searchQuery}
               onChange={e => handleSearch(e.target.value)}
               className="h-9 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 pl-9 pr-9 text-sm leading-5 text-slate-200 transition-colors focus:border-indigo-500/60 focus:bg-slate-900 focus:outline-none"
             />
             {searchQuery && (
               <button
-                onClick={() => { setSearchQuery(''); setSearchResults([]) }}
+                onClick={() => {
+                  setSearchQuery('')
+                  setSearchResults([])
+                  setWikiHits([])
+                }}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
               >
                 <X size={12} />
               </button>
             )}
-            {searchResults.length > 0 && (
-              <div className="absolute top-full mt-2 left-0 w-full min-w-[18rem] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-20 max-h-80 overflow-y-auto">
-                {searchResults.map(n => (
-                  <button
-                    key={n.id}
-                    onClick={() => { focusNode(n); setSearchQuery(''); setSearchResults([]) }}
-                    className="w-full text-left px-3.5 py-3 hover:bg-slate-800 border-b border-slate-800 last:border-0 transition-colors"
-                  >
-                    <div className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
-                      {n.title}
+            {(searchResults.length > 0 || wikiHits.length > 0) && (
+              <div className="absolute top-full mt-2 left-0 w-full min-w-[20rem] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-20 max-h-[28rem] overflow-y-auto">
+                {searchResults.length > 0 && (
+                  <div>
+                    <div className="px-3.5 py-1.5 text-[10.5px] uppercase tracking-wider text-slate-500 bg-slate-950/60 border-b border-slate-800">
+                      节点 · {searchResults.length}
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {n.origin === 'manual' ? '手动概念' : n.node_type}
+                    {searchResults.map(n => (
+                      <button
+                        key={n.id}
+                        onClick={() => {
+                          setDrawerInitialTab('detail')
+                          focusNode(n)
+                          setSearchQuery('')
+                          setSearchResults([])
+                          setWikiHits([])
+                        }}
+                        className="w-full text-left px-3.5 py-2.5 hover:bg-slate-800 border-b border-slate-800 last:border-0 transition-colors"
+                      >
+                        <div className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
+                          {n.title}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          {n.origin === 'manual' ? '手动概念' : n.node_type}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {wikiHits.length > 0 && (
+                  <div>
+                    <div className="px-3.5 py-1.5 text-[10.5px] uppercase tracking-wider text-slate-500 bg-slate-950/60 border-b border-slate-800 border-t border-slate-800">
+                      Wiki 全文 · {wikiHits.length}
                     </div>
-                  </button>
-                ))}
+                    {wikiHits.map(hit => (
+                      <button
+                        key={`${hit.kind}:${hit.filename}`}
+                        onClick={() => handleWikiHitClick(hit)}
+                        className="w-full text-left px-3.5 py-2.5 hover:bg-slate-800 border-b border-slate-800 last:border-0 transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 shrink-0">
+                            {hit.kind === 'paper' ? '论文页' : '概念页'}
+                          </span>
+                          <span className="text-sm text-slate-200 font-medium line-clamp-1 text-safe-wrap">
+                            {hit.title}
+                          </span>
+                        </div>
+                        {hit.snippet && (
+                          <div
+                            className="text-[11.5px] text-slate-500 mt-1 leading-snug line-clamp-2"
+                            dangerouslySetInnerHTML={{ __html: hit.snippet }}
+                          />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -372,35 +529,35 @@ export default function GraphPage() {
       </header>
 
       {/* View + type filter chips */}
-      <div className={`bg-[#0f1117]/60 border-b border-slate-800/60 px-6 py-2.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
+      <div className={`bg-[#0f1117]/60 border-b border-slate-800/60 px-6 py-1.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
+        {/* Outer toggle — picks which graph engine to use */}
         <div className="inline-flex items-center rounded-xl border border-slate-800 bg-slate-900/60 p-1 mr-2">
           <button
-            onClick={() => setViewMode('curated')}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs transition-colors ${
-              viewMode === 'curated'
+            onClick={() => setViewKind('graph')}
+            title="基于 KnowledgeNode + KnowledgeEdge 的关系图"
+            className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
+              viewKind === 'graph'
                 ? 'bg-slate-800 text-white'
                 : 'text-slate-500 hover:text-slate-200'
             }`}
           >
-            <Layers3 size={12} />
-            策展图
+            节点图谱
           </button>
           <button
-            onClick={() => setViewMode('all')}
+            onClick={() => setViewKind('compiled')}
+            title="基于已编译 wiki .md 的时间线视图"
             className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
-              viewMode === 'all'
+              viewKind === 'compiled'
                 ? 'bg-slate-800 text-white'
                 : 'text-slate-500 hover:text-slate-200'
             }`}
           >
-            全量图
+            编译图谱
           </button>
         </div>
-        <div className="inline-flex items-center gap-2 pr-2">
-          <Filter size={12} className="text-slate-500" />
-          <span className="section-label">节点类型</span>
-        </div>
-        <div className="flex flex-wrap gap-1.5">
+
+        <Filter size={12} className="text-slate-600" />
+        <div className="flex flex-wrap gap-1">
           {NODE_TYPE_FILTERS.map(f => {
             const active = typeFilter === f.id
             const count = nodeTypeCounts[f.id] || 0
@@ -408,17 +565,17 @@ export default function GraphPage() {
               <button
                 key={f.id}
                 onClick={() => setTypeFilter(f.id)}
-                className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${
+                className={`inline-flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors ${
                   active
-                    ? 'bg-slate-800 text-white border border-slate-700/70'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+                    ? 'bg-slate-800 text-white'
+                    : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/40'
                 }`}
               >
                 {f.color && (
-                  <span className="w-2 h-2 rounded-full" style={{ background: f.color }} />
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: f.color }} />
                 )}
                 {f.label}
-                <span className={`${active ? 'text-slate-400' : 'text-slate-600'} tabular-nums`}>{count}</span>
+                <span className="tabular-nums text-slate-600">{count}</span>
               </button>
             )
           })}
@@ -482,6 +639,22 @@ export default function GraphPage() {
                 </button>
               </div>
             </div>
+          ) : viewKind === 'compiled' ? (
+            wikiGraphLoading && !wikiGraph ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                <Loader2 size={14} className="animate-spin mr-2" /> 加载编译图谱…
+              </div>
+            ) : wikiGraph ? (
+              <WikiKnowledgeMap
+                data={wikiGraph}
+                selectedId={selectedNode?.id || null}
+                onPick={handleWikiGraphPick}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                没有可用的编译图谱（先在管道里编译论文页 / 概念页）
+              </div>
+            )
           ) : (
             <KnowledgeGraph
               data={filteredData}
@@ -493,13 +666,40 @@ export default function GraphPage() {
 
         <NodeDetail
           node={selectedNode}
-          onClose={() => setSelectedNode(null)}
+          onClose={() => {
+            setSelectedNode(null)
+            setDrawerInitialTab('detail')
+          }}
           onNavigate={handleNodeNavigate}
           onEditManualConcept={handleEditManualConcept}
-          onSuppressNode={handleSuppressNode}
+          onPromotionChanged={handlePromotionChanged}
           busyNodeId={actionBusyId}
+          initialTab={drawerInitialTab}
         />
       </div>
+
+      <CandidatePanel
+        candidateMode={candidateMode}
+        onCandidateModeChange={setCandidateMode}
+        onOpenRescue={() => setRescueOpen(true)}
+        onPromotionRunFinished={loadGraph}
+        viewKind={viewKind}
+      />
+
+      <RejectedRescueModal
+        open={rescueOpen}
+        onClose={() => setRescueOpen(false)}
+        onRecalled={async (nodeId) => {
+          await loadGraph()
+          // Auto-jump to the rescued node so the user can see the context
+          // they just rescued.
+          const node = graphDataRef.current?.nodes.find(n => n.id === String(nodeId))
+          if (node) {
+            setCandidateMode('pending')
+            setSelectedNode(node)
+          }
+        }}
+      />
 
       <ConceptEditorModal
         open={editorOpen}
@@ -587,7 +787,7 @@ function ConceptEditorModal({
               {initialNode ? '编辑手动概念' : '新增手动概念'}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              新概念会进入策展图，并在后续概念编译时基于你勾选的论文生成 wiki 条目。
+              新概念会自动标为「精选」并加入图谱，后续概念编译会基于你勾选的论文生成 wiki 条目。
             </p>
           </div>
           <button

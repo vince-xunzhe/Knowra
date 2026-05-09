@@ -12,35 +12,51 @@ from services.graph_service import is_publishable_concept_node
 from services.wiki_compiler import compile_paper_page
 
 
+def _node(**overrides):
+    base = dict(
+        node_type="technique",
+        node_origin="auto",
+        hidden=False,
+        promotion_status="promoted",
+        source_paper_ids=[1, 2],
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 class GraphCurationTests(unittest.TestCase):
-    def test_auto_concept_needs_two_processed_papers(self):
-        node = SimpleNamespace(
-            node_type="technique",
-            node_origin="auto",
-            hidden=False,
-            source_paper_ids=[1],
-        )
-        self.assertFalse(is_publishable_concept_node(node, {1}))
-        node.source_paper_ids = [1, 2]
-        self.assertTrue(is_publishable_concept_node(node, {1, 2}))
+    def test_promoted_node_is_publishable(self):
+        self.assertTrue(is_publishable_concept_node(_node(), {1, 2}))
 
-    def test_manual_concept_can_publish_with_single_paper(self):
-        node = SimpleNamespace(
-            node_type="concept",
-            node_origin="manual",
-            hidden=False,
-            source_paper_ids=[7],
+    def test_pending_node_is_not_publishable(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(promotion_status="pending"), {1, 2})
         )
-        self.assertTrue(is_publishable_concept_node(node, {7}))
 
-    def test_hidden_node_is_not_publishable(self):
-        node = SimpleNamespace(
-            node_type="concept",
-            node_origin="manual",
-            hidden=True,
-            source_paper_ids=[7, 8],
+    def test_rejected_node_is_not_publishable(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(promotion_status="rejected"), {1, 2})
         )
-        self.assertFalse(is_publishable_concept_node(node, {7, 8}))
+
+    def test_hidden_overrides_promoted(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(hidden=True), {1, 2})
+        )
+
+    def test_paper_node_is_not_a_concept(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(node_type="paper"), {1, 2})
+        )
+
+    def test_finding_node_is_not_a_concept(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(node_type="finding"), {1, 2})
+        )
+
+    def test_promoted_node_with_no_processed_paper_drops_out(self):
+        self.assertFalse(
+            is_publishable_concept_node(_node(source_paper_ids=[1]), {2})
+        )
 
 
 class WikiCompileSkipTests(unittest.TestCase):

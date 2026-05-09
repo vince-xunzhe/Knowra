@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from config import load_config
 from database import get_db
-from models import KnowledgeNode
+from models import KnowledgeNode, Paper
 from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
 from services.wiki_compiler import (
@@ -26,6 +26,7 @@ from services.wiki_compiler import (
     compile_all_concept_pages,
     compile_all_paper_pages,
     compile_concept_page,
+    compile_paper_page,
     compute_freshness_summary,
     list_concept_pages,
     list_paper_pages,
@@ -355,6 +356,33 @@ def recompile_all_paper_pages():
         raise HTTPException(status_code=409, detail="Wiki compile already running")
     _spawn(_drive_paper_recompile)
     return {"message": "Paper page compile started"}
+
+
+@router.post("/papers/{paper_id}/recompile")
+def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
+    """Single-paper wiki recompile — used by the graph drawer's "重编译此页"
+    button so the user can refresh one paper without retriggering the
+    full extraction pipeline."""
+    cfg = load_config()
+    if not cfg.get("openai_api_key"):
+        raise HTTPException(status_code=400, detail="OpenAI API key not configured")
+    paper = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if not paper.processed or not paper.raw_llm_response:
+        raise HTTPException(
+            status_code=400,
+            detail="Paper hasn't been processed yet — run extraction first",
+        )
+    try:
+        path = compile_paper_page(
+            paper, cfg["openai_api_key"], cfg["wiki_compile_model"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not path:
+        raise HTTPException(status_code=400, detail="Nothing to compile")
+    return {"path": str(path), "filename": path.name}
 
 
 @router.post("/concepts/{concept_id}/recompile")

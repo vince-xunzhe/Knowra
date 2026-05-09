@@ -52,7 +52,6 @@ export type NodeType =
   | 'technique'
   | 'dataset'
   | 'problem_area'
-  | 'finding'
   | 'concept'
   | 'entity'
   | 'topic'
@@ -68,6 +67,10 @@ export interface GraphNode {
   hidden: boolean
   concept_candidate: boolean
   publishable_concept: boolean
+  promotion_status: 'pending' | 'promoted' | 'rejected'
+  promoted_by: 'heuristic' | 'llm' | 'user' | 'legacy' | null
+  promotion_reason: string | null
+  last_promotion_eval_at: string | null
   tags: string[]
   source_paper_ids: number[]
   created_at: string | null
@@ -177,7 +180,10 @@ export const uploadNoteImage = (file: File) => {
 }
 
 // Graph
-export const getGraph = () => api.get<GraphData>('/graph').then(r => r.data)
+export const getGraph = (includeCandidates = false) =>
+  api
+    .get<GraphData>('/graph', { params: { include_candidates: includeCandidates } })
+    .then(r => r.data)
 export const listHiddenGraphNodes = () =>
   api.get<{ nodes: GraphNode[] }>('/graph/hidden_nodes').then(r => r.data.nodes)
 export const getNode = (id: number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
@@ -251,6 +257,12 @@ export const getPaperPage = (filename: string) =>
 export const recompileConcept = (conceptId: number) =>
   api.post<{ path: string; filename: string }>(
     `/wiki/concepts/${conceptId}/recompile`,
+    undefined,
+    { timeout: 120000 },
+  ).then(r => r.data)
+export const recompilePaper = (paperId: number) =>
+  api.post<{ path: string; filename: string }>(
+    `/wiki/papers/${paperId}/recompile`,
     undefined,
     { timeout: 120000 },
   ).then(r => r.data)
@@ -389,3 +401,130 @@ export const searchWiki = (q: string, limit = 20) =>
     params: { q, limit },
     timeout: 10000,
   }).then(r => r.data)
+
+// --- Concept promotion -----------------------------------------------------
+//
+// Concept-eligible nodes (technique / dataset / problem_area / concept) move
+// through pending → promoted | rejected. Heuristic + LLM proposes; the user
+// has the final word. See backend/routers/promotion.py.
+
+export type PromotionStatus = 'pending' | 'promoted' | 'rejected'
+export type PromotedBy = 'heuristic' | 'llm' | 'user' | 'legacy' | null
+
+export interface PromotionCandidate {
+  id: number
+  title: string
+  node_type: string
+  tags: string[]
+  source_paper_ids: number[]
+  promotion_status: PromotionStatus
+  promoted_by: PromotedBy
+  promotion_reason: string | null
+  last_promotion_eval_at: string | null
+}
+
+export interface PromotionCounts {
+  pending: number
+  promoted: number
+  rejected: number
+}
+
+// Wider summary returned by /counts, /run, /accept_llm, /bulk so the
+// candidate panel can render the lifecycle state in one shot — counts +
+// promoted_by breakdown ("human N / agent M") + the freshest eval
+// timestamp.
+export interface PromotionSummary {
+  counts: PromotionCounts
+  by: {
+    user: number
+    llm: number
+    heuristic: number
+    legacy: number
+    unset: number
+    [extra: string]: number
+  }
+  last_eval_at: string | null
+  total_candidates: number
+  decided: number
+}
+
+export interface PromotionRunResponse {
+  heuristic: {
+    promoted: number
+    rejected: number
+    deferred: number
+    total_evaluated: number
+    skipped_user_pinned: number
+  }
+  llm:
+    | null
+    | { error: string }
+    | {
+        promoted: number
+        rejected: number
+        still_ambiguous: number
+        total_evaluated: number
+        model: string
+      }
+  counts: PromotionCounts
+  summary: PromotionSummary
+}
+
+export const runPromotion = (params: { force_all?: boolean; use_llm?: boolean } = {}) =>
+  api
+    .post<PromotionRunResponse>('/promotion/run', params, { timeout: 600000 })
+    .then(r => r.data)
+
+export const listPromotionCandidates = (status?: PromotionStatus, limit = 500) =>
+  api
+    .get<{ items: PromotionCandidate[]; counts: PromotionCounts }>(
+      '/promotion/candidates',
+      { params: { status, limit } },
+    )
+    .then(r => r.data)
+
+export const updatePromotionStatus = (
+  nodeId: number,
+  status: PromotionStatus,
+  reason?: string,
+) =>
+  api
+    .patch<{ node: PromotionCandidate }>(`/promotion/${nodeId}`, { status, reason })
+    .then(r => r.data)
+
+export const getPromotionCounts = () =>
+  api
+    .get<{ counts: PromotionCounts; summary: PromotionSummary }>('/promotion/counts')
+    .then(r => r.data)
+
+export interface PromotionPromptPayload {
+  prompt: string
+  default_template: string
+}
+
+export const getPromotionPrompt = () =>
+  api.get<PromotionPromptPayload>('/promotion/prompt').then(r => r.data)
+
+export const updatePromotionPrompt = (prompt: string) =>
+  api
+    .put<{ prompt: string }>('/promotion/prompt', { prompt })
+    .then(r => r.data)
+
+export const acceptLLMProposals = () =>
+  api
+    .post<{ locked: number; counts: PromotionCounts; summary: PromotionSummary }>(
+      '/promotion/accept_llm',
+    )
+    .then(r => r.data)
+
+export const bulkUpdatePromotion = (
+  nodeIds: number[],
+  status: PromotionStatus,
+  reason?: string,
+) =>
+  api
+    .post<{ changed: number; counts: PromotionCounts; summary: PromotionSummary }>(
+      '/promotion/bulk',
+      { node_ids: nodeIds, status, reason },
+    )
+    .then(r => r.data)

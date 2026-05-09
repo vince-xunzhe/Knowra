@@ -1,8 +1,87 @@
+import json
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from pathlib import Path
 from models import Base
 from path_utils import portable_data_path, resolve_paper_path
+
+# Mirrors graph_service.AUTO_CONCEPT_NODE_TYPES — duplicated here to keep the
+# migration self-contained and avoid an import cycle on cold startup.
+_LEGACY_AUTO_CONCEPT_TYPES = {"technique", "dataset", "problem_area", "concept"}
+
+
+def _drop_finding_nodes(conn) -> None:
+    """Remove all `finding` knowledge nodes + edges referencing them.
+
+    These were one-per-paper bullets carved out of `key_findings[]`; they
+    bloated the graph without giving cross-paper signal. Idempotent — does
+    nothing when the table is already finding-free."""
+    finding_ids = [
+        row[0]
+        for row in conn.execute(
+            text("SELECT id FROM knowledge_nodes WHERE node_type = 'finding'")
+        ).fetchall()
+    ]
+    if not finding_ids:
+        return
+    # SQLite has no IN-clause length cap, but be conservative.
+    placeholders = ",".join(str(int(i)) for i in finding_ids)
+    conn.execute(
+        text(
+            f"DELETE FROM knowledge_edges "
+            f"WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})"
+        )
+    )
+    conn.execute(
+        text(f"DELETE FROM knowledge_nodes WHERE id IN ({placeholders})")
+    )
+
+
+def _backfill_promotion_status(conn) -> None:
+    """One-shot backfill that mirrors the old `is_publishable_concept_node`
+    rule into the new `promotion_status` column. Run once when the column is
+    first added; later evaluations go through the promotion service."""
+    rows = conn.execute(
+        text(
+            "SELECT id, node_type, node_origin, hidden, source_paper_ids "
+            "FROM knowledge_nodes"
+        )
+    ).mappings().all()
+    for row in rows:
+        node_type = (row["node_type"] or "").strip()
+        origin = (row["node_origin"] or "auto").strip().lower()
+        hidden = bool(row["hidden"])
+        try:
+            ids = json.loads(row["source_paper_ids"]) if row["source_paper_ids"] else []
+        except (TypeError, ValueError):
+            ids = []
+        unique_ids = {int(x) for x in ids if isinstance(x, (int, float, str)) and str(x).strip().lstrip("-").isdigit()}
+
+        if hidden:
+            status = "rejected"
+        elif origin == "manual":
+            status = "promoted" if node_type == "concept" else "pending"
+        elif node_type in _LEGACY_AUTO_CONCEPT_TYPES and len(unique_ids) >= 2:
+            status = "promoted"
+        elif node_type == "paper":
+            # Paper nodes don't participate in concept promotion; mark them
+            # `promoted` so filters that respect the column still surface
+            # papers, and any code path asking "is this a concept
+            # candidate?" must additionally check node_type.
+            status = "promoted"
+        else:
+            status = "pending"
+
+        conn.execute(
+            text(
+                "UPDATE knowledge_nodes "
+                "SET promotion_status = :status, "
+                "    promoted_by = CASE WHEN :status IN ('promoted','rejected') THEN 'legacy' ELSE NULL END "
+                "WHERE id = :id"
+            ),
+            {"status": status, "id": row["id"]},
+        )
 
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
@@ -45,6 +124,17 @@ def _migrate():
             conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN node_origin VARCHAR"))
         if "hidden" not in node_existing:
             conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN hidden BOOLEAN"))
+        # Concept-first promotion lifecycle (see ARCHITECTURE).
+        promotion_columns_added = False
+        if "promotion_status" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN promotion_status VARCHAR"))
+            promotion_columns_added = True
+        if "promoted_by" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN promoted_by VARCHAR"))
+        if "promotion_reason" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN promotion_reason TEXT"))
+        if "last_promotion_eval_at" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN last_promotion_eval_at DATETIME"))
         conn.execute(
             text(
                 "UPDATE knowledge_nodes "
@@ -52,6 +142,21 @@ def _migrate():
                 "    hidden = COALESCE(hidden, 0)"
             )
         )
+        # Drop finding nodes (one-shot cleanup; no-op once table is clean).
+        _drop_finding_nodes(conn)
+        if promotion_columns_added:
+            # Backfill: anything that satisfied the legacy publishable rule
+            # (auto concept-eligible types with >= 2 source papers, OR a
+            # manual concept) becomes `promoted` so existing wiki pages stay
+            # valid; everything else parks at `pending` for the next run.
+            _backfill_promotion_status(conn)
+        else:
+            conn.execute(
+                text(
+                    "UPDATE knowledge_nodes "
+                    "SET promotion_status = COALESCE(NULLIF(promotion_status, ''), 'pending')"
+                )
+            )
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")

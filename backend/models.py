@@ -61,6 +61,13 @@ class KnowledgeNode(Base):
     node_type = Column(String, default="concept")  # paper/technique/dataset/problem/concept/entity
     node_origin = Column(String, default="auto")   # auto/manual
     hidden = Column(Boolean, default=False)
+    # Promotion lifecycle for the concept-first design. `promotion_status`
+    # gates whether a node becomes a wiki concept page and whether it shows
+    # in the curated graph view. Paper nodes ignore this field.
+    promotion_status = Column(String, default="pending")  # pending/promoted/rejected
+    promoted_by = Column(String, nullable=True)            # heuristic/llm/user/legacy
+    promotion_reason = Column(Text, nullable=True)         # LLM rationale or user note
+    last_promotion_eval_at = Column(DateTime, nullable=True)
     tags = Column(JSON, default=list)
     embedding = Column(JSON, nullable=True)
     source_paper_ids = Column(JSON, default=list)  # list of Paper IDs

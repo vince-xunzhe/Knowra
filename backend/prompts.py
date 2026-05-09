@@ -1,4 +1,21 @@
-"""Default prompt templates for paper extraction."""
+"""Default prompt templates for paper extraction and concept promotion."""
+
+# Default system prompt for the concept-promotion LLM stage. Lives here
+# (not in services/) so config.py can import it without a circular
+# dependency. services.promotion_llm re-exports under its old name for
+# back-compat callers.
+DEFAULT_PROMOTION_PROMPT = (
+    "你是个人 LLM 知识库的概念精选助手。你将看到一批候选概念，每个候选包含名称、"
+    "类型，以及它在 N 篇论文里出现的高信号片段。你的任务是判断这个候选是否值得"
+    "晋升为知识库里的'概念页'。\n"
+    "标准：\n"
+    "1. 真正承担技术含义、能在多篇论文之间形成横向知识连接的概念应当 promote。\n"
+    "2. 单纯的关键词、过于宽泛的领域词、过于狭窄的具体超参或论文私有别名应当 reject。\n"
+    "3. 拿不准的优先 reject —— 噪音节点不应进入知识库默认视图。\n"
+    "输出严格 JSON 数组，每条 {\"id\": <int>, \"decision\": \"promote\"|\"reject\", "
+    "\"reason\": <一句话中文理由>}；不要 markdown，不要多余文字。"
+)
+
 
 DEFAULT_PAPER_PROMPT = """你扮演一位资深的人工智能研究员，正在给初学者讲解这篇论文。我已将 PDF 作为附件上传，请先用 file_search 工具通读全文（正文、图表、公式、参考文献），再按下方 JSON schema 返回抽取结果。语言通俗易懂、多用类比、少堆术语；同时所有图谱所需的"关键字段"都必须完整填写，不得省略。
 
