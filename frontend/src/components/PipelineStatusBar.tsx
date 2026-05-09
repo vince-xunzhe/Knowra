@@ -372,11 +372,6 @@ function StageCard({
   )
 }
 
-function StageDot({ tone }: { tone: StageTone }) {
-  const color = stagePalette(tone).dot
-  return <span className={`w-2 h-2 rounded-full ${color}`} />
-}
-
 function StageIcon({ tone }: { tone: StageTone }) {
   switch (tone) {
     case 'ok':

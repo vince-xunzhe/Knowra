@@ -6,7 +6,6 @@ const NODE_COLORS: Record<string, string> = {
   paper: '#6366f1',
   technique: '#22c55e',
   dataset: '#f59e0b',
-  problem_area: '#06b6d4',
   concept: '#14b8a6',
   entity: '#ec4899',
   topic: '#6366f1',
@@ -17,7 +16,6 @@ const NODE_LABELS: Record<string, string> = {
   paper: '论文',
   technique: '技术',
   dataset: '数据集',
-  problem_area: '研究领域',
   concept: '概念',
   entity: '实体',
   topic: '主题',
@@ -235,7 +233,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           area is reserved for the CandidatePanel floating card. */}
       <div className="absolute bottom-3 right-3 bg-slate-900/70 backdrop-blur rounded-lg px-2.5 py-1.5 border border-slate-800/80">
         <div className="flex items-center gap-3">
-          {['paper', 'concept', 'technique', 'dataset', 'problem_area'].map(type => (
+          {['paper', 'concept', 'technique', 'dataset'].map(type => (
             <div key={type} className="flex items-center gap-1.5">
               <span
                 className="w-2 h-2 rounded-full inline-block"

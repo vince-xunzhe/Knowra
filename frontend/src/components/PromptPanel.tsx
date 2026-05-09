@@ -1,17 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Save, RotateCcw, Hash, Loader2, Maximize2, X } from 'lucide-react'
+import {
+  Save,
+  RotateCcw,
+  Hash,
+  Loader2,
+  Maximize2,
+  X,
+  Pencil,
+} from 'lucide-react'
 import { getPrompt, updatePrompt, resetPrompt } from '../api/client'
 
-// Prompt editor with two presentations:
+// Prompt viewer / editor with two presentations:
 //   1. Compact panel — lives in the Papers right column (~24rem wide).
 //   2. Expanded modal  — full-screen overlay with a large textarea, line
 //      number gutter, and a default-prompt reference panel. Triggered by
 //      the maximize button.
 //
-// Both share the same `prompt` state, so unsaved edits flow seamlessly
-// between the two views. The modal mounts ON TOP of the compact view; we
-// don't unmount the compact panel so the user perceives the expand as an
-// overlay rather than a navigation.
+// Both share `prompt` + `isEditing` state, so toggling modes preserves
+// what the user typed and whether they're actively editing. Default is
+// view-mode (read-only); the user must click "编辑" before any change is
+// possible — protects the prompt from accidental edits.
+//
+// The modal mounts ON TOP of the compact view; we don't unmount the
+// compact panel so the user perceives the expand as an overlay rather
+// than a navigation.
 
 function estimateTokens(text: string): number {
   let cjk = 0, other = 0
@@ -29,6 +41,9 @@ export default function PromptPanel() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [isEditing, setIsEditing] = useState(false)
+  // Snapshot at edit-mode entry so 取消 can revert without re-fetching.
+  const [snapshot, setSnapshot] = useState('')
   const compactRef = useRef<HTMLTextAreaElement>(null)
   const expandedRef = useRef<HTMLTextAreaElement>(null)
 
@@ -41,11 +56,23 @@ export default function PromptPanel() {
       .finally(() => setLoading(false))
   }, [])
 
+  const handleEnterEdit = () => {
+    setSnapshot(prompt)
+    setIsEditing(true)
+    setSaved(false)
+  }
+
+  const handleCancelEdit = () => {
+    setPrompt(snapshot)
+    setIsEditing(false)
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
       await updatePrompt(prompt)
       setSaved(true)
+      setIsEditing(false)
       setTimeout(() => setSaved(false), 2000)
     } finally {
       setSaving(false)
@@ -60,12 +87,16 @@ export default function PromptPanel() {
     setTimeout(() => setSaved(false), 2000)
   }
 
-  // Cmd/Ctrl+S in either textarea saves. ESC closes the modal if open.
+  // Cmd/Ctrl+S in either textarea saves — but only when actually editing.
+  // ESC closes the modal if open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         const active = document.activeElement
-        if (active === compactRef.current || active === expandedRef.current) {
+        if (
+          isEditing &&
+          (active === compactRef.current || active === expandedRef.current)
+        ) {
           e.preventDefault()
           void handleSave()
         }
@@ -76,13 +107,13 @@ export default function PromptPanel() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [prompt, expanded])
+  }, [prompt, expanded, isEditing])
 
-  // Auto-focus the expanded textarea when the modal opens.
+  // Auto-focus the expanded textarea when the modal opens. Only meaningful
+  // in edit mode (read-only textareas don't accept caret input but still
+  // accept focus for selection — we focus regardless so users can copy).
   useEffect(() => {
     if (expanded) {
-      // requestAnimationFrame so the textarea exists in DOM by the time we
-      // call .focus().
       requestAnimationFrame(() => expandedRef.current?.focus())
     }
   }, [expanded])
@@ -106,29 +137,52 @@ export default function PromptPanel() {
       <div className="flex flex-col flex-1 min-h-0 overflow-hidden">
         {/* Action row */}
         <div className="px-5 py-3 border-b border-slate-800/80 flex flex-wrap items-center gap-2">
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400"
-          >
-            <Save size={12} />
-            {saved ? '已保存 ✓' : saving ? '保存中…' : '保存'}
-          </button>
-          <button
-            onClick={handleReset}
-            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors"
-            title="重置为默认 Prompt"
-          >
-            <RotateCcw size={11} /> 重置
-          </button>
+          {isEditing ? (
+            <>
+              <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400"
+              >
+                <Save size={12} />
+                {saved ? '已保存 ✓' : saving ? '保存中…' : '保存'}
+              </button>
+              <button
+                onClick={handleCancelEdit}
+                disabled={saving}
+                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleReset}
+                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors"
+                title="重置为默认 Prompt"
+              >
+                <RotateCcw size={11} /> 重置
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleEnterEdit}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              <Pencil size={12} />
+              编辑
+            </button>
+          )}
           <button
             onClick={() => setExpanded(true)}
             className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors"
-            title="在大窗口中编辑"
+            title="在大窗口中查看 / 编辑"
           >
             <Maximize2 size={11} /> 展开
           </button>
-          {isDirty ? (
+          {isEditing ? (
+            <span className="ml-auto chip bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[10px]">
+              编辑中
+            </span>
+          ) : isDirty ? (
             <span className="ml-auto chip bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[10px]">
               已自定义
             </span>
@@ -155,9 +209,16 @@ export default function PromptPanel() {
             ref={compactRef}
             value={prompt}
             onChange={e => setPrompt(e.target.value)}
+            readOnly={!isEditing}
             spellCheck={false}
-            className="w-full h-full bg-slate-950/60 border border-slate-800 rounded-xl text-slate-200 px-3 py-2.5 font-mono resize-none focus:outline-none focus:border-indigo-500/60 transition-colors"
-            placeholder="输入 extraction prompt…"
+            className={`w-full h-full bg-slate-950/60 border rounded-xl text-slate-200 px-3 py-2.5 font-mono resize-none focus:outline-none transition-colors ${
+              isEditing
+                ? 'border-slate-800 focus:border-indigo-500/60 cursor-text'
+                : 'border-slate-800/60 cursor-default text-slate-300'
+            }`}
+            placeholder={
+              isEditing ? '输入 extraction prompt…' : '点上方「编辑」开始修改'
+            }
             style={{
               fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
               tabSize: 2,
@@ -189,27 +250,52 @@ export default function PromptPanel() {
                 <span className="text-[11px] text-slate-500 tabular-nums">
                   {lineCount} 行 · {charCount} 字符 · ~{tokenEstimate.toLocaleString()} tokens
                 </span>
-                {isDirty ? (
-                  <span className="chip bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[10px]">已自定义</span>
+                {isEditing ? (
+                  <span className="chip bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[10px]">
+                    编辑中
+                  </span>
+                ) : isDirty ? (
+                  <span className="chip bg-indigo-500/15 text-indigo-200 border border-indigo-500/30 text-[10px]">
+                    已自定义
+                  </span>
                 ) : (
                   <span className="chip bg-slate-800 text-slate-500 text-[10px]">默认</span>
                 )}
-                <button
-                  onClick={handleReset}
-                  className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors"
-                  title="重置为默认 Prompt"
-                >
-                  <RotateCcw size={11} /> 重置
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400"
-                >
-                  <Save size={13} />
-                  {saved ? '已保存 ✓' : saving ? '保存中…' : '保存'}
-                  <span className="hidden sm:inline text-[10px] text-indigo-200/70 font-mono ml-0.5">⌘S</span>
-                </button>
+                {isEditing ? (
+                  <>
+                    <button
+                      onClick={handleReset}
+                      className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors"
+                      title="重置为默认 Prompt"
+                    >
+                      <RotateCcw size={11} /> 重置
+                    </button>
+                    <button
+                      onClick={handleCancelEdit}
+                      disabled={saving}
+                      className="inline-flex items-center text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 px-2 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors disabled:bg-slate-700 disabled:text-slate-400"
+                    >
+                      <Save size={13} />
+                      {saved ? '已保存 ✓' : saving ? '保存中…' : '保存'}
+                      <span className="hidden sm:inline text-[10px] text-indigo-200/70 font-mono ml-0.5">⌘S</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={handleEnterEdit}
+                    className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3 py-1.5 rounded-lg transition-colors"
+                  >
+                    <Pencil size={13} />
+                    编辑
+                  </button>
+                )}
                 <button
                   onClick={() => setExpanded(false)}
                   className="text-slate-500 hover:text-slate-100 hover:bg-slate-800/60 rounded-lg p-1.5 transition-colors"
@@ -223,15 +309,28 @@ export default function PromptPanel() {
             {/* Body: editor + sidebar with default prompt */}
             <div className="flex-1 min-h-0 grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
               {/* Editor with line-number gutter */}
-              <div className="h-full relative rounded-xl border border-slate-800 bg-slate-950/60 focus-within:border-indigo-500/60 transition-colors overflow-hidden flex">
+              <div
+                className={`h-full relative rounded-xl border bg-slate-950/60 transition-colors overflow-hidden flex ${
+                  isEditing
+                    ? 'border-slate-800 focus-within:border-indigo-500/60'
+                    : 'border-slate-800/60'
+                }`}
+              >
                 <LineGutter lines={lineCount} />
                 <textarea
                   ref={expandedRef}
                   value={prompt}
                   onChange={e => setPrompt(e.target.value)}
+                  readOnly={!isEditing}
                   spellCheck={false}
-                  className="flex-1 bg-transparent text-[13px] text-slate-200 px-4 py-4 font-mono leading-6 resize-none focus:outline-none placeholder:text-slate-600"
-                  placeholder="输入 extraction prompt…"
+                  className={`flex-1 bg-transparent text-[13px] px-4 py-4 font-mono leading-6 resize-none focus:outline-none placeholder:text-slate-600 ${
+                    isEditing
+                      ? 'text-slate-200 cursor-text'
+                      : 'text-slate-300 cursor-default'
+                  }`}
+                  placeholder={
+                    isEditing ? '输入 extraction prompt…' : '点右上「编辑」开始修改'
+                  }
                   style={{ fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace', tabSize: 2 }}
                 />
               </div>

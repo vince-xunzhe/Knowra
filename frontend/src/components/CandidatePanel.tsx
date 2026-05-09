@@ -34,9 +34,10 @@ interface Props {
   onOpenRescue: () => void
   onPromotionRunFinished: () => void
   /** Outer view kind. Promotion controls are only meaningful for the
-   *  structured node graph; on the compiled-wiki swim-lane the panel
-   *  auto-collapses to header strip so it doesn't dominate the view. */
-  viewKind?: 'graph' | 'compiled'
+   *  structured node graph; on compiled-wiki swim-lane and the flat
+   *  concept list the panel auto-collapses to a header strip so it
+   *  doesn't dominate either view. */
+  viewKind?: 'graph' | 'compiled' | 'concepts'
 }
 
 /**
@@ -105,12 +106,12 @@ export default function CandidatePanel({
     void refresh()
   }, [refresh])
 
-  // Compiled-graph view doesn't surface promotion candidates, so when the
-  // user toggles into it we collapse the panel back to its header strip.
-  // We don't auto-re-expand on switch back — the user can hit the chevron
-  // when they're ready to act.
+  // Compiled-graph and concept-list views are read/browse focused, so the
+  // promotion controls aren't urgent — collapse back to the header strip
+  // when the user toggles in. We don't auto-re-expand on switch back —
+  // the user can hit the chevron when they're ready to act.
   useEffect(() => {
-    if (viewKind === 'compiled') setCollapsed(true)
+    if (viewKind === 'compiled' || viewKind === 'concepts') setCollapsed(true)
   }, [viewKind])
 
   // 5-second auto-dismiss toast that surfaces "run finished / accept finished"
@@ -226,12 +227,13 @@ export default function CandidatePanel({
   // Ultra-compact mode: compiled-graph view + collapsed = bare header
   // strip only (no timestamp / counts / suggestion). Click chevron to
   // expand back to the full panel even in compiled mode.
-  const ultraCompact = viewKind === 'compiled' && collapsed
+  const ultraCompact =
+    (viewKind === 'compiled' || viewKind === 'concepts') && collapsed
 
   return (
     <div
       className={`absolute bottom-3 left-3 z-20 ${
-        ultraCompact ? 'w-auto' : 'w-[22rem] max-w-[40vw]'
+        ultraCompact ? 'w-auto' : 'w-[24rem] max-w-[42vw]'
       } bg-slate-900/92 backdrop-blur rounded-xl border border-slate-800 shadow-xl shadow-black/40 text-slate-200`}
     >
       <header
@@ -241,15 +243,15 @@ export default function CandidatePanel({
       >
         <Sparkles size={ultraCompact ? 11 : 13} className="text-indigo-300" />
         <span
-          className={`font-semibold tracking-wide uppercase text-slate-300 ${
-            ultraCompact ? 'text-[10px]' : 'text-xs'
+          className={`font-semibold tracking-[0.08em] text-slate-300 ${
+            ultraCompact ? 'text-[11px]' : 'text-[14px]'
           }`}
         >
           概念精选
         </span>
         <span
           className={`ml-auto flex items-center gap-1 ${headerStatus.tone} ${
-            ultraCompact ? 'text-[10px]' : 'text-[11px]'
+            ultraCompact ? 'text-[11px]' : 'text-[12px]'
           }`}
         >
           <span className="font-mono">{headerStatus.icon}</span>
@@ -272,24 +274,24 @@ export default function CandidatePanel({
           to leave the compiled-graph canvas as much room as possible. */}
       {!ultraCompact && (
         <>
-          <div className="px-4 pb-2 flex items-center gap-2 text-[11px] text-slate-500">
-            <Clock size={10} />
+          <div className="px-4 pb-2 flex items-center gap-2 text-[12px] text-slate-500">
+            <Clock size={11} />
             <span>{lastEvalText}</span>
           </div>
 
-          <div className="px-4 pb-2 flex items-center gap-x-2.5 gap-y-1 text-[11px] flex-wrap">
+          <div className="px-4 pb-2 flex items-center gap-x-2.5 gap-y-1.5 text-[12px] flex-wrap">
             <CountChip label="候选" value={summary?.counts.pending ?? 0} tone="amber" />
             <CountChip label="选中" value={summary?.counts.promoted ?? 0} tone="emerald" />
             <CountChip label="淘汰" value={summary?.counts.rejected ?? 0} tone="rose" />
             <span className="text-slate-700">·</span>
             <CountChip
-              icon={<Hand size={9} />}
+              icon={<Hand size={10} />}
               label="human"
               value={summary?.by.user ?? 0}
               tone="slate"
             />
             <CountChip
-              icon={<Bot size={9} />}
+              icon={<Bot size={10} />}
               label="agent"
               value={summary?.by.llm ?? 0}
               tone="slate"
@@ -297,8 +299,8 @@ export default function CandidatePanel({
           </div>
 
           {suggestion && (
-            <div className="mx-4 mb-3 px-2.5 py-1.5 rounded-md bg-indigo-500/10 border border-indigo-500/30 text-[11px] text-indigo-200 flex items-center gap-1.5">
-              <ArrowRight size={11} />
+            <div className="mx-4 mb-3 px-3 py-2 rounded-lg bg-indigo-500/10 border border-indigo-500/30 text-[12px] text-indigo-200 flex items-center gap-1.5 leading-relaxed">
+              <ArrowRight size={12} />
               <span>{suggestion}</span>
             </div>
           )}
@@ -318,7 +320,7 @@ export default function CandidatePanel({
                 busy={running}
                 highlight={suggestedCta === 'run'}
                 tone="indigo"
-                icon={<Zap size={9} />}
+                icon={<Zap size={12} />}
                 busyLabel="剔除中…"
                 title="对所有候选节点跑启发式 + Agent 剔除"
               >
@@ -327,13 +329,13 @@ export default function CandidatePanel({
               <button
                 onClick={() => setPromptEditorOpen(true)}
                 title="编辑发给 Agent 的剔除提示词；留空则只跑启发式"
-                className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition-colors"
+                className="inline-flex min-h-9 items-center gap-1.5 text-[12px] font-medium px-3 py-2 rounded-lg border border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-300 transition-colors"
               >
-                <Pencil size={9} />
+                <Pencil size={12} />
                 编辑提示词
               </button>
             </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 mt-2">
+            <div className="flex flex-wrap gap-x-4 gap-y-2 text-[12px] text-slate-400 mt-2.5 leading-relaxed">
               <label
                 className="inline-flex items-center gap-1.5 cursor-pointer"
                 title={
@@ -397,7 +399,7 @@ export default function CandidatePanel({
                 disabled={running || !summary?.by.llm}
                 highlight={suggestedCta === 'accept'}
                 tone="emerald"
-                icon={<ShieldCheck size={9} />}
+                icon={<ShieldCheck size={12} />}
                 busyLabel="锁定中…"
                 title="把所有 Agent 的剔除结果打上 human 标记，下次自动剔除不再覆盖"
               >
@@ -409,7 +411,7 @@ export default function CandidatePanel({
                 busy={false}
                 disabled={!summary?.counts.rejected}
                 tone="slate"
-                icon={<Trash2 size={9} />}
+                icon={<Trash2 size={12} />}
                 title="打开回收站，按淘汰来源分组查看并召回误删节点"
               >
                 召回误剔
@@ -418,10 +420,10 @@ export default function CandidatePanel({
           </PhaseSection>
 
           {(toast || error || lastRun) && (
-            <div className="mx-4 mb-3 px-3 py-2 rounded-lg border border-slate-700 bg-slate-950/70 text-[11px] text-slate-400 leading-relaxed space-y-1">
+            <div className="mx-4 mb-3 px-3 py-2.5 rounded-lg border border-slate-700 bg-slate-950/70 text-[12px] text-slate-400 leading-relaxed space-y-1">
               {toast && (
                 <p className="text-emerald-300 flex items-center gap-1.5">
-                  <Check size={11} /> {toast}
+                  <Check size={12} /> {toast}
                 </p>
               )}
               {error && <p className="text-rose-300">{error}</p>}
@@ -457,17 +459,17 @@ function PhaseSection({
   return (
     <section className="px-4 pb-3 pt-2.5 border-t border-slate-800/60 first:border-t-0">
       <div className="flex items-baseline gap-2 mb-1">
-        <span className="text-[12px] text-indigo-300 font-mono tabular-nums font-semibold">
+        <span className="text-[13px] text-indigo-300 font-mono tabular-nums font-semibold">
           {index}
         </span>
-        <span className="text-[14px] text-white font-semibold tracking-tight">
+        <span className="text-[15px] text-white font-semibold tracking-tight">
           {title}
         </span>
         {description && (
           <button
             type="button"
             onClick={() => setShowDescription(s => !s)}
-            className="ml-auto text-[10px] text-slate-500 hover:text-slate-300 transition-colors w-4 h-4 inline-flex items-center justify-center rounded-full border border-slate-700"
+            className="ml-auto text-[11px] text-slate-500 hover:text-slate-300 transition-colors w-5 h-5 inline-flex items-center justify-center rounded-full border border-slate-700"
             title={showDescription ? '收起说明' : '展开说明'}
             aria-label="切换说明"
           >
@@ -476,7 +478,7 @@ function PhaseSection({
         )}
       </div>
       {description && showDescription && (
-        <p className="mb-2 text-[11px] text-slate-400 leading-relaxed bg-slate-950/40 border border-slate-800/60 rounded-md px-2.5 py-1.5">
+        <p className="mb-2.5 text-[12px] text-slate-400 leading-6 bg-slate-950/40 border border-slate-800/60 rounded-lg px-3 py-2">
           {description}
         </p>
       )}
@@ -522,9 +524,9 @@ function CtaButton({
       onClick={onClick}
       disabled={busy || disabled}
       title={title}
-      className={`inline-flex items-center justify-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded disabled:opacity-50 transition-all ${palette} ${ring}`}
+      className={`inline-flex min-h-9 items-center justify-center gap-1.5 text-[12px] font-medium px-3 py-2 rounded-lg disabled:opacity-50 transition-all ${palette} ${ring}`}
     >
-      {busy ? <Loader2 size={9} className="animate-spin" /> : icon}
+      {busy ? <Loader2 size={12} className="animate-spin" /> : icon}
       {busy && busyLabel ? busyLabel : children}
     </button>
   )
@@ -554,14 +556,14 @@ function ModeToggle({
     {
       id: 'off',
       label: '仅选中节点',
-      icon: <EyeOff size={9} />,
+      icon: <EyeOff size={12} />,
       disabled: false,
       title: '只显示已选中（promoted）的节点',
     },
     {
       id: 'pending',
       label: `仅候选节点${pendingCount > 0 ? ` (${pendingCount})` : ''}`,
-      icon: <Eye size={9} />,
+      icon: <Eye size={12} />,
       disabled: pendingCount === 0,
       title:
         pendingCount === 0
@@ -571,7 +573,7 @@ function ModeToggle({
     {
       id: 'all',
       label: '全量节点',
-      icon: <Eye size={9} />,
+      icon: <Eye size={12} />,
       disabled: pendingCount === 0 && rejectedCount === 0,
       title:
         pendingCount === 0 && rejectedCount === 0
@@ -580,7 +582,7 @@ function ModeToggle({
     },
   ]
   return (
-    <div className="flex gap-0.5 p-0.5 rounded bg-slate-950/60 border border-slate-800">
+    <div className="flex gap-0.5 p-1 rounded-lg bg-slate-950/60 border border-slate-800">
       {options.map(opt => {
         const active = value === opt.id
         return (
@@ -589,7 +591,7 @@ function ModeToggle({
             onClick={() => onChange(opt.id)}
             disabled={opt.disabled && !active}
             title={opt.title}
-            className={`flex-1 inline-flex items-center justify-center gap-0.5 text-[10px] py-0.5 px-1 rounded whitespace-nowrap transition-colors ${
+            className={`flex-1 inline-flex min-h-9 items-center justify-center gap-1 text-[12px] py-2 px-2.5 rounded-md whitespace-nowrap transition-colors ${
               active
                 ? 'bg-slate-800 text-white shadow-inner'
                 : opt.disabled

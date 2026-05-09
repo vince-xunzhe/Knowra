@@ -6,6 +6,7 @@ import RejectedRescueModal from '../components/RejectedRescueModal'
 import CandidatePanel from '../components/CandidatePanel'
 import PipelineStatusBar from '../components/PipelineStatusBar'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
+import ConceptListView from '../components/ConceptListView'
 import {
   createManualConcept,
   getGraph,
@@ -38,11 +39,19 @@ interface ProcStatus {
 const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
   { id: 'all', label: '全部', color: '' },
   { id: 'paper', label: '论文', color: '#6366f1' },
-  { id: 'concept', label: '概念', color: '#14b8a6' },
   { id: 'technique', label: '技术', color: '#22c55e' },
   { id: 'dataset', label: '数据集', color: '#f59e0b' },
-  { id: 'problem_area', label: '研究领域', color: '#06b6d4' },
 ]
+
+// Node types treated as "concepts" by the dedicated concept-list view.
+// Subset of the backend's AUTO_CONCEPT_NODE_TYPES — problem_area is
+// intentionally excluded so research-area nodes never surface in the
+// node graph or the concept catalog.
+const CONCEPT_ELIGIBLE_TYPES = new Set(['technique', 'dataset', 'concept'])
+
+// Node types hidden from the structured node graph regardless of any
+// filter. Stays in DB and rescue UI but never renders on the canvas.
+const NODE_GRAPH_HIDDEN_TYPES = new Set(['problem_area'])
 
 export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
@@ -65,11 +74,12 @@ export default function GraphPage() {
   //   all       — also surface rejected nodes (ghosted) for rescue
   const [candidateMode, setCandidateMode] = useState<'off' | 'pending' | 'all'>('off')
   const [rescueOpen, setRescueOpen] = useState(false)
-  // Two flavors of graph: the structured Cytoscape view (KnowledgeGraph)
-  // and the compile-aware swim-lane (WikiKnowledgeMap). Toggle in the
-  // header so the user can flip between "what's in the DB" and "what
-  // the wiki layer compiled from it".
-  const [viewKind, setViewKind] = useState<'graph' | 'compiled'>('graph')
+  // Three flavors of view:
+  //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
+  //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
+  //   - concepts : flat list grouped by node_type — concepts as a curated
+  //                catalog rather than nodes in a graph
+  const [viewKind, setViewKind] = useState<'graph' | 'compiled' | 'concepts'>('graph')
   const [wikiGraph, setWikiGraph] = useState<WikiGraphData | null>(null)
   const [wikiGraphLoading, setWikiGraphLoading] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -154,34 +164,43 @@ export default function GraphPage() {
   }, [loadGraph])
 
   const visibleData = useMemo(() => {
+    // First strip types we never want on the node-graph canvas (e.g.
+    // problem_area), regardless of promotion state. Backend keeps these
+    // rows so historical data isn't lost; the UI just doesn't render
+    // them.
+    const allowed = graphData.nodes.filter(
+      n => !NODE_GRAPH_HIDDEN_TYPES.has(n.node_type),
+    )
+    let allowedIds = new Set(allowed.map(n => n.id))
+
     // Backend already filters by candidateMode (include_candidates flag);
     // the only frontend job left is the optional "hide rejected" pass
     // when the user picked +待评 instead of +已淘汰.
     if (candidateMode === 'pending') {
-      const nodeIds = new Set(
-        graphData.nodes
-          .filter(n => n.promotion_status !== 'rejected')
-          .map(n => n.id),
+      allowedIds = new Set(
+        allowed.filter(n => n.promotion_status !== 'rejected').map(n => n.id),
       )
-      return {
-        nodes: graphData.nodes.filter(n => nodeIds.has(n.id)),
-        edges: graphData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
-      }
     }
-    return graphData
+    return {
+      nodes: allowed.filter(n => allowedIds.has(n.id)),
+      edges: graphData.edges.filter(
+        e => allowedIds.has(e.source) && allowedIds.has(e.target),
+      ),
+    }
   }, [graphData, candidateMode])
 
   const filteredData = useMemo(() => {
     if (typeFilter === 'all') {
       return visibleData
     }
-
     const nodeIds = new Set(
-      visibleData.nodes.filter(n => n.node_type === typeFilter).map(n => n.id)
+      visibleData.nodes.filter(n => n.node_type === typeFilter).map(n => n.id),
     )
     return {
       nodes: visibleData.nodes.filter(n => nodeIds.has(n.id)),
-      edges: visibleData.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target)),
+      edges: visibleData.edges.filter(
+        e => nodeIds.has(e.source) && nodeIds.has(e.target),
+      ),
     }
   }, [visibleData, typeFilter])
 
@@ -348,11 +367,20 @@ export default function GraphPage() {
   )
 
   const nodeTypeCounts = NODE_TYPE_FILTERS.reduce((acc, f) => {
-    acc[f.id] = f.id === 'all'
-      ? visibleData.nodes.length
-      : visibleData.nodes.filter(n => n.node_type === f.id).length
+    acc[f.id] =
+      f.id === 'all'
+        ? visibleData.nodes.length
+        : visibleData.nodes.filter(n => n.node_type === f.id).length
     return acc
   }, {} as Record<string, number>)
+
+  // Count of concept-eligible nodes that would render in the concepts
+  // view. Drives the disabled state of the 概念 toggle and any "暂无"
+  // empty-state hint downstream. Uses visibleData so the button reflects
+  // what the user would see right now (respects candidateMode).
+  const conceptCount = visibleData.nodes.filter(n =>
+    CONCEPT_ELIGIBLE_TYPES.has(n.node_type),
+  ).length
 
   const progressPct = status?.running && status.total > 0
     ? Math.round((status.done / status.total) * 100)
@@ -554,32 +582,70 @@ export default function GraphPage() {
           >
             编译图谱
           </button>
+          <button
+            onClick={() => setViewKind('concepts')}
+            disabled={conceptCount === 0 && viewKind !== 'concepts'}
+            title={
+              conceptCount === 0
+                ? '当前没有可展示的概念（先处理论文 / 调整候选模式）'
+                : '按类目展开的概念目录（列表形式）'
+            }
+            className={`rounded-lg px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed ${
+              viewKind === 'concepts'
+                ? 'bg-slate-800 text-white'
+                : conceptCount === 0
+                  ? 'text-slate-700'
+                  : 'text-slate-500 hover:text-slate-200'
+            }`}
+          >
+            概念
+          </button>
         </div>
 
-        <Filter size={12} className="text-slate-600" />
-        <div className="flex flex-wrap gap-1">
-          {NODE_TYPE_FILTERS.map(f => {
-            const active = typeFilter === f.id
-            const count = nodeTypeCounts[f.id] || 0
-            return (
-              <button
-                key={f.id}
-                onClick={() => setTypeFilter(f.id)}
-                className={`inline-flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors ${
-                  active
-                    ? 'bg-slate-800 text-white'
-                    : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/40'
-                }`}
-              >
-                {f.color && (
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ background: f.color }} />
-                )}
-                {f.label}
-                <span className="tabular-nums text-slate-600">{count}</span>
-              </button>
-            )
-          })}
-        </div>
+        {/* Node-type filter chips only apply to the structured node graph.
+            Compiled mode has its own internal swim-lane grouping; concepts
+            mode is already grouped by category in the list — both collapse
+            the chip row to a small inline hint. */}
+        {viewKind === 'graph' ? (
+          <>
+            <Filter size={12} className="text-slate-600" />
+            <div className="flex flex-wrap gap-1">
+              {NODE_TYPE_FILTERS.map(f => {
+                const active = typeFilter === f.id
+                const count = nodeTypeCounts[f.id] || 0
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => setTypeFilter(f.id)}
+                    className={`inline-flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors ${
+                      active
+                        ? 'bg-slate-800 text-white'
+                        : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/40'
+                    }`}
+                  >
+                    {f.color && (
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: f.color }} />
+                    )}
+                    {f.label}
+                    <span className="tabular-nums text-slate-600">{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          </>
+        ) : (
+          <span
+            className="inline-flex items-center gap-1.5 text-[11px] text-slate-600"
+            title={
+              viewKind === 'compiled'
+                ? '编译图谱按类目分泳道，无需类型筛选；切回节点图谱可展开'
+                : '概念视图已按类目分组，无需类型筛选；切回节点图谱可展开'
+            }
+          >
+            <Filter size={11} />
+            类型筛选 — 仅节点图谱
+          </span>
+        )}
       </div>
 
       {/* Main canvas area */}
@@ -589,6 +655,31 @@ export default function GraphPage() {
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
               加载中…
             </div>
+          ) : viewKind === 'compiled' ? (
+            // Compiled-graph view has its own data source (wiki .md → swim
+            // lane). Branch first so the node-graph filter state can't make
+            // it look "empty" when there are 70 compiled concept pages.
+            wikiGraphLoading && !wikiGraph ? (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                <Loader2 size={14} className="animate-spin mr-2" /> 加载编译图谱…
+              </div>
+            ) : wikiGraph && (wikiGraph.nodes?.length ?? 0) > 0 ? (
+              <WikiKnowledgeMap
+                data={wikiGraph}
+                selectedId={selectedNode?.id || null}
+                onPick={handleWikiGraphPick}
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                没有可用的编译图谱（先在管道里编译论文页 / 概念页）
+              </div>
+            )
+          ) : viewKind === 'concepts' ? (
+            <ConceptListView
+              nodes={visibleData.nodes.filter(n => CONCEPT_ELIGIBLE_TYPES.has(n.node_type))}
+              selectedId={selectedNode?.id || null}
+              onPick={focusNode}
+            />
           ) : filteredData.nodes.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-5 px-6 text-center">
               {/* SVG illustration: dotted grid with floating nodes */}
@@ -639,22 +730,6 @@ export default function GraphPage() {
                 </button>
               </div>
             </div>
-          ) : viewKind === 'compiled' ? (
-            wikiGraphLoading && !wikiGraph ? (
-              <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                <Loader2 size={14} className="animate-spin mr-2" /> 加载编译图谱…
-              </div>
-            ) : wikiGraph ? (
-              <WikiKnowledgeMap
-                data={wikiGraph}
-                selectedId={selectedNode?.id || null}
-                onPick={handleWikiGraphPick}
-              />
-            ) : (
-              <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                没有可用的编译图谱（先在管道里编译论文页 / 概念页）
-              </div>
-            )
           ) : (
             <KnowledgeGraph
               data={filteredData}
