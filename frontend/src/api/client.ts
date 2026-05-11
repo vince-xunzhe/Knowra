@@ -104,6 +104,16 @@ export interface ManualConceptInput {
   tags: string[]
 }
 
+export interface ManualConceptSaveResult {
+  node: NodeDetail
+  created: boolean
+  reused_existing: boolean
+  adopted_existing: boolean
+  merged_tags: number
+  merged_papers: number
+  content_applied: boolean
+}
+
 export interface AvailableModel {
   id: string
   label: string
@@ -193,9 +203,9 @@ export const rebuildEdges = () =>
   api.post<{ threshold: number; total_edges: number }>('/graph/rebuild_edges').then(r => r.data)
 export const resetGraph = () => api.post<{ message: string }>('/graph/reset').then(r => r.data)
 export const createManualConcept = (data: ManualConceptInput) =>
-  api.post<{ node: NodeDetail }>('/graph/manual_concepts', data).then(r => r.data)
+  api.post<ManualConceptSaveResult>('/graph/manual_concepts', data).then(r => r.data)
 export const updateManualConcept = (id: number, data: ManualConceptInput) =>
-  api.put<{ node: NodeDetail }>(`/graph/manual_concepts/${id}`, data).then(r => r.data)
+  api.put<ManualConceptSaveResult>(`/graph/manual_concepts/${id}`, data).then(r => r.data)
 export const suppressNode = (id: number) =>
   api.post<{ message: string; node_id: number }>(`/graph/nodes/${id}/suppress`).then(r => r.data)
 export const restoreNode = (id: number) =>
@@ -469,13 +479,29 @@ export interface SynthesisConceptInput {
   title: string
   body: string
   source_question?: string
+  source_questions?: string[]
+  synthesis_scope?: 'turn' | 'session'
+  force_create?: boolean
   source_paper_ids?: number[]
   tags?: string[]
 }
 
+export interface SynthesisConceptResult {
+  concept_id: number
+  filename: string
+  path: string
+  created: boolean
+  reused_existing: boolean
+  forced_create: boolean
+  concept_title?: string
+  analysis_used?: boolean
+  analysis_model?: string | null
+  related_concepts_added?: number
+}
+
 export const createSynthesisConcept = (payload: SynthesisConceptInput) =>
   api
-    .post<{ concept_id: number; filename: string; path: string }>(
+    .post<SynthesisConceptResult>(
       '/wiki/concepts/from_synthesis',
       payload,
     )

@@ -105,8 +105,21 @@ export default function SettingsPage() {
         </SettingGroup>
 
         {/* Model */}
-        <SettingGroup title="模型" description="配置论文交互模型与图谱向量模型">
-          <Field icon={<Cpu size={14} />} label="论文交互模型">
+        <SettingGroup title="模型" description="这三个模型分工不同：一个负责读 PDF 并抽取论文，一个负责图谱相似边，一个负责 Wiki 写作与 Ask 问答。它们不是重复配置。">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+            <p className="text-sm font-medium text-slate-200">流程分工</p>
+            <div className="mt-2 space-y-2 text-xs leading-relaxed text-slate-500">
+              <p><span className="text-slate-300">论文抽取与追问模型</span>：读取 PDF，产出结构化抽取结果，并回答单篇论文追问。</p>
+              <p><span className="text-slate-300">图谱相似度模型</span>：把节点变成向量，计算 `similar` 相似边，影响图谱连接质量。</p>
+              <p><span className="text-slate-300">知识库写作与问答模型</span>：把已抽取内容改写成 Wiki 条目，并驱动 Ask 的跨文档问答。</p>
+            </div>
+          </div>
+
+          <Field
+            icon={<Cpu size={14} />}
+            label="论文抽取与追问模型"
+            hint="用于读取 PDF（file_search）并抽取结构化结果，也用于论文页里的追问。它决定论文处理质量。"
+          >
             <select
               value={config.vlm_model || 'gpt-4o'}
               onChange={e => setConfig(c => ({ ...c, vlm_model: e.target.value }))}
@@ -117,7 +130,7 @@ export default function SettingsPage() {
               ) : (
                 models.map(m => (
                   <option key={m.id} value={m.id}>
-                    {m.label} {m.supports_vision ? '[视觉]' : ''} — {m.desc}
+                    {m.label} {m.supports_vision ? '[视觉]' : ''}
                   </option>
                 ))
               )}
@@ -126,8 +139,8 @@ export default function SettingsPage() {
 
           <Field
             icon={<Cpu size={14} />}
-            label="Embedding 模型"
-            hint="用于图谱节点向量化与相似度连接计算"
+            label="图谱相似度模型"
+            hint="用于图谱节点向量化与相似度连接计算。它不直接读取 PDF，而是决定哪些论文、技术、数据集在图谱里彼此接近。"
           >
             <select
               value={config.embedding_model || 'text-embedding-3-small'}
@@ -139,7 +152,7 @@ export default function SettingsPage() {
               ) : (
                 embeddingModels.map(m => (
                   <option key={m.id} value={m.id}>
-                    {m.label} — {m.desc}
+                    {m.label}
                   </option>
                 ))
               )}
@@ -148,8 +161,8 @@ export default function SettingsPage() {
 
           <Field
             icon={<Cpu size={14} />}
-            label="Wiki 编译模型"
-            hint="用于「概念」页的 LLM 编译（论文百科页 + 概念综述页）。与论文交互模型解耦：编译只是文本摘要，gpt-4o-mini 已够用。"
+            label="知识库写作与问答模型"
+            hint="用于生成论文 Wiki 页、概念综述页、Ask 面板问答，以及概念精选里的 LLM 判断。它主要处理已经抽取好的文本，不再直接读取 PDF。"
           >
             <select
               value={config.wiki_compile_model || 'gpt-4o-mini'}
@@ -161,7 +174,7 @@ export default function SettingsPage() {
               ) : (
                 compileModels.map(m => (
                   <option key={m.id} value={m.id}>
-                    {m.label} — {m.desc}
+                    {m.label}
                   </option>
                 ))
               )}
@@ -178,10 +191,10 @@ export default function SettingsPage() {
             <div className="flex-1 min-w-0">
               <p className="text-sm text-slate-200 font-medium flex items-center gap-2">
                 <ImageIcon size={13} className="text-slate-500" />
-                随文本发送首页图像
+                为论文抽取附带首页图像
               </p>
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                首页含标题、作者、摘要，有助于模型准确提取元信息。仅对支持视觉的模型生效。
+                首页通常包含标题、作者和摘要，有助于论文抽取模型更准确地识别元信息。仅对支持视觉的模型生效。
               </p>
               {selectedModel && !selectedModel.supports_vision && config.use_first_page_image && (
                 <p className="text-xs text-amber-400 mt-2 flex items-center gap-1.5">

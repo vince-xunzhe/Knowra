@@ -50,6 +50,8 @@ const RELATION_LABELS: Record<string, string> = {
   evaluated_on: '评测于',
   compared_to: '对比',
   similar: '相似',
+  related: '相关',
+  contrasts_with: '对照',
   belongs_to: '属于',
   curated_link: '人工关联',
 }

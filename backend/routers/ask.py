@@ -15,15 +15,17 @@ from sqlalchemy.orm import Session
 
 from config import load_config
 from database import get_db
-from models import KnowledgeNode, Paper
+from models import KnowledgeEdge, KnowledgeNode, Paper
 from services import ask_agent, wiki_index
 from services import wiki_search as wiki_search_service
 from services.graph_service import (
     MANUAL_NODE_ORIGIN,
     PROMOTED_BY_USER,
     PROMOTION_PROMOTED,
+    find_existing_concept_node,
     normalize_source_paper_ids,
 )
+from services.synthesis_concept_service import analyze_synthesis_concept
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
     _concept_page_path,
@@ -133,8 +135,58 @@ class SynthesisConceptInput(BaseModel):
     title: str
     body: str
     source_question: Optional[str] = None
+    source_questions: List[str] = []
+    synthesis_scope: Optional[str] = "turn"
+    force_create: bool = False
     source_paper_ids: List[int] = []
     tags: List[str] = []
+
+
+def _sync_synthesis_relation_edges(
+    db: Session,
+    *,
+    source_node_id: int,
+    related_links: list,
+) -> list[dict]:
+    if not related_links:
+        return []
+    node_map = {
+        node.id: node
+        for node in db.query(KnowledgeNode).all()
+        if getattr(node, "id", None) != source_node_id and (node.node_type or "") != "paper"
+    }
+    symmetric_relations = {"related", "contrasts_with", "similar"}
+    existing_edges = {
+        (edge.source_id, edge.target_id, edge.relation_type)
+        for edge in db.query(KnowledgeEdge).all()
+    }
+    resolved: list[dict] = []
+    created = False
+    for link in related_links:
+        target = node_map.get(getattr(link, "concept_id", None))
+        relation = (getattr(link, "relation_type", "") or "").strip().lower()
+        if target is None or not relation:
+            continue
+        resolved.append({
+            "concept_id": target.id,
+            "title": target.title,
+            "relation_type": relation,
+        })
+        key = (source_node_id, target.id, relation)
+        reverse_key = (target.id, source_node_id, relation)
+        if key in existing_edges or (relation in symmetric_relations and reverse_key in existing_edges):
+            continue
+        db.add(KnowledgeEdge(
+            source_id=source_node_id,
+            target_id=target.id,
+            relation_type=relation,
+            weight=1.0,
+        ))
+        existing_edges.add(key)
+        created = True
+    if created:
+        db.commit()
+    return resolved
 
 
 def _filename_to_paper_id(filename: str) -> Optional[int]:
@@ -174,15 +226,30 @@ def create_concept_from_synthesis(
     md_body = (body.body or "").strip()
     if not md_body:
         raise HTTPException(status_code=400, detail="内容不能为空")
+    synthesis_scope = (body.synthesis_scope or "turn").strip().lower()
+    if synthesis_scope not in {"turn", "session"}:
+        synthesis_scope = "turn"
+
+    source_questions: list[str] = []
+    seen_questions: set[str] = set()
+    for raw in body.source_questions or []:
+        question = (raw or "").strip()
+        if question and question not in seen_questions:
+            source_questions.append(question)
+            seen_questions.add(question)
+    source_question = (body.source_question or "").strip()
+    if source_question and source_question not in seen_questions:
+        source_questions.insert(0, source_question)
+        seen_questions.add(source_question)
 
     # Normalize tags + paper ids the same way manual_concepts does.
     tag_set: list[str] = []
-    seen: set[str] = set()
+    seen_tags: set[str] = set()
     for raw in body.tags or []:
         t = (raw or "").strip()
-        if t and t.lower() not in seen:
+        if t and t.lower() not in seen_tags:
             tag_set.append(t)
-            seen.add(t.lower())
+            seen_tags.add(t.lower())
 
     paper_ids = []
     if body.source_paper_ids:
@@ -192,9 +259,66 @@ def create_concept_from_synthesis(
         }
         paper_ids = [pid for pid in paper_ids if pid in existing]
 
+    cfg = load_config()
+    analysis = analyze_synthesis_concept(
+        db,
+        title=title,
+        body_markdown=md_body,
+        source_questions=source_questions,
+        synthesis_scope=synthesis_scope,
+        source_paper_ids=paper_ids,
+        user_tags=tag_set,
+        api_key=cfg.get("openai_api_key") or "",
+        model=cfg.get("wiki_compile_model") or "gpt-4o-mini",
+    )
+    summary = (analysis.summary or "").strip() or title
+    body_markdown = (analysis.body_markdown or "").strip() or md_body
+    for tag in analysis.tags:
+        key = tag.lower()
+        if key in seen_tags:
+            continue
+        tag_set.append(tag)
+        seen_tags.add(key)
+
+    # Title duplicates stay deterministic: exact visible title match still
+    # blocks creation even if the model judged "create_new".
+    duplicate = find_existing_concept_node(db, title)
+    if duplicate is None and analysis.duplicate_concept_id is not None:
+        duplicate = next(
+            (
+                node
+                for node in db.query(KnowledgeNode).all()
+                if getattr(node, "id", None) == analysis.duplicate_concept_id
+                and (node.node_type or "") != "paper"
+            ),
+            None,
+        )
+    if duplicate is not None and not body.force_create:
+        duplicate_path = _concept_page_path(duplicate)
+        duplicate_reason = (analysis.duplicate_reason or "").strip()
+        message = (
+            f"模型判断它与现有概念「{duplicate.title}」是同一个概念：{duplicate_reason}"
+            if duplicate_reason and getattr(duplicate, "id", None) == analysis.duplicate_concept_id
+            else f"已存在同名概念「{duplicate.title}」，请先确认是否重复。"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": message,
+                "duplicate_reason": duplicate_reason or None,
+                "duplicate_concept": {
+                    "concept_id": duplicate.id,
+                    "title": duplicate.title,
+                    "filename": duplicate_path.name,
+                    "path": str(duplicate_path),
+                },
+                "can_force_create": True,
+            },
+        )
+
     node = KnowledgeNode(
         title=title,
-        content=title,
+        content=summary,
         node_type="concept",
         node_origin=MANUAL_NODE_ORIGIN,
         hidden=False,
@@ -207,6 +331,11 @@ def create_concept_from_synthesis(
     db.add(node)
     db.commit()
     db.refresh(node)
+    resolved_related_concepts = _sync_synthesis_relation_edges(
+        db,
+        source_node_id=node.id,
+        related_links=list(analysis.related_links or []),
+    )
 
     # Write the .md file directly. We bypass `compile_concept_page` so we
     # don't burn another LLM call — the user already vetted this body in
@@ -220,12 +349,22 @@ def create_concept_from_synthesis(
         "slug": path.stem.split("-", 1)[-1],
         "node_type": node.node_type,
         "concept_origin": "synthesis",
-        "synthesis_question": body.source_question or "",
+        "synthesis_scope": synthesis_scope,
+        "synthesis_question": source_question,
+        "synthesis_questions": source_questions,
+        "aliases": list(analysis.aliases or []),
         "tags": tag_set,
         "source_paper_ids": paper_ids,
+        "related_concept_ids": [item["concept_id"] for item in resolved_related_concepts],
+        "related_concepts": [
+            f'{item["relation_type"]}: {item["title"]} (#{item["concept_id"]})'
+            for item in resolved_related_concepts
+        ],
         "compiled_at": _now_iso(),
+        "summary": summary,
+        "analysis_model": analysis.model,
     }
-    page = _render_frontmatter(meta) + f"\n# {title}\n\n" + md_body + "\n"
+    page = _render_frontmatter(meta) + f"\n# {title}\n\n" + body_markdown + "\n"
     path.write_text(page, encoding="utf-8")
 
     # Refresh search index + reconcile so the new file is discoverable
@@ -240,4 +379,11 @@ def create_concept_from_synthesis(
         "concept_id": node.id,
         "filename": path.name,
         "path": str(path),
+        "created": True,
+        "reused_existing": False,
+        "forced_create": bool(duplicate is not None and body.force_create),
+        "concept_title": title,
+        "analysis_used": analysis.used_model,
+        "analysis_model": analysis.model,
+        "related_concepts_added": len(resolved_related_concepts),
     }

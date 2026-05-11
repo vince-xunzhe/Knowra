@@ -6,6 +6,7 @@ import {
   Loader2,
   Sparkles,
   Send,
+  Plus,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -20,6 +21,7 @@ import {
   rebuildWikiIndex,
   type AskResponse,
   type AskTraceStep,
+  type SynthesisConceptResult,
   type WikiIndexStatus,
 } from '../api/client'
 
@@ -41,6 +43,230 @@ interface Turn {
   model?: string
 }
 
+interface AskSession {
+  id: string
+  title: string
+  turns: Turn[]
+  question: string
+  createdAt: string
+  updatedAt: string
+}
+
+type SynthesisScope = 'turn' | 'session'
+
+interface SynthesisDraft {
+  sessionTitle: string
+  sessionTurns: Turn[]
+}
+
+interface DuplicateConceptConflict {
+  message: string
+  concept_id: number
+  title: string
+  filename: string
+  path: string
+  reason?: string | null
+}
+
+const ASK_DRAWER_STORAGE_KEY = 'knowra:ask-drawer:sessions'
+
+interface PersistedAskState {
+  sessions: AskSession[]
+  activeSessionId: string | null
+}
+
+function createAskSession(title = '新对话'): AskSession {
+  const now = new Date().toISOString()
+  return {
+    id: `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    title,
+    turns: [],
+    question: '',
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+function sessionTitleFromQuestion(question: string): string {
+  const trimmed = question.replace(/\s+/g, ' ').trim()
+  return trimmed ? trimmed.slice(0, 30) : '新对话'
+}
+
+function hydrateSession(raw: unknown): AskSession | null {
+  if (!raw || typeof raw !== 'object') return null
+  const value = raw as Partial<AskSession>
+  const id = typeof value.id === 'string' ? value.id : ''
+  if (!id) return null
+  const now = new Date().toISOString()
+  return {
+    id,
+    title: typeof value.title === 'string' && value.title.trim() ? value.title : '新对话',
+    turns: Array.isArray(value.turns) ? value.turns : [],
+    question: typeof value.question === 'string' ? value.question : '',
+    createdAt: typeof value.createdAt === 'string' ? value.createdAt : now,
+    updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : now,
+  }
+}
+
+function loadPersistedState(): PersistedAskState {
+  if (typeof window === 'undefined') {
+    const session = createAskSession()
+    return { sessions: [session], activeSessionId: session.id }
+  }
+  try {
+    const raw = window.localStorage.getItem(ASK_DRAWER_STORAGE_KEY)
+    if (!raw) {
+      const session = createAskSession()
+      return { sessions: [session], activeSessionId: session.id }
+    }
+    const parsed = JSON.parse(raw) as Partial<PersistedAskState>
+    const sessions = Array.isArray(parsed.sessions)
+      ? parsed.sessions
+        .map(hydrateSession)
+        .filter((session): session is AskSession => session !== null)
+      : []
+    if (sessions.length === 0) {
+      const session = createAskSession()
+      return { sessions: [session], activeSessionId: session.id }
+    }
+    const activeSessionId =
+      typeof parsed.activeSessionId === 'string'
+      && sessions.some(session => session.id === parsed.activeSessionId)
+        ? parsed.activeSessionId
+        : sessions[0].id
+    return {
+      sessions,
+      activeSessionId,
+    }
+  } catch {
+    const session = createAskSession()
+    return { sessions: [session], activeSessionId: session.id }
+  }
+}
+
+interface AnsweredRound {
+  question: string
+  answer: Turn
+}
+
+function buildAnsweredRounds(turns: Turn[]): AnsweredRound[] {
+  const rounds: AnsweredRound[] = []
+  let pendingQuestion = ''
+  for (const turn of turns) {
+    if (turn.role === 'user') {
+      pendingQuestion = turn.content.trim()
+      continue
+    }
+    rounds.push({
+      question: pendingQuestion,
+      answer: turn,
+    })
+  }
+  return rounds.filter(round => round.answer.content.trim())
+}
+
+function trimAskAnswerHeading(markdown: string): string {
+  return markdown.replace(/^\s*#{1,6}\s*(answer|回答)\s*\n+/i, '').trim()
+}
+
+function buildSessionSynthesisBody(rounds: AnsweredRound[]): string {
+  const finalRound = rounds[rounds.length - 1]
+  if (!finalRound) return ''
+
+  const parts: string[] = [
+    `> 由 Ask 多轮会话整理而成，共 ${rounds.length} 轮问答。`,
+  ]
+
+  const questions = rounds
+    .map(round => round.question)
+    .filter(Boolean)
+  if (questions.length > 0) {
+    parts.push([
+      '## 问题演进',
+      '',
+      ...questions.map((question, index) => `${index + 1}. ${question}`),
+    ].join('\n'))
+  }
+
+  parts.push([
+    '## 最终综合结论',
+    '',
+    trimAskAnswerHeading(finalRound.answer.content),
+  ].join('\n'))
+
+  if (rounds.length > 1) {
+    parts.push([
+      '## 对话摘录',
+      '',
+      rounds.map((round, index) => [
+        `### 第 ${index + 1} 轮`,
+        '',
+        '**问题**',
+        '',
+        round.question || '（未记录问题）',
+        '',
+        '**回答**',
+        '',
+        trimAskAnswerHeading(round.answer.content),
+      ].join('\n')).join('\n\n'),
+    ].join('\n'))
+  }
+
+  return parts.join('\n\n').trim()
+}
+
+function collectCitedFiles(turns: Turn[]): string[] {
+  const files: string[] = []
+  const seen = new Set<string>()
+  for (const turn of turns) {
+    for (const file of turn.citedFiles || []) {
+      if (!file || seen.has(file)) continue
+      seen.add(file)
+      files.push(file)
+    }
+  }
+  return files
+}
+
+function extractDuplicateConceptConflict(error: unknown): DuplicateConceptConflict | null {
+  const detail = (error as {
+    response?: {
+      data?: {
+        detail?: {
+          message?: string
+          duplicate_reason?: string | null
+          duplicate_concept?: {
+            concept_id?: number
+            title?: string
+            filename?: string
+            path?: string
+          }
+        }
+      }
+    }
+  })?.response?.data?.detail
+  const duplicate = detail?.duplicate_concept
+  if (
+    !detail
+    || !duplicate
+    || typeof detail.message !== 'string'
+    || typeof duplicate.concept_id !== 'number'
+    || typeof duplicate.title !== 'string'
+    || typeof duplicate.filename !== 'string'
+    || typeof duplicate.path !== 'string'
+  ) {
+    return null
+  }
+  return {
+    message: detail.message,
+    concept_id: duplicate.concept_id,
+    title: duplicate.title,
+    filename: duplicate.filename,
+    path: duplicate.path,
+    reason: typeof detail.duplicate_reason === 'string' ? detail.duplicate_reason : null,
+  }
+}
+
 /**
  * Cross-wiki Q&A surface. The user types a question; the backend agent
  * uses tool-calls (list_wiki_index / search_wiki / read_wiki) to gather
@@ -52,19 +278,25 @@ interface Turn {
  * if the user wants a fresh thread.
  */
 export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) {
-  const [turns, setTurns] = useState<Turn[]>([])
-  const [question, setQuestion] = useState('')
+  const [askState, setAskState] = useState<PersistedAskState>(() => loadPersistedState())
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ tone: 'emerald' | 'amber'; text: string } | null>(null)
   const [indexStatus, setIndexStatus] = useState<WikiIndexStatus | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
-  const [synthesisDraft, setSynthesisDraft] = useState<{
-    body: string
-    citedFiles: string[]
-    sourceQuestion: string
-  } | null>(null)
+  const [synthesisDraft, setSynthesisDraft] = useState<SynthesisDraft | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const activeSession = useMemo(() => {
+    const found = askState.sessions.find(session => session.id === askState.activeSessionId)
+    return found || askState.sessions[0] || createAskSession()
+  }, [askState])
+  const turns = activeSession?.turns || []
+  const question = activeSession?.question || ''
+  const sessionsForSelect = useMemo(
+    () => [...askState.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
+    [askState.sessions],
+  )
 
   // Refresh index status whenever the drawer opens — cheap GET, gives the
   // user immediate feedback on whether the agent has its primary scaffolding
@@ -82,29 +314,102 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     }
   }, [turns, submitting])
 
+  useEffect(() => {
+    setError(null)
+    setNotice(null)
+    setSynthesisDraft(null)
+  }, [activeSession?.id])
+
+  // GraphPage unmounts when the user switches to another top-level page, so
+  // persist the Ask conversations in localStorage to preserve the session
+  // list across page switches and browser restarts on this machine.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        ASK_DRAWER_STORAGE_KEY,
+        JSON.stringify(askState),
+      )
+    } catch {
+      // Ignore quota / privacy-mode failures — Ask still works in-memory.
+    }
+  }, [askState])
+
+  const updateSessionById = useCallback((sessionId: string, updater: (session: AskSession) => AskSession) => {
+    setAskState(prev => ({
+      ...prev,
+      sessions: prev.sessions.map(session =>
+        session.id === sessionId ? updater(session) : session,
+      ),
+    }))
+  }, [])
+
+  const setQuestion = useCallback((nextQuestion: string) => {
+    updateSessionById(activeSession.id, session => ({
+      ...session,
+      question: nextQuestion,
+    }))
+  }, [activeSession.id, updateSessionById])
+
+  const handleNewChat = useCallback(() => {
+    if (submitting) return
+    if (activeSession.turns.length === 0 && !activeSession.question.trim()) {
+      requestAnimationFrame(() => inputRef.current?.focus())
+      return
+    }
+    const session = createAskSession()
+    setAskState(prev => ({
+      sessions: [session, ...prev.sessions],
+      activeSessionId: session.id,
+    }))
+    setError(null)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [activeSession.question, activeSession.turns.length, submitting])
+
+  const handleSessionSelect = useCallback((sessionId: string) => {
+    if (submitting) return
+    setAskState(prev => ({
+      ...prev,
+      activeSessionId: sessionId,
+    }))
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }, [submitting])
+
   const handleSend = useCallback(async () => {
     const q = question.trim()
     if (!q || submitting) return
 
+    const sessionId = activeSession.id
+    const sentAt = new Date().toISOString()
     const history = turns.map(t => ({ role: t.role, content: t.content }))
-    setTurns(prev => [...prev, { role: 'user', content: q }])
-    setQuestion('')
+    updateSessionById(sessionId, session => ({
+      ...session,
+      title: session.turns.length === 0 ? sessionTitleFromQuestion(q) : session.title,
+      turns: [...session.turns, { role: 'user', content: q }],
+      question: '',
+      updatedAt: sentAt,
+    }))
     setSubmitting(true)
     setError(null)
+    setNotice(null)
     try {
       const result: AskResponse = await askWiki(q, history)
-      setTurns(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: result.answer,
-          trace: result.trace,
-          citedFiles: result.cited_files,
-          durationMs: result.duration_ms,
-          steps: result.steps,
-          model: result.model,
-        },
-      ])
+      updateSessionById(sessionId, session => ({
+        ...session,
+        turns: [
+          ...session.turns,
+          {
+            role: 'assistant',
+            content: result.answer,
+            trace: result.trace,
+            citedFiles: result.cited_files,
+            durationMs: result.duration_ms,
+            steps: result.steps,
+            model: result.model,
+          },
+        ],
+        updatedAt: new Date().toISOString(),
+      }))
     } catch (e: unknown) {
       const msg =
         // axios shape — pull `detail` if backend raised HTTPException
@@ -115,7 +420,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
       setSubmitting(false)
       requestAnimationFrame(() => inputRef.current?.focus())
     }
-  }, [question, submitting, turns])
+  }, [activeSession.id, question, submitting, turns, updateSessionById])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -130,9 +435,17 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   )
 
   const handleClear = useCallback(() => {
-    setTurns([])
+    if (submitting) return
+    updateSessionById(activeSession.id, session => ({
+      ...session,
+      title: '新对话',
+      turns: [],
+      question: '',
+      updatedAt: new Date().toISOString(),
+    }))
     setError(null)
-  }, [])
+    setNotice(null)
+  }, [activeSession.id, submitting, updateSessionById])
 
   const handleRebuildIndex = useCallback(async () => {
     setRebuilding(true)
@@ -170,27 +483,60 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           <h2 className="text-[13px] font-semibold text-white tracking-tight">
             Ask
           </h2>
-          {turns.length > 0 && (
+          {askState.sessions.length > 1 && (
             <span className="text-[10.5px] text-slate-500">
-              · {turns.filter(t => t.role === 'user').length} 轮对话
+              · {askState.sessions.length} 个会话
             </span>
           )}
           <button
-            onClick={handleClear}
-            disabled={turns.length === 0}
-            className="ml-auto text-[10.5px] px-1.5 py-0.5 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 disabled:opacity-40 transition-colors"
-            title="清空当前会话历史"
-          >
-            清空
-          </button>
-          <button
             onClick={onClose}
-            className="text-slate-500 hover:text-slate-200 p-1 rounded hover:bg-slate-800/60 transition-colors"
+            className="ml-auto text-slate-500 hover:text-slate-200 p-1 rounded hover:bg-slate-800/60 transition-colors"
             title="关闭"
           >
             <X size={13} />
           </button>
         </header>
+
+        <div className="px-5 py-2.5 border-b border-slate-800/70 flex items-center gap-2">
+          <select
+            value={activeSession.id}
+            onChange={e => handleSessionSelect(e.target.value)}
+            disabled={submitting}
+            className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-200 focus:outline-none focus:border-indigo-500/60 disabled:opacity-50"
+            title="切换已保存会话"
+          >
+            {sessionsForSelect.map(session => (
+              <option key={session.id} value={session.id}>
+                {session.title} · {session.turns.filter(turn => turn.role === 'user').length} 轮
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleNewChat}
+            disabled={submitting}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-2 text-[11.5px] font-medium text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50 transition-colors"
+            title="开启一个新的 Ask 会话"
+          >
+            <Plus size={11} />
+            新建聊天
+          </button>
+          <button
+            onClick={handleClear}
+            disabled={submitting || (turns.length === 0 && question.trim().length === 0)}
+            className="text-[10.5px] px-2 py-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 disabled:opacity-40 transition-colors"
+            title="清空当前会话历史"
+          >
+            清空
+          </button>
+        </div>
+
+        <div className="px-5 py-1.5 border-b border-slate-800/70 flex items-center gap-2 text-[10.5px] text-slate-500">
+          <span className="truncate">
+            当前会话 · {turns.filter(t => t.role === 'user').length} 轮对话
+          </span>
+          <span className="text-slate-700">·</span>
+          <span className="truncate">保存在本机浏览器</span>
+        </div>
 
         {/* index.md status strip */}
         <div className="px-5 py-1.5 border-b border-slate-800/70 flex items-center gap-2 text-[10.5px] text-slate-500">
@@ -254,29 +600,31 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           {turns.length === 0 && !submitting && (
             <EmptyHint />
           )}
-          {turns.map((turn, i) => {
-            const lastUserAbove =
-              turn.role === 'assistant'
-                ? [...turns.slice(0, i)].reverse().find(t => t.role === 'user')?.content || ''
-                : ''
-            return (
-              <TurnView
-                key={i}
-                turn={turn}
-                onFileBack={
-                  turn.role === 'assistant'
-                    ? () =>
-                        setSynthesisDraft({
-                          body: turn.content,
-                          citedFiles: turn.citedFiles || [],
-                          sourceQuestion: lastUserAbove,
-                        })
-                    : undefined
-                }
-              />
-            )
-          })}
+          {turns.map((turn, i) => (
+            <TurnView
+              key={i}
+              turn={turn}
+              onFileBack={
+                turn.role === 'assistant'
+                  ? () =>
+                      setSynthesisDraft({
+                        sessionTitle: activeSession.title,
+                        sessionTurns: turns.slice(0, i + 1),
+                      })
+                  : undefined
+              }
+            />
+          ))}
           {submitting && <ThinkingIndicator />}
+          {notice && (
+            <div className={`px-3 py-2 rounded-lg border text-[12px] ${
+              notice.tone === 'emerald'
+                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                : 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+            }`}>
+              {notice.text}
+            </div>
+          )}
           {error && (
             <div className="px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-[12px] text-rose-200">
               {error}
@@ -288,9 +636,37 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           <SynthesisSaveModal
             draft={synthesisDraft}
             onClose={() => setSynthesisDraft(null)}
-            onSaved={(conceptId) => {
+            onSaved={(result, scope) => {
               setSynthesisDraft(null)
-              onSynthesisCreated?.(conceptId)
+              const relatedSuffix = result.related_concepts_added && result.related_concepts_added > 0
+                ? `，并连到了 ${result.related_concepts_added} 个已有概念`
+                : ''
+              setNotice(
+                result.forced_create
+                  ? {
+                      tone: 'amber',
+                      text:
+                        scope === 'session'
+                          ? '你已忽略同名提示，强制创建了一份新的会话归纳概念页。'
+                          : '你已忽略同名提示，强制创建了一份新的概念页。',
+                    }
+                  : {
+                      tone: 'emerald',
+                      text:
+                        result.analysis_used
+                          ? (
+                              scope === 'session'
+                                ? `已用模型把当前会话整理成概念页，并同步加入知识图谱${relatedSuffix}。`
+                                : `已用模型整理当前回答并创建概念页，已加入知识图谱${relatedSuffix}。`
+                            )
+                          : (
+                              scope === 'session'
+                                ? '已把当前会话整理成概念页，并加入知识图谱。'
+                                : '已创建新的概念页，并加入知识图谱。'
+                            ),
+                    },
+              )
+              onSynthesisCreated?.(result.concept_id)
             }}
           />
         )}
@@ -494,55 +870,119 @@ function SynthesisSaveModal({
   onClose,
   onSaved,
 }: {
-  draft: { body: string; citedFiles: string[]; sourceQuestion: string }
+  draft: SynthesisDraft
   onClose: () => void
-  onSaved: (conceptId: number) => void
+  onSaved: (result: SynthesisConceptResult, scope: SynthesisScope) => void
 }) {
-  // Auto-derive a default title from the question — first ~30 chars
-  // makes a reasonable concept-page heading. User can edit before save.
-  const defaultTitle = draft.sourceQuestion.replace(/[?？\s]+$/, '').slice(0, 30)
-  const [title, setTitle] = useState(defaultTitle)
-  const [tagsInput, setTagsInput] = useState('synthesis')
+  const rounds = useMemo(() => buildAnsweredRounds(draft.sessionTurns), [draft.sessionTurns])
+  const currentRound = rounds[rounds.length - 1]
+  const sessionQuestions = useMemo(
+    () => rounds.map(round => round.question).filter(Boolean),
+    [rounds],
+  )
+  const hasSessionScope = rounds.length > 1
+  const [scope, setScope] = useState<SynthesisScope>('turn')
+  const defaultTitles = useMemo(() => {
+    const turnBase =
+      currentRound?.question ||
+      draft.sessionTitle ||
+      'Ask归纳'
+    const sessionBase =
+      draft.sessionTitle && draft.sessionTitle !== '新对话'
+        ? draft.sessionTitle
+        : sessionQuestions[0] || currentRound?.question || 'Ask归纳'
+    return {
+      turn: turnBase.replace(/[?？\s]+$/, '').slice(0, 30) || 'Ask归纳',
+      session: sessionBase.replace(/[?？\s]+$/, '').slice(0, 30) || 'Ask归纳',
+    }
+  }, [currentRound?.question, draft.sessionTitle, sessionQuestions])
+  const [title, setTitle] = useState(defaultTitles.turn)
+  const [tagsInput, setTagsInput] = useState('ask归纳')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [titleTouched, setTitleTouched] = useState(false)
+  const [duplicateConflict, setDuplicateConflict] = useState<DuplicateConceptConflict | null>(null)
+
+  useEffect(() => {
+    if (!hasSessionScope && scope !== 'turn') {
+      setScope('turn')
+    }
+  }, [hasSessionScope, scope])
+
+  useEffect(() => {
+    if (titleTouched) return
+    setTitle(defaultTitles[scope])
+  }, [defaultTitles, scope, titleTouched])
+
+  const selectedBody = useMemo(() => {
+    if (!currentRound) return ''
+    if (scope === 'session') {
+      return buildSessionSynthesisBody(rounds)
+    }
+    return currentRound.answer.content
+  }, [currentRound, rounds, scope])
+
+  const selectedQuestions = useMemo(() => {
+    if (scope === 'session') return sessionQuestions
+    return currentRound?.question ? [currentRound.question] : []
+  }, [currentRound?.question, scope, sessionQuestions])
+
+  const selectedCitedFiles = useMemo(() => {
+    if (scope === 'session') return collectCitedFiles(draft.sessionTurns)
+    return currentRound?.answer.citedFiles || []
+  }, [currentRound?.answer.citedFiles, draft.sessionTurns, scope])
 
   // Pull paper IDs from cited files like "data/wiki/papers/0009-...md"
   // and "paper:9". Used as the source list on the new concept node.
   const sourcePaperIds = useMemo(() => {
     const ids = new Set<number>()
-    for (const f of draft.citedFiles) {
+    for (const f of selectedCitedFiles) {
       let m = /\/papers\/(\d+)-/.exec(f)
       if (!m) m = /^paper:(\d+)$/.exec(f)
       if (m) ids.add(parseInt(m[1], 10))
     }
     return [...ids]
-  }, [draft.citedFiles])
+  }, [selectedCitedFiles])
 
-  const handleSave = useCallback(async () => {
-    if (!title.trim() || saving) return
+  const submitSave = useCallback(async (forceCreate = false) => {
+    if (!title.trim() || saving || !selectedBody.trim()) return
     setSaving(true)
     setErr(null)
+    if (!forceCreate) {
+      setDuplicateConflict(null)
+    }
     try {
       const result = await createSynthesisConcept({
         title: title.trim(),
-        body: draft.body,
-        source_question: draft.sourceQuestion,
+        body: selectedBody,
+        source_question: selectedQuestions[0] || '',
+        source_questions: selectedQuestions,
+        synthesis_scope: scope,
+        force_create: forceCreate,
         source_paper_ids: sourcePaperIds,
         tags: tagsInput
           .split(',')
           .map(t => t.trim())
           .filter(Boolean),
       })
-      onSaved(result.concept_id)
+      onSaved(result, scope)
     } catch (e: unknown) {
-      const msg =
-        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        (e instanceof Error ? e.message : String(e))
-      setErr(msg)
+      const duplicate = extractDuplicateConceptConflict(e)
+      if (duplicate) {
+        setDuplicateConflict(duplicate)
+        setErr(null)
+      } else {
+        const msg =
+          (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+          (e instanceof Error ? e.message : String(e))
+        setErr(msg)
+      }
     } finally {
       setSaving(false)
     }
-  }, [title, tagsInput, draft, sourcePaperIds, saving, onSaved])
+  }, [title, selectedBody, selectedQuestions, scope, sourcePaperIds, tagsInput, saving, onSaved])
+
+  if (!currentRound) return null
 
   return (
     <div className="absolute inset-0 z-10 bg-black/55 backdrop-blur-sm flex items-center justify-center p-6">
@@ -558,11 +998,48 @@ function SynthesisSaveModal({
           </button>
         </header>
         <div className="px-4 py-3 space-y-2.5">
+          {hasSessionScope && (
+            <div>
+              <label className="text-[10.5px] text-slate-500">保存范围</label>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setScope('turn')}
+                  className={`rounded-md border px-2.5 py-2 text-[11.5px] transition-colors ${
+                    scope === 'turn'
+                      ? 'border-indigo-500/50 bg-indigo-500/15 text-indigo-100'
+                      : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  当前回答
+                </button>
+                <button
+                  onClick={() => setScope('session')}
+                  className={`rounded-md border px-2.5 py-2 text-[11.5px] transition-colors ${
+                    scope === 'session'
+                      ? 'border-indigo-500/50 bg-indigo-500/15 text-indigo-100'
+                      : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  当前会话
+                </button>
+              </div>
+              <div className="mt-1.5 text-[10.5px] text-slate-500 leading-relaxed">
+                {scope === 'session'
+                  ? '会先用模型整理截至当前的多轮问答，再生成一个更像概念条目的页面，保留问题演进、最终结论和来源论文。'
+                  : '会先用模型把当前回答整理成概念摘要与条目正文；前面的多轮上下文只通过这轮答案间接体现。'}
+              </div>
+            </div>
+          )}
           <div>
             <label className="text-[10.5px] text-slate-500">标题</label>
             <input
               value={title}
-              onChange={e => setTitle(e.target.value)}
+              onChange={(e) => {
+                setTitle(e.target.value)
+                setTitleTouched(true)
+                setDuplicateConflict(null)
+                setErr(null)
+              }}
               placeholder="给这个综合答案起个名字"
               className="mt-1 w-full px-2.5 py-1.5 text-[12px] bg-slate-950 border border-slate-800 rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
@@ -574,15 +1051,44 @@ function SynthesisSaveModal({
             <input
               value={tagsInput}
               onChange={e => setTagsInput(e.target.value)}
-              placeholder="synthesis, …"
+              placeholder="ask归纳, …"
               className="mt-1 w-full px-2.5 py-1.5 text-[12px] bg-slate-950 border border-slate-800 rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
           </div>
           <div className="text-[10.5px] text-slate-500 leading-relaxed">
             将创建 <code className="text-slate-400">data/wiki/concepts/{`{id}-{slug}`}.md</code>，
             origin = <code className="text-slate-400">manual</code>，并自动 promoted。
-            来源问题 + {sourcePaperIds.length} 篇引用论文会写入 frontmatter。
+            {scope === 'session' ? `本次会话的 ${selectedQuestions.length} 个问题` : '当前问题'}
+            {' '}+ {sourcePaperIds.length} 篇引用论文会写入 frontmatter。
           </div>
+          <div className="text-[10.5px] text-slate-500 leading-relaxed">
+            如果检测到同名概念，系统会先提示现有概念；如果你确认这是误判，也可以强制新增。
+          </div>
+          <div className="rounded-md border border-slate-800/80 bg-slate-950/60 px-2.5 py-2 text-[10.5px] text-slate-500 leading-relaxed">
+            {scope === 'session'
+              ? `将整理 ${rounds.length} 轮问答，并同步生成图谱节点摘要、概念正文与来源论文列表。`
+              : '将整理当前回答，生成图谱节点摘要与结构化概念正文，不会把整个 session 原样抄进去。'}
+          </div>
+          {duplicateConflict && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-100 leading-relaxed space-y-1.5">
+              <div>{duplicateConflict.message}</div>
+              {duplicateConflict.reason && (
+                <div className="text-amber-200/80">
+                  判重依据：{duplicateConflict.reason}
+                </div>
+              )}
+              <div>
+                已有概念：<span className="font-medium">{duplicateConflict.title}</span>{' '}
+                <span className="text-amber-200/80">#{duplicateConflict.concept_id}</span>
+              </div>
+              <div className="text-amber-200/80">
+                文件：<code>{duplicateConflict.filename}</code>
+              </div>
+              <div className="text-amber-200/70">
+                如果你确认这不是重复概念，可以点下方“仍然创建”，系统会保留两个同名概念。
+              </div>
+            </div>
+          )}
           {err && (
             <div className="px-2 py-1.5 text-[11px] rounded border border-rose-500/40 bg-rose-500/10 text-rose-200">
               {err}
@@ -596,13 +1102,23 @@ function SynthesisSaveModal({
           >
             取消
           </button>
+          {duplicateConflict && (
+            <button
+              onClick={() => void submitSave(true)}
+              disabled={saving || !title.trim() || !selectedBody.trim()}
+              className="inline-flex items-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
+            >
+              {saving ? <Loader2 size={11} className="animate-spin" /> : <Pin size={11} />}
+              仍然创建
+            </button>
+          )}
           <button
-            onClick={handleSave}
-            disabled={!title.trim() || saving}
+            onClick={() => void submitSave(false)}
+            disabled={!title.trim() || !selectedBody.trim() || saving}
             className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/40 disabled:opacity-50 transition-colors"
           >
             {saving ? <Loader2 size={11} className="animate-spin" /> : <Pin size={11} />}
-            存为概念页
+            {scope === 'session' ? '整理并存为概念页' : '存为概念页'}
           </button>
         </footer>
       </div>

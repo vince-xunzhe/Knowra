@@ -68,6 +68,7 @@ export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   const [searchResults, setSearchResults] = useState<GraphNode[]>([])
   const [wikiHits, setWikiHits] = useState<WikiSearchHit[]>([])
   // Drawer initial tab — set when a wiki search hit is clicked so the
@@ -106,6 +107,7 @@ export default function GraphPage() {
   const [editingNode, setEditingNode] = useState<GraphNode | null>(null)
   const [actionBusyId, setActionBusyId] = useState<string | null>(null)
   const wasRunningRef = useRef(false)
+  const searchShellRef = useRef<HTMLDivElement>(null)
   // Mirror of graphData kept in a ref so async callbacks (rescue → focus)
   // can read the freshest version without re-binding.
   const graphDataRef = useRef<GraphData | null>(null)
@@ -220,10 +222,12 @@ export default function GraphPage() {
     setSearchQuery(q)
     const trimmed = q.trim()
     if (trimmed.length < 1) {
+      setSearchOpen(false)
       setSearchResults([])
       setWikiHits([])
       return
     }
+    setSearchOpen(true)
     // Two parallel searches: structured node lookup (fast, by title/alias)
     // and wiki FTS (full-text over compiled .md). Wiki search needs ≥2
     // chars per backend tokenizer.
@@ -234,7 +238,7 @@ export default function GraphPage() {
           ? searchWiki(trimmed, 12).catch(() => ({ query: trimmed, hits: [] as WikiSearchHit[] }))
           : Promise.resolve({ query: trimmed, hits: [] as WikiSearchHit[] }),
       ])
-      setSearchResults(nodes)
+      setSearchResults(nodes.filter(node => !NODE_GRAPH_HIDDEN_TYPES.has(node.node_type)))
       setWikiHits(wiki.hits)
     } catch (error) {
       console.error('Failed to search', error)
@@ -242,15 +246,45 @@ export default function GraphPage() {
   }
 
   const focusNode = useCallback((node: GraphNode) => {
+    const freshest = graphDataRef.current?.nodes.find(n => n.id === node.id) || node
+    if (viewKind !== 'graph') {
+      setViewKind('graph')
+    }
+    if (typeFilter !== 'all' && freshest.node_type !== typeFilter) {
+      setTypeFilter('all')
+    }
     // If focusing a node that's currently filtered out (a pending /
     // rejected concept while candidateMode='off'), widen the candidate
     // mode just enough to make it visible — otherwise the user clicks
     // the search hit and nothing happens on screen.
-    if (candidateMode === 'off' && node.promotion_status && node.promotion_status !== 'promoted') {
-      setCandidateMode(node.promotion_status === 'rejected' ? 'all' : 'pending')
+    if (candidateMode === 'off' && freshest.promotion_status && freshest.promotion_status !== 'promoted') {
+      setCandidateMode(freshest.promotion_status === 'rejected' ? 'all' : 'pending')
+    } else if (candidateMode === 'pending' && freshest.promotion_status === 'rejected') {
+      setCandidateMode('all')
     }
-    setSelectedNode(node)
-  }, [candidateMode])
+    setSelectedNode(freshest)
+  }, [candidateMode, typeFilter, viewKind])
+
+  useEffect(() => {
+    if (!searchOpen) return
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target
+      if (!(target instanceof Node)) return
+      if (searchShellRef.current?.contains(target)) return
+      setSearchOpen(false)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSearchOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [searchOpen])
 
   // Lazy-load the compiled-graph view; only fetched when the user toggles
   // into it, refreshed alongside the main graph after compile finishes.
@@ -294,6 +328,7 @@ export default function GraphPage() {
       if (targetNode) {
         setDrawerInitialTab('wiki')
         focusNode(targetNode)
+        setSearchOpen(false)
         setSearchQuery('')
         setSearchResults([])
         setWikiHits([])
@@ -354,7 +389,20 @@ export default function GraphPage() {
       setEditingNode(null)
       // Manually-created concepts are auto-promoted, so they appear in
       // the default (candidateMode='off') view without further toggling.
-      setProcessResult(editingNode ? '概念已更新。' : '新概念已加入图谱。')
+      if (response.reused_existing) {
+        const additions: string[] = []
+        if (response.merged_tags > 0) additions.push(`${response.merged_tags} 个标签`)
+        if (response.merged_papers > 0) additions.push(`${response.merged_papers} 篇关联论文`)
+        if (response.content_applied) additions.push('概念简介')
+        const additionText = additions.length > 0 ? `，并补充了${additions.join('、')}` : ''
+        setProcessResult(
+          response.adopted_existing
+            ? `发现同名自动节点，已转为手动概念${additionText}。`
+            : `发现同名概念，已复用现有概念${additionText}。`,
+        )
+      } else {
+        setProcessResult(editingNode ? '概念已更新。' : '新概念已加入图谱。')
+      }
     } catch (error) {
       setProcessResult('概念保存失败: ' + getErrorMessage(error))
     } finally {
@@ -426,7 +474,7 @@ export default function GraphPage() {
           </div>
 
           {/* Search */}
-          <div className="relative min-w-[17rem] flex-1 max-w-md xl:ml-2">
+          <div ref={searchShellRef} className="relative min-w-[17rem] flex-1 max-w-md xl:ml-2">
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-500" />
             {!searchQuery && (
               <span className="pointer-events-none absolute left-9 top-1/2 z-10 -translate-y-1/2 text-sm leading-none text-slate-500">
@@ -438,12 +486,18 @@ export default function GraphPage() {
               aria-label="搜索节点 / wiki 全文"
               value={searchQuery}
               onChange={e => handleSearch(e.target.value)}
+              onFocus={() => {
+                if (searchQuery.trim() && (searchResults.length > 0 || wikiHits.length > 0)) {
+                  setSearchOpen(true)
+                }
+              }}
               className="h-9 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 pl-9 pr-9 text-sm leading-5 text-slate-200 transition-colors focus:border-indigo-500/60 focus:bg-slate-900 focus:outline-none"
             />
             {searchQuery && (
               <button
                 onClick={() => {
                   setSearchQuery('')
+                  setSearchOpen(false)
                   setSearchResults([])
                   setWikiHits([])
                 }}
@@ -452,7 +506,7 @@ export default function GraphPage() {
                 <X size={12} />
               </button>
             )}
-            {(searchResults.length > 0 || wikiHits.length > 0) && (
+            {searchOpen && (searchResults.length > 0 || wikiHits.length > 0) && (
               <div className="absolute top-full mt-2 left-0 w-full min-w-[20rem] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-20 max-h-[28rem] overflow-y-auto">
                 {searchResults.length > 0 && (
                   <div>
@@ -465,6 +519,7 @@ export default function GraphPage() {
                         onClick={() => {
                           setDrawerInitialTab('detail')
                           focusNode(n)
+                          setSearchOpen(false)
                           setSearchQuery('')
                           setSearchResults([])
                           setWikiHits([])
@@ -800,10 +855,17 @@ export default function GraphPage() {
       <AskDrawer
         open={askOpen}
         onClose={() => setAskOpen(false)}
-        onSynthesisCreated={async () => {
+        onSynthesisCreated={async (conceptId) => {
           // New synthesis concept is auto-promoted manual; reload the
           // graph so it shows up in 节点图谱 / 概念 immediately.
           await loadGraph()
+          const node = graphDataRef.current?.nodes.find(n => n.id === String(conceptId))
+          if (node) {
+            setViewKind('graph')
+            setCandidateMode('off')
+            setDrawerInitialTab('detail')
+            setSelectedNode(node)
+          }
         }}
       />
 
@@ -935,6 +997,9 @@ function ConceptEditorModal({
                   placeholder="逗号分隔，例如 规划, 世界模型, 驾驶"
                   className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
                 />
+                <p className="mt-2 text-xs leading-relaxed text-slate-500">
+                  如果同名概念已存在，系统会优先复用现有概念，并安全补充标签、论文来源与缺失简介。
+                </p>
               </div>
             </div>
           </div>
@@ -1025,7 +1090,14 @@ function ConceptEditorModal({
 }
 
 function getErrorMessage(error: unknown): string {
-  const apiError = error as { response?: { data?: { detail?: string } }; message?: string; code?: string }
+  const apiError = error as {
+    response?: { data?: { detail?: string | { message?: string } } }
+    message?: string
+    code?: string
+  }
   if (apiError.code === 'ECONNABORTED') return '请求超时，后端没有在 30 秒内响应。'
-  return apiError.response?.data?.detail || apiError.message || '未知错误'
+  const detail = apiError.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message
+  return apiError.message || '未知错误'
 }

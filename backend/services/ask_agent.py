@@ -7,9 +7,9 @@ notes that at ~100 articles, this works well without RAG infrastructure
 — the LLM reads index.md first, picks the right files, drills in.
 
 Implementation choices:
-  - chat.completions tool calling (broadly supported, simple JSON I/O).
-    Responses-only models (gpt-5.x) currently aren't supported here;
-    raise a clear error so the user can switch model.
+  - chat.completions and Responses API both use tool calling here.
+    Older chat-capable models stay on chat.completions; Responses-only
+    models (gpt-5.x in this app) run the same tool loop via responses.create.
   - Tool dispatch is plain Python. Each call re-fetches the file from
     disk so multi-step questions always see the freshest wiki state.
   - Bounded loop (MAX_STEPS) — no infinite tool spirals on bad queries.
@@ -120,6 +120,51 @@ TOOLS = [
 ]
 
 
+RESPONSES_TOOLS = [
+    {
+        "type": "function",
+        "name": "list_wiki_index",
+        "description": "返回 wiki/index.md 全文。先调用此工具看清楚库里有哪些论文与概念。",
+        "parameters": {"type": "object", "properties": {}},
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "search_wiki",
+        "description": "在 wiki/papers + wiki/concepts 里做 FTS5 全文搜索。返回最多 12 个 hit。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "q": {"type": "string", "description": "搜索关键词，至少 2 个字符"},
+            },
+            "required": ["q"],
+        },
+        "strict": False,
+    },
+    {
+        "type": "function",
+        "name": "read_wiki",
+        "description": "读取 wiki/{papers|concepts}/{filename}.md 的完整内容。filename 必须是从 search_wiki 或 list_wiki_index 看到过的文件名。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "filename": {
+                    "type": "string",
+                    "description": "形如 0009-grounding-image-matching-in-3d-with-mast3r.md",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": ["papers", "concepts"],
+                    "description": "文件所属目录；search_wiki 的 hit 里有 kind 字段可直接用",
+                },
+            },
+            "required": ["filename", "kind"],
+        },
+        "strict": False,
+    },
+]
+
+
 # --- error / response shapes --------------------------------------------
 
 
@@ -218,6 +263,38 @@ def _summarize_result(text: str) -> str:
     return one_line[: SUMMARY_MAX_CHARS - 1] + "…"
 
 
+def _history_messages(history: Optional[list[dict[str, str]]]) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for turn in history or []:
+        role = turn.get("role")
+        content = turn.get("content")
+        if role in {"user", "assistant"} and content:
+            messages.append({"role": role, "content": content})
+    return messages
+
+
+def _extract_responses_text(response) -> str:
+    text = (getattr(response, "output_text", "") or "").strip()
+    if text:
+        return text
+
+    parts: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", []) or []:
+            ctype = getattr(content, "type", None)
+            if ctype == "output_text":
+                value = getattr(content, "text", "")
+                if value:
+                    parts.append(value)
+            elif ctype == "refusal":
+                refusal = getattr(content, "refusal", "")
+                if refusal:
+                    parts.append(f"[REFUSAL] {refusal}")
+    return "\n".join(parts).strip()
+
+
 # --- citation extraction ------------------------------------------------
 
 
@@ -255,100 +332,176 @@ def run_ask_agent(
 ) -> AskResult:
     if not api_key:
         raise AskAgentUnavailable("OpenAI API key not configured")
-    if model_uses_responses_api(model):
-        raise AskAgentUnavailable(
-            f"Model {model!r} 走 Responses API，本 agent 暂未支持。"
-            "请到 设置 把 wiki_compile_model 改成 chat.completions 兼容的模型（如 gpt-4o-mini）。"
-        )
 
     started = perf_counter()
     client = OpenAI(api_key=api_key)
-
-    messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM_PROMPT}]
-    for turn in history or []:
-        role = turn.get("role")
-        content = turn.get("content")
-        if role in {"user", "assistant"} and content:
-            messages.append({"role": role, "content": content})
-    messages.append({"role": "user", "content": question})
-
     trace: list[TraceStep] = []
     final_answer: Optional[str] = None
 
-    for step in range(MAX_STEPS):
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            temperature=0.3,
-        )
-        msg = resp.choices[0].message
+    if model_uses_responses_api(model):
+        next_input: list[dict[str, Any]] = [
+            *_history_messages(history),
+            {"role": "user", "content": question},
+        ]
+        previous_response_id: Optional[str] = None
 
-        if msg.tool_calls:
-            # Append assistant-with-tool-calls turn so the protocol is
-            # well-formed; OpenAI requires this before the matching tool
-            # results.
-            messages.append({
-                "role": "assistant",
-                "content": msg.content or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in msg.tool_calls
-                ],
-            })
-            for tc in msg.tool_calls:
-                fn_name = tc.function.name
-                try:
-                    args = json.loads(tc.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    args = {}
-                t0 = perf_counter()
-                result = _dispatch_tool(fn_name, args)
-                dt = int((perf_counter() - t0) * 1000)
-                trace.append(
-                    TraceStep(
-                        step=step,
-                        tool=fn_name,
-                        args=args,
-                        result_summary=_summarize_result(result),
-                        duration_ms=dt,
+        for step in range(MAX_STEPS):
+            response = client.responses.create(
+                model=model,
+                instructions=ASK_SYSTEM_PROMPT,
+                input=next_input,
+                tools=RESPONSES_TOOLS,
+                tool_choice="auto",
+                temperature=0.3,
+                **(
+                    {"previous_response_id": previous_response_id}
+                    if previous_response_id
+                    else {}
+                ),
+            )
+            tool_calls = [
+                item
+                for item in (getattr(response, "output", []) or [])
+                if getattr(item, "type", None) == "function_call"
+            ]
+            if tool_calls:
+                previous_response_id = response.id
+                next_input = []
+                for tool_call in tool_calls:
+                    fn_name = tool_call.name
+                    try:
+                        args = json.loads(tool_call.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    t0 = perf_counter()
+                    result = _dispatch_tool(fn_name, args)
+                    dt = int((perf_counter() - t0) * 1000)
+                    trace.append(
+                        TraceStep(
+                            step=step,
+                            tool=fn_name,
+                            args=args,
+                            result_summary=_summarize_result(result),
+                            duration_ms=dt,
+                        )
                     )
-                )
+                    next_input.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": tool_call.call_id,
+                            "output": result,
+                        }
+                    )
+                continue
+
+            final_answer = _extract_responses_text(response)
+            break
+
+        if final_answer is None:
+            log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
+            wrap_kwargs = {
+                "model": model,
+                "instructions": ASK_SYSTEM_PROMPT,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
+                    }
+                ],
+                "temperature": 0.3,
+            }
+            if previous_response_id:
+                wrap_kwargs["previous_response_id"] = previous_response_id
+            else:
+                wrap_kwargs["input"] = [
+                    *_history_messages(history),
+                    {"role": "user", "content": question},
+                    {
+                        "role": "user",
+                        "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
+                    },
+                ]
+            wrap_up = client.responses.create(**wrap_kwargs)
+            final_answer = _extract_responses_text(wrap_up)
+    else:
+        messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM_PROMPT}]
+        messages.extend(_history_messages(history))
+        messages.append({"role": "user", "content": question})
+
+        for step in range(MAX_STEPS):
+            resp = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                temperature=0.3,
+            )
+            msg = resp.choices[0].message
+
+            if msg.tool_calls:
+                # Append assistant-with-tool-calls turn so the protocol is
+                # well-formed; OpenAI requires this before the matching tool
+                # results.
                 messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.id,
-                    "content": result,
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                        for tc in msg.tool_calls
+                    ],
                 })
-            continue
+                for tc in msg.tool_calls:
+                    fn_name = tc.function.name
+                    try:
+                        args = json.loads(tc.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    t0 = perf_counter()
+                    result = _dispatch_tool(fn_name, args)
+                    dt = int((perf_counter() - t0) * 1000)
+                    trace.append(
+                        TraceStep(
+                            step=step,
+                            tool=fn_name,
+                            args=args,
+                            result_summary=_summarize_result(result),
+                            duration_ms=dt,
+                        )
+                    )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": result,
+                    })
+                continue
 
-        # Terminal: model returned plain content, no tool calls.
-        final_answer = (msg.content or "").strip()
-        break
+            # Terminal: model returned plain content, no tool calls.
+            final_answer = (msg.content or "").strip()
+            break
 
-    if final_answer is None:
-        # Hit MAX_STEPS without terminating. Ask the model to wrap up
-        # with what it has — a softer failure than silently truncating.
-        log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
-        wrap_up = client.chat.completions.create(
-            model=model,
-            messages=messages
-            + [
-                {
-                    "role": "user",
-                    "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
-                }
-            ],
-            temperature=0.3,
-        )
-        final_answer = (wrap_up.choices[0].message.content or "").strip()
+        if final_answer is None:
+            # Hit MAX_STEPS without terminating. Ask the model to wrap up
+            # with what it has — a softer failure than silently truncating.
+            log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
+            wrap_up = client.chat.completions.create(
+                model=model,
+                messages=messages
+                + [
+                    {
+                        "role": "user",
+                        "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
+                    }
+                ],
+                temperature=0.3,
+            )
+            final_answer = (wrap_up.choices[0].message.content or "").strip()
 
     duration_ms = int((perf_counter() - started) * 1000)
     return AskResult(

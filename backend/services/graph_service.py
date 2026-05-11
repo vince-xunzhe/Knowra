@@ -123,6 +123,62 @@ def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[Knowl
     return None
 
 
+def find_existing_concept_node(
+    db: Session,
+    name: str,
+    aliases: Optional[list[str]] = None,
+    *,
+    exclude_node_id: Optional[int] = None,
+    include_hidden: bool = False,
+    include_tags: bool = False,
+) -> Optional[KnowledgeNode]:
+    """Find an existing concept-like node, including manual concepts.
+
+    Used by user-authored flows (Ask synthesis, future manual-create guards)
+    where we want to avoid creating another concept with the same visible
+    identity. By default this matches only visible titles / explicit aliases;
+    generic tags are only considered when a caller opts in. Ranking prefers:
+      1. visible nodes over hidden ones
+      2. manual concepts over auto-extracted nodes
+      3. promoted nodes over pending / rejected
+      4. `concept` nodes over technique / dataset / problem_area
+    """
+    candidates = {_normalize_name(name)}
+    for alias in aliases or []:
+        candidates.add(_normalize_name(alias))
+    candidates.discard("")
+    if not candidates:
+        return None
+
+    best: Optional[KnowledgeNode] = None
+    best_rank: Optional[tuple[int, int, int, int]] = None
+    for node in db.query(KnowledgeNode).all():
+        if exclude_node_id is not None and getattr(node, "id", None) == exclude_node_id:
+            continue
+        if (node.node_type or "") == "paper":
+            continue
+        if not include_hidden and node_is_hidden(node):
+            continue
+
+        existing = {_normalize_name(node.title)}
+        if include_tags:
+            existing.update(_normalize_name(tag) for tag in (node.tags or []) if tag)
+        existing.discard("")
+        if not (candidates & existing):
+            continue
+
+        rank = (
+            0 if node_origin(node) == MANUAL_NODE_ORIGIN else 1,
+            0 if promotion_status(node) == PROMOTION_PROMOTED else 1,
+            0 if (node.node_type or "") == "concept" else 1,
+            int(getattr(node, "id", 10**9) or 10**9),
+        )
+        if best is None or rank < best_rank:
+            best = node
+            best_rank = rank
+    return best
+
+
 def _upsert_node(
     db: Session,
     title: str,
