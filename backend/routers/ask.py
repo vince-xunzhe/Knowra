@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import logging
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,6 +18,7 @@ from sqlalchemy.orm import Session
 from config import load_config, task_model_id, task_model_name, task_reasoning_effort
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
+from model_gateway import call_text_model
 from services import ask_agent, wiki_index
 from services import wiki_search as wiki_search_service
 from services.graph_service import (
@@ -35,6 +38,19 @@ from services.wiki_compiler import (
 )
 
 router = APIRouter(prefix="/api/wiki", tags=["wiki-ask"])
+log = logging.getLogger("wiki_ask")
+
+ASK_TITLE_SYSTEM_PROMPT = (
+    "你是知识库会话标题生成器。"
+    "请根据用户问题和助手回答，提炼一个简短主题短句作为会话标题。"
+    "要求：\n"
+    "1. 只输出标题本身，不要解释、不要引号、不要编号。\n"
+    "2. 优先使用名词短语，不要重复完整问句。\n"
+    "3. 控制在 4 到 18 个汉字或等价长度。\n"
+    "4. 如果是方法比较、数据集盘点、概念综述，也要压成一个主题短句。"
+)
+_ASK_TITLE_PREFIX_RE = re.compile(r"^(标题|会话标题|title)\s*[:：]\s*", re.IGNORECASE)
+_ASK_TITLE_PUNCT_RE = re.compile(r"^[\"'“”‘’`]+|[\"'“”‘’`]+$")
 
 
 class AskRequest(BaseModel):
@@ -57,8 +73,51 @@ class AskResponse(BaseModel):
     cited_files: List[str]
     trace: List[AskTraceStep]
     model: str
+    session_title: Optional[str] = None
     duration_ms: int
     steps: int
+
+
+def _clean_session_title(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    text = text.splitlines()[0].strip()
+    text = re.sub(r"^#+\s*", "", text)
+    text = _ASK_TITLE_PREFIX_RE.sub("", text)
+    text = _ASK_TITLE_PUNCT_RE.sub("", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    text = text.rstrip("。！？!?：:;；，,、")
+    return text[:24].strip()
+
+
+def _suggest_ask_session_title(
+    cfg: dict,
+    *,
+    question: str,
+    answer: str,
+    model: str,
+    reasoning_effort: Optional[str],
+) -> Optional[str]:
+    try:
+        raw = call_text_model(
+            cfg,
+            model_id=model,
+            system=ASK_TITLE_SYSTEM_PROMPT,
+            user=(
+                f"[用户问题]\n{question.strip()}\n\n"
+                f"[助手回答]\n{answer.strip()[:2800]}"
+            ),
+            max_tokens=48,
+            temperature=0.2,
+            reasoning_effort="low" if reasoning_effort in {"low", "medium", "high"} else None,
+            timeout_s=90,
+        )
+    except Exception as exc:
+        log.warning("ask session title generation failed: %s", exc)
+        return None
+    cleaned = _clean_session_title(raw)
+    return cleaned or None
 
 
 @router.post("/ask", response_model=AskResponse)
@@ -80,6 +139,13 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
         )
     except ask_agent.AskAgentUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    session_title = _suggest_ask_session_title(
+        cfg,
+        question=question,
+        answer=result.answer,
+        model=model,
+        reasoning_effort=task_reasoning_effort(cfg, "ask_agent"),
+    )
     return AskResponse(
         answer=result.answer,
         cited_files=result.cited_files,
@@ -94,6 +160,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
             for t in result.trace
         ],
         model=result.model,
+        session_title=session_title,
         duration_ms=result.duration_ms,
         steps=result.steps,
     )

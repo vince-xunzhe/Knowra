@@ -492,6 +492,7 @@ export interface AskResponse {
   cited_files: string[]
   trace: AskTraceStep[]
   model: string
+  session_title?: string | null
   duration_ms: number
   steps: number
 }

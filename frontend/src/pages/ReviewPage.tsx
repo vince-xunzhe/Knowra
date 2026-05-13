@@ -629,6 +629,22 @@ function countdownTone(days: number | null | undefined): {
   return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: `会话有效 ${days} 天` }
 }
 
+function chatStatusTone(chat: ChatState): {
+  className: string
+  label: string
+} {
+  if (!chat.ready) {
+    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: '处理中' }
+  }
+  if (chat.days_remaining === null || chat.days_remaining === undefined) {
+    if (chat.messages.length > 0) {
+      return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: '本地会话中' }
+    }
+    return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: '可直接追问' }
+  }
+  return countdownTone(chat.days_remaining)
+}
+
 function latestExchange(messages: ChatMessage[]): { user: ChatMessage | null; assistant: ChatMessage | null } {
   // Find the most recent assistant message and the user message that triggered it.
   let assistant: ChatMessage | null = null
@@ -701,7 +717,7 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
     }
   }
 
-  const tone = countdownTone(chat.days_remaining)
+  const tone = chatStatusTone(chat)
   const { user, assistant } = latestExchange(chat.messages)
   const canChat = chat.ready
 
@@ -820,7 +836,7 @@ function ChatModal({
 }) {
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const tone = countdownTone(chat.days_remaining)
+  const tone = chatStatusTone(chat)
 
   useEffect(() => {
     // Auto-scroll to bottom on new messages and on mount.

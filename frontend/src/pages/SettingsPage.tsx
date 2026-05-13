@@ -256,7 +256,8 @@ export default function SettingsPage() {
         >
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="mb-4">
-              <p className="text-sm font-medium text-slate-100">Provider 联通测试</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">连接检查</p>
+              <p className="mt-1 text-base font-semibold text-slate-100">Provider 联通测试</p>
               <p className="text-xs text-slate-500 mt-1">这里只保留必要连接参数。内部的 provider 元数据和模型注册表不再暴露给你；Qwen 默认预填的是中国（北京）OpenAI 兼容地址，你也可以改成别的区域。</p>
             </div>
 
@@ -344,7 +345,8 @@ export default function SettingsPage() {
 
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="mb-4">
-              <p className="text-sm font-medium text-slate-100">任务绑定</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">任务配置</p>
+              <p className="mt-1 text-base font-semibold text-slate-100">任务绑定</p>
               <p className="text-xs text-slate-500 mt-1">按任务挑模型。`Provider` 决定走 `Codex` 还是 `OpenAPI`，`Brand` 和 `Model` 只显示这个任务当前可用的候选。</p>
             </div>
 
@@ -378,13 +380,16 @@ export default function SettingsPage() {
                   : (brandCandidates[0]?.id || '')
 
                 return (
-                  <div key={task.id} className="rounded-xl border border-slate-800 bg-slate-900/40 p-3.5">
+                  <div key={task.id} className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-100">{task.label}</p>
-                        <p className="text-xs text-slate-500 mt-1 leading-relaxed">{task.description}</p>
+                        <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                          {task.category} · {TASK_TYPE_LABELS[task.task_type]}
+                        </p>
+                        <p className="mt-1 text-[17px] font-semibold tracking-tight text-slate-50">{task.label}</p>
+                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{task.description}</p>
                       </div>
-                      <div className="shrink-0 rounded-lg border border-slate-800 bg-slate-950/40 px-2 py-0.5 text-[11px] text-slate-400">
+                      <div className="mt-0.5 shrink-0 rounded-full border border-slate-800 bg-slate-950/40 px-2.5 py-1 text-[10px] font-medium text-slate-400">
                         {task.category}
                       </div>
                     </div>
@@ -650,7 +655,7 @@ function Field({
 }: { icon?: React.ReactNode; label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="flex items-center gap-2 text-sm text-slate-300 mb-2">
+      <label className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
         {icon && <span className="text-slate-500">{icon}</span>}
         {label}
       </label>

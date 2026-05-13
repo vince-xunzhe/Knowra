@@ -2,20 +2,79 @@
 
 [中文](README.zh.md) | [English](README.md)
 
-Knowra 是一个本地优先的 AI 研究工作台，帮助用户从论文和领域知识中快速建立专家理解。它会扫描 PDF 论文，调用 OpenAI 模型抽取结构化回顾信息，并把论文、技术、数据集、关键发现和个人笔记组织成可浏览的知识图谱。
+Knowra 是一个本地优先的研究工作台，目标是把论文逐步沉淀成一个可搜索、可追问、可演化的个人知识系统。它会扫描 PDF，抽取结构化论文信息，生成知识图谱，编译 wiki 页面，并在编译后的知识层之上支持 Ask 问答与概念沉淀。
+
+当前版本已经不再依赖单一的 OpenAI 链路，而是引入了按任务路由的模型网关：不同功能模块可以绑定不同 provider、不同价格带的模型。
 
 安装、依赖环境和启动命令请看 [安装说明](INSTALL.zh.md)。
 
-## 应用功能
+## 亮点功能
 
-- **论文库**：扫描本地 PDF 目录，记录页数、首页预览图和每篇论文的处理状态。
-- **论文回顾**：查看模型抽取的标题、作者、摘要、研究问题、方法、数据集、baseline、贡献和关键发现。
-- **修复流程**：当模型回答格式有小问题时，可以编辑原始 response；也可以对单篇论文确认后重新处理，并调整抽取 Prompt。
-- **个人笔记**：每篇论文支持 Markdown 笔记，可直接粘贴或拖入截图，并支持图片放大查看。
-- **论文档案 markdown**：每篇论文都有一份持续累积的 markdown 档案，包含源资料信息、首次 file_search response、当前 response、用户笔记和完整追问记录。
-- **知识图谱**：浏览论文、技术、数据集、研究领域、关键发现和相似节点之间的关系。
-- **相似度重建**：按配置阈值重建 embedding 相似边，不需要重新抽取论文。
-- **本地存储**：数据库、PDF、缩略图、笔记图片和配置都保存在本地 `data/` 目录。
+- **按任务绑定模型**：不再用一个全局模型覆盖所有能力；现在可以分别给 `paper_extract`、`paper_chat`、`embedding`、`wiki_compile`、`ask_agent`、`ask_synthesis`、`promotion_judge` 绑定不同模型。
+- **多 Provider 支持**：内置 `OpenAI`、OpenAI 兼容 API（`Kimi`、`DeepSeek`、`Qwen`、`MiniMax`）以及本机 `Codex CLI`，并支持在设置页做联通测试。
+- **Codex CLI 覆盖全部非 embedding 子模块**：论文抽取、论文追问、Wiki 编译、Ask、Ask 生成概念、概念精选判断都可以走本机 Codex；只有向量任务仍然保留 API 路线。
+- **编译知识闭环**：论文抽取结果会进入图谱和 wiki；Ask 读取的是编译后的 wiki 层，而不是直接读原始 PDF，因此问答更接近“在你的知识库上推理”。
+- **Ask 变成真正的工作区**：支持多会话、本地持久化、新建聊天、模型生成会话标题、查看 trace，并且可以把单轮答案或整段会话整理成概念页。
+- **概念沉淀带防重和关系生成**：Ask 生成概念时支持重复检测、强制新建覆盖误判、自动补图谱关系边，并立即刷新图谱与 wiki 搜索索引。
+- **论文回顾可修可问**：每篇论文都有结构化抽取、可编辑的原始 response、Markdown 笔记、首页预览图、论文档案 markdown，以及单篇论文上下文追问。
+- **活的知识图谱**：支持概念精选、相似边重建、节点搜索聚焦、wiki 驱动的详情阅读，以及无需重新抽取论文的图谱迭代。
+
+## 端到端流程图
+
+```mermaid
+flowchart TD
+    A["本地 PDF<br/>data/papers/"] --> B["扫描目录<br/>创建 / 更新 papers 记录"]
+    B --> C["任务路由器<br/>为 paper_extract 选择 provider + model"]
+    C --> D["论文结构化抽取<br/>OpenAI file_search 或本地 Codex 上下文"]
+    D --> E["标准化抽取 JSON<br/>标题 / 方法 / 数据集 / 发现 / 标签"]
+    E --> F["图谱构建<br/>节点 + 类型化边"]
+    E --> G["论文档案 markdown<br/>data/paper_records/*.md"]
+    F --> H["向量任务<br/>similar 相似边"]
+    E --> I["Wiki 编译任务<br/>论文页 + 概念页 + index.md"]
+    I --> J["Ask Agent<br/>读 index / search / read wiki"]
+    J --> K["Ask 归纳<br/>概念页 + 图谱关系"]
+    K --> L["知识图谱与 wiki 搜索立即刷新"]
+```
+
+## 任务模型路由
+
+```mermaid
+flowchart LR
+    U["用户操作"] --> T["任务 id"]
+    T --> B["设置页里的任务绑定"]
+    B --> P["Provider 路由"]
+    P --> R["运行时实现"]
+
+    T1["paper_extract / paper_chat"] --> B
+    T2["wiki_compile / ask_agent / ask_synthesis / promotion_judge"] --> B
+    T3["embedding"] --> B
+
+    P1["OpenAI"] --> R1["Responses / Assistants / Embeddings"]
+    P2["OpenAI 兼容 API"] --> R2["Chat / Embedding API"]
+    P3["Codex CLI"] --> R3["本地 codex exec 流程"]
+```
+
+### 内置任务拆分
+
+| 任务 | 作用 | 常见路由 |
+| --- | --- | --- |
+| `paper_extract` | 读取 PDF，生成结构化论文抽取 JSON | OpenAI VLM、Codex CLI |
+| `paper_chat` | 在单篇论文上下文中追问 | OpenAI VLM、Codex CLI |
+| `embedding` | 给节点生成向量并建立 `similar` 边 | OpenAI embeddings |
+| `wiki_compile` | 把抽取结果改写成论文页 / 概念页 / index.md | OpenAI、OpenAI 兼容 API、Codex CLI |
+| `ask_agent` | 跨 wiki 的检索式问答 | OpenAI、OpenAI 兼容 API、Codex CLI |
+| `ask_synthesis` | 把 Ask 回答整理成概念页 | OpenAI、OpenAI 兼容 API、Codex CLI |
+| `promotion_judge` | 对候选概念做 promote / reject 判断 | OpenAI、OpenAI 兼容 API、Codex CLI |
+
+如果你想看代码层面每一个模型调用点，可以直接看 [docs/llm-call-map.md](docs/llm-call-map.md)。
+
+## 页面介绍
+
+- **知识图谱**：主工作台，负责图谱探索、Ask、wiki 搜索、概念精选和图谱级操作。
+- **论文页**：论文库，负责扫描目录、查看处理状态和批量处理。
+- **论文回顾**：单篇论文工作区，负责查看结构化抽取、修 response、记笔记、看首页预览、做单篇论文追问。
+- **Ask 抽屉**：跨论文 / 跨概念问答入口，支持多会话保存、trace 查看、存为概念页。
+- **设置页**：任务模型绑定、provider 联通测试、相似度阈值、维护操作。
 
 ## 界面预览
 
@@ -31,74 +90,18 @@ Knowra 是一个本地优先的 AI 研究工作台，帮助用户从论文和领
 
 ![Knowra 论文回顾页面](docs/assets/knowledge-wiki-review.png)
 
-## 使用流程
+## 典型使用流程
 
-1. 将 PDF 放到 `data/papers/`，或在设置中选择其他扫描目录。
-2. 打开「图谱」页，扫描论文目录。
-3. 批量处理论文，或在回顾页面对单篇论文重新处理。
-4. 查看抽取结果；如果 response 格式有小错误，可以直接编辑并保存修复。
-5. 阅读论文时添加 Markdown 个人笔记和截图。
-6. 通过图谱探索论文、方法、数据集、研究领域和发现之间的连接。
-7. 随着研究语料变化，调整 Prompt 或相似度阈值。
+1. 在 **设置** 页为不同任务绑定模型，并先做一次 provider 联通测试。
+2. 把 PDF 放进 `data/papers/`，或把扫描目录改到别的位置。
+3. 扫描目录并处理论文。
+4. 在论文回顾里检查抽取结果，必要时修复格式不稳的原始 response，并补充个人笔记。
+5. 让系统自动生成图谱节点、相似边、论文 wiki 页、概念页和 `index.md`。
+6. 用 **Ask** 在整库范围内提问。
+7. 把高价值 Ask 结果沉淀成概念页，带防重和图谱关系生成。
+8. 随着语料增长，重建相似边或重建 wiki 索引。
 
-如果你想看一篇论文如何从 PDF 进入系统并最终变成图谱节点和边，可以直接看 [架构说明](docs/ARCHITECTURE.md) 里的链路图。
-
-## Wiki 编译
-
-每篇已处理论文都可以编译成一份 markdown wiki 条目（`data/wiki/papers/{id}-{slug}.md`）。这一步**不会重读 PDF、不会调 file_search**，只是把 DB 里已抽取好的 JSON 让 LLM 改写成中文叙事 markdown，并对涉及到的方法、概念、数据集名称打上 `[[…]]` backlink 标记，便于 Obsidian 等工具浏览。
-
-```mermaid
-flowchart TD
-    A["DB: paper.raw_llm_response<br/>抽取 JSON"] --> P
-    B["DB: paper.title / authors / filename"] --> P
-    C["DB: paper.notes<br/>用户笔记"] --> P
-    P["_paper_user_prompt()"] --> L
-    S["PAPER_PAGE_SYSTEM<br/>固定 system prompt"] --> L
-    L["chat.completions.create<br/>model=gpt-5.4"] --> M["markdown body"]
-    M --> F["拼上 YAML frontmatter"]
-    F --> O[("data/wiki/papers/{id}-{slug}.md")]
-```
-
-概念页（`data/wiki/concepts/{id}-{slug}.md`）走类似流程，但输入是「概念名 + 简介 + 涉及该概念的多篇论文片段」，目标是横向综述（共识、分歧、未解），而不是改写单篇：
-
-```mermaid
-flowchart TD
-    K["DB: KnowledgeNode<br/>title / node_type / content / source_paper_ids"] --> P
-    R["DB: Paper.raw_llm_response<br/>(每个 source_paper_id)"] --> SN["_snippet_for_paper()<br/>抽取 8 个高信号字段"]
-    SN --> P["_concept_user_prompt()"]
-    SP["CONCEPT_PAGE_SYSTEM<br/>固定 system prompt"] --> L
-    P --> L["chat.completions.create<br/>model=gpt-5.4, max_tokens=1500"]
-    L --> M["markdown body<br/>含 [[paper:{id}]] 内联引用"]
-    M --> F["拼上 YAML frontmatter"]
-    F --> O[("data/wiki/concepts/{id}-{slug}.md")]
-```
-
-## 数据架构
-
-Knowra 使用 SQLite 和本地文件系统保存运行数据。
-
-### 核心表
-
-- `papers`：每个 PDF 一行，包括路径、标题、作者、会议/期刊、年份、页数、处理状态、模型 response、解析后的抽取结果、个人笔记和聊天状态。
-- `nodes`：从论文中生成的图谱实体，主要类型包括 `paper`、`technique`、`dataset`、`problem_area`、`finding`。
-- `edges`：节点之间的类型化关系。
-- `config`：本地应用设置，包括模型选择、扫描目录、相似度阈值和缓存的 assistant ID。
-- `prompt`：可编辑的抽取 Prompt，后续处理会使用最新版本。
-
-### 图谱关系
-
-图谱使用类型化边组织论文知识：
-
-- `uses`：论文或方法使用某项技术。
-- `belongs_to`：论文或概念属于某个研究领域。
-- `builds_on`：某个方法建立在另一个方法之上。
-- `trained_on`：模型或论文使用某个数据集训练。
-- `evaluated_on`：论文在某个数据集上评测。
-- `compared_to`：论文与某个 baseline 对比。
-- `finding`：论文支持某个关键发现。
-- `similar`：两个节点通过 embedding 相似度连接。
-
-### 本地文件
+## 本地数据
 
 ```text
 data/
@@ -106,58 +109,65 @@ data/
 ├── knowledge.db             # SQLite 数据库，默认不提交
 ├── papers/                  # 默认 PDF 扫描目录，默认不提交
 ├── artifacts/
-    ├── first_pages/         # 首页预览图缓存
-    └── note_images/         # 粘贴或拖入笔记的图片
-└── paper_records/           # 每篇论文一份 markdown 知识档案
+│   ├── first_pages/         # 论文首页预览缓存
+│   └── note_images/         # 粘贴或拖入笔记的图片
+├── paper_records/           # 每篇论文的工作档案 markdown
+└── wiki/
+    ├── papers/             # 编译后的论文 wiki 页
+    ├── concepts/           # 编译或手工创建的概念页
+    └── index.md            # Ask 使用的顶层知识索引
 ```
 
 ## 项目结构
 
 ```text
 .
-├── backend/                 # FastAPI API、数据库模型和论文处理服务
-│   ├── routers/             # papers / graph / config / prompt / note image 路由
-│   ├── services/            # PDF、扫描、LLM 抽取、图谱构建和清理逻辑
-│   ├── config.py            # 运行配置与默认模型
-│   ├── database.py          # SQLite 初始化与轻量迁移
+├── backend/                 # FastAPI 路由、服务、DB 模型、迁移
+│   ├── routers/             # papers / graph / ask / config / wiki / promotion
+│   ├── services/            # PDF 抽取、图谱构建、Ask、Wiki 编译
+│   ├── config.py            # 运行配置与旧字段兼容
 │   └── requirements.txt
 ├── frontend/                # React + Vite 前端
-│   ├── src/api/             # API client 与类型
-│   ├── src/components/      # 图谱、详情、处理状态组件
-│   └── src/pages/           # 图谱、论文、回顾、Prompt、设置页面
-├── data/                    # 本地运行数据，仓库只保留占位
-├── docs/                    # 架构、API 和开发说明
-├── INSTALL.md               # 英文安装与快速开始说明
-└── start.sh                 # 一键启动脚本
+│   ├── src/api/             # API client 与共享类型
+│   ├── src/components/      # Ask 抽屉、图谱、节点详情、回顾组件
+│   └── src/pages/           # graph / papers / review / settings
+├── model_gateway/           # provider 注册表、任务定义、运行时适配器
+├── data/                    # 本地运行数据
+├── docs/                    # 架构与实现文档
+├── INSTALL.zh.md            # 中文安装与快速开始
+├── README.md
+└── README.zh.md
 ```
 
 ## 常用操作
 
-- **重建相似度边**：在「设置」页执行「重建相似度边」，不会重新调用抽取模型。
-- **重置图谱**：在「设置」页执行「重置图谱」，会清空生成的节点和边，并把论文标记为待处理。
-- **修改抽取 Prompt**：在「Prompt」页编辑，后续处理会使用新 Prompt。
-- **修复 response**：在「论文回顾」页编辑模型 response，保存后重新解析。
-- **重新处理单篇论文**：使用单篇论文的重新处理按钮，应用会先弹出确认。
-- **清除缓存 Assistant**：通过配置 API 将 `openai_assistant_id` 置空，下次处理会重新创建 assistant。
+- **重建相似度边**：按当前阈值重新计算 embedding 相似边，不需要重新抽取论文。
+- **重建 wiki 索引**：重新生成 `data/wiki/index.md`，让 Ask 看到最新论文页和概念页。
+- **重置图谱**：清空自动生成的节点和边，并把论文重新标成待处理；手工概念会保留。
+- **修复单篇论文 response**：直接在论文回顾页改原始抽取结果并重新解析。
+- **重处理单篇论文**：只对该论文重新跑抽取。
+- **切换模型路线**：在设置页按任务切到更便宜或更强的模型。
 
 ## 隐私说明
 
-Knowra 面向本地个人研究流程。默认不会提交以下运行数据：
+Knowra 面向本地个人研究工作流。默认不会提交以下运行数据：
 
 - `data/config.json`
 - `data/knowledge.db`
 - `data/papers/*`
 - `data/artifacts/*`
 - `data/paper_records/*`
+- `data/wiki/*`
 - `backend/.venv`
 - `frontend/node_modules`
 - `frontend/dist`
 
-模型处理会把论文内容发送到配置的 OpenAI API。请不要把私有或受版权限制的论文提交到共享仓库；如需共享示例数据，建议使用脱敏样例。
+但模型调用仍然会把内容发送给当前任务绑定的 provider。比如 OpenAI 路线会走 API，而 Codex CLI 路线会通过本机 `codex` 命令执行。对于私有或受版权限制的论文，建议仅在本地使用，并在共享仓库时只保留脱敏样例。
 
 ## 文档
 
 - [安装说明](INSTALL.zh.md)
 - [架构说明](docs/ARCHITECTURE.md)
+- [LLM 调用地图](docs/llm-call-map.md)
 - [API 说明](docs/API.md)
 - [开发说明](docs/DEVELOPMENT.md)

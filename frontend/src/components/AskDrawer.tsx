@@ -75,6 +75,23 @@ interface PersistedAskState {
   activeSessionId: string | null
 }
 
+function isPristineSession(session: AskSession): boolean {
+  return session.turns.length === 0 && session.question.trim().length === 0
+}
+
+function normalizeSessions(sessions: AskSession[]): AskSession[] {
+  const normalized: AskSession[] = []
+  let keptPristine = false
+  for (const session of sessions) {
+    if (isPristineSession(session)) {
+      if (keptPristine) continue
+      keptPristine = true
+    }
+    normalized.push(session)
+  }
+  return normalized
+}
+
 function createAskSession(title = '新对话'): AskSession {
   const now = new Date().toISOString()
   return {
@@ -85,11 +102,6 @@ function createAskSession(title = '新对话'): AskSession {
     createdAt: now,
     updatedAt: now,
   }
-}
-
-function sessionTitleFromQuestion(question: string): string {
-  const trimmed = question.replace(/\s+/g, ' ').trim()
-  return trimmed ? trimmed.slice(0, 30) : '新对话'
 }
 
 function hydrateSession(raw: unknown): AskSession | null {
@@ -120,11 +132,12 @@ function loadPersistedState(): PersistedAskState {
       return { sessions: [session], activeSessionId: session.id }
     }
     const parsed = JSON.parse(raw) as Partial<PersistedAskState>
-    const sessions = Array.isArray(parsed.sessions)
+    const hydratedSessions = Array.isArray(parsed.sessions)
       ? parsed.sessions
         .map(hydrateSession)
         .filter((session): session is AskSession => session !== null)
       : []
+    const sessions = normalizeSessions(hydratedSessions)
     if (sessions.length === 0) {
       const session = createAskSession()
       return { sessions: [session], activeSessionId: session.id }
@@ -274,8 +287,9 @@ function extractDuplicateConceptConflict(error: unknown): DuplicateConceptConfli
  * so the answer is the protagonist; expand to debug what the agent did.
  *
  * Conversation state is local — closing the drawer keeps history alive
- * for the session, opening it again restores it. A "清空" button resets
- * if the user wants a fresh thread.
+ * for the session, opening it again restores it. Clearing the current
+ * thread removes that saved session and falls back to another one (or a
+ * new blank thread when none remain).
  */
 export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) {
   const [askState, setAskState] = useState<PersistedAskState>(() => loadPersistedState())
@@ -384,7 +398,6 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     const history = turns.map(t => ({ role: t.role, content: t.content }))
     updateSessionById(sessionId, session => ({
       ...session,
-      title: session.turns.length === 0 ? sessionTitleFromQuestion(q) : session.title,
       turns: [...session.turns, { role: 'user', content: q }],
       question: '',
       updatedAt: sentAt,
@@ -396,6 +409,13 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
       const result: AskResponse = await askWiki(q, history)
       updateSessionById(sessionId, session => ({
         ...session,
+        title:
+          session.title === '新对话'
+          && session.turns.length === 1
+          && session.turns[0]?.role === 'user'
+          && (result.session_title || '').trim()
+            ? (result.session_title || '').trim()
+            : session.title,
         turns: [
           ...session.turns,
           {
@@ -436,16 +456,24 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
 
   const handleClear = useCallback(() => {
     if (submitting) return
-    updateSessionById(activeSession.id, session => ({
-      ...session,
-      title: '新对话',
-      turns: [],
-      question: '',
-      updatedAt: new Date().toISOString(),
-    }))
+    setAskState(prev => {
+      const remaining = prev.sessions.filter(session => session.id !== activeSession.id)
+      const normalized = normalizeSessions(remaining)
+      if (normalized.length === 0) {
+        const session = createAskSession()
+        return {
+          sessions: [session],
+          activeSessionId: session.id,
+        }
+      }
+      return {
+        sessions: normalized,
+        activeSessionId: normalized[0].id,
+      }
+    })
     setError(null)
     setNotice(null)
-  }, [activeSession.id, submitting, updateSessionById])
+  }, [activeSession.id, submitting])
 
   const handleRebuildIndex = useCallback(async () => {
     setRebuilding(true)
@@ -524,7 +552,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             onClick={handleClear}
             disabled={submitting || (turns.length === 0 && question.trim().length === 0)}
             className="text-[10.5px] px-2 py-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 disabled:opacity-40 transition-colors"
-            title="清空当前会话历史"
+            title="删除当前会话"
           >
             清空
           </button>
