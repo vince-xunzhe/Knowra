@@ -3,6 +3,18 @@ import json
 from pathlib import Path
 from prompts import DEFAULT_PAPER_PROMPT, DEFAULT_PROMOTION_PROMPT
 from path_utils import PAPERS_DIR, portable_data_path, resolve_papers_directory
+from path_setup import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
+from model_gateway import (
+    BUILTIN_MODEL_REGISTRY,
+    DEFAULT_PROVIDER_REGISTRY,
+    TASK_BINDING_DEFAULTS,
+    ensure_model_gateway_config,
+    get_bound_model_id,
+    get_task_binding,
+)
 
 CONFIG_FILE = Path(__file__).parent.parent / "data" / "config.json"
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
@@ -37,6 +49,21 @@ AVAILABLE_WIKI_COMPILE_MODELS = [
     {"id": "gpt-5.4-mini", "label": "GPT-5.4-mini", "desc": "Responses API 通道"},
     {"id": "gpt-5.4", "label": "GPT-5.4", "desc": "Responses API 通道，写作更细"},
     {"id": "gpt-5.5", "label": "GPT-5.5", "desc": "Responses API 通道，最强"},
+]
+
+MODEL_GATEWAY_MODEL_OPTIONS = [
+    {
+        "id": model["id"],
+        "label": model["label"],
+        "desc": ", ".join(model.get("supported_tasks") or []),
+        "supports_vision": bool(model.get("supports_vision", False)),
+        "provider_id": model.get("provider_id"),
+        "upstream_model": model.get("upstream_model"),
+        "model_kind": model.get("model_kind"),
+        "supported_tasks": list(model.get("supported_tasks") or []),
+        "builtin": bool(model.get("builtin", False)),
+    }
+    for model in BUILTIN_MODEL_REGISTRY
 ]
 
 
@@ -81,6 +108,11 @@ def load_config() -> dict:
         # opt-out — preserved for back-compat and power users.
         "promotion_prompt": DEFAULT_PROMOTION_PROMPT,
         "openai_assistant_id": None,    # cached Assistants API assistant id, reused across runs
+        "model_gateway": {
+            "providers": DEFAULT_PROVIDER_REGISTRY,
+            "models": BUILTIN_MODEL_REGISTRY,
+            "task_bindings": TASK_BINDING_DEFAULTS,
+        },
     }
     if CONFIG_FILE.exists():
         try:
@@ -96,6 +128,7 @@ def load_config() -> dict:
         defaults["scan_directory"] = str(
             resolve_papers_directory(defaults["scan_directory"])
         )
+    defaults = ensure_model_gateway_config(defaults)
     return defaults
 
 
@@ -111,7 +144,23 @@ def save_config(updates: dict) -> dict:
         current["extraction_prompt"] = _upgrade_extraction_prompt(current["extraction_prompt"])
     if current.get("scan_directory"):
         current["scan_directory"] = portable_data_path(current["scan_directory"])
+    current = ensure_model_gateway_config(current)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_FILE, "w") as f:
         json.dump(current, f, indent=2, ensure_ascii=False)
     return current
+
+
+def task_model_id(cfg: dict, task_id: str) -> str:
+    return get_bound_model_id(cfg, task_id)
+
+
+def task_model_name(cfg: dict, task_id: str) -> str:
+    model_id = get_bound_model_id(cfg, task_id)
+    if model_id.startswith("openai/"):
+        return model_id.split("/", 1)[1]
+    return model_id
+
+
+def task_reasoning_effort(cfg: dict, task_id: str) -> str:
+    return get_task_binding(cfg, task_id).get("reasoning_effort") or "medium"

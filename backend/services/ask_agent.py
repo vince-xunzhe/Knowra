@@ -26,9 +26,16 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Optional
 
-from openai import OpenAI
+from openai import OpenAI  # Back-compat target for existing tests/mocks.
 from sqlalchemy.orm import Session
 
+from config import load_config
+from path_setup import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
+from model_gateway import create_openai_client_for_model
+from model_gateway import call_text_model, get_model_entry, get_provider_entry
 from services import wiki_index, wiki_search
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
@@ -67,6 +74,11 @@ ASK_SYSTEM_PROMPT = (
     "\n"
     "重要：基于材料综合，不要编造。如果库里材料不足，明说\"知识库里没有相关材料\"。\n"
     "输出 markdown，从 ## 二级标题开始，可用列表 / 引用块 / 公式块。不要 markdown 代码围栏包裹整个答案。"
+)
+LOCAL_ASK_SYSTEM_PROMPT = (
+    "你是 Knowra 个人研究知识库的研究助手。系统已经把 index、搜索结果和若干 wiki 页面内容读给你了。"
+    "请只基于这些给定材料综合回答，不要假装调用工具，不要编造库里没有的内容。"
+    "输出中文 markdown，并在末尾列出 `## 📚 引用来源`。"
 )
 
 
@@ -233,6 +245,7 @@ def _tool_search_wiki(q: str) -> str:
 
 
 def _tool_read_wiki(filename: str, kind: str) -> str:
+    kind = {"paper": "papers", "concept": "concepts"}.get(kind, kind)
     if kind not in {"papers", "concepts"}:
         return f"[unknown kind: {kind}; expected 'papers' or 'concepts']"
     base = WIKI_PAPERS_DIR if kind == "papers" else WIKI_CONCEPTS_DIR
@@ -319,6 +332,133 @@ def _extract_cited_files(answer: str, trace: list[TraceStep]) -> list[str]:
     return sorted(files)
 
 
+def _provider_type_for_model(cfg: dict[str, Any], model: str) -> str:
+    model_entry = get_model_entry(cfg, model)
+    if model_entry is None:
+        return "openai"
+    provider = get_provider_entry(cfg, model_entry.get("provider_id", ""))
+    if provider is None:
+        return "openai"
+    return str(provider.get("provider_type") or "openai")
+
+
+def _parse_search_hits(search_result: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(search_result)
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    hits: list[dict[str, Any]] = []
+    for item in parsed:
+        if isinstance(item, dict):
+            hits.append(item)
+    return hits
+
+
+def _run_local_retrieval_agent(
+    cfg: dict[str, Any],
+    *,
+    question: str,
+    history: Optional[list[dict[str, str]]],
+    model: str,
+    reasoning_effort: Optional[str],
+) -> AskResult:
+    started = perf_counter()
+    trace: list[TraceStep] = []
+
+    t0 = perf_counter()
+    index_text = _tool_list_wiki_index()
+    trace.append(
+        TraceStep(
+            step=0,
+            tool="list_wiki_index",
+            args={},
+            result_summary=_summarize_result(index_text),
+            duration_ms=int((perf_counter() - t0) * 1000),
+        )
+    )
+
+    t1 = perf_counter()
+    search_result = _tool_search_wiki(question)
+    trace.append(
+        TraceStep(
+            step=1,
+            tool="search_wiki",
+            args={"q": question},
+            result_summary=_summarize_result(search_result),
+            duration_ms=int((perf_counter() - t1) * 1000),
+        )
+    )
+
+    read_chunks: list[str] = []
+    seen_files: set[tuple[str, str]] = set()
+    for index, hit in enumerate(_parse_search_hits(search_result)):
+        if len(read_chunks) >= 4:
+            break
+        filename = str(hit.get("filename") or "").strip()
+        kind = {"paper": "papers", "concept": "concepts"}.get(
+            str(hit.get("kind") or "").strip(),
+            str(hit.get("kind") or "").strip(),
+        )
+        if not filename or kind not in {"papers", "concepts"}:
+            continue
+        key = (kind, filename)
+        if key in seen_files:
+            continue
+        seen_files.add(key)
+        tr = perf_counter()
+        content = _tool_read_wiki(filename, kind)
+        trace.append(
+            TraceStep(
+                step=2 + index,
+                tool="read_wiki",
+                args={"filename": filename, "kind": kind},
+                result_summary=_summarize_result(content),
+                duration_ms=int((perf_counter() - tr) * 1000),
+            )
+        )
+        read_chunks.append(f"[{kind}/{filename}]\n{content}")
+
+    history_lines: list[str] = []
+    for turn in history or []:
+        role = str(turn.get("role") or "").strip()
+        content = str(turn.get("content") or "").strip()
+        if role in {"user", "assistant"} and content:
+            speaker = "用户" if role == "user" else "助手"
+            history_lines.append(f"{speaker}: {content}")
+
+    user_prompt = (
+        "请基于下面提供的本地知识库材料回答问题。\n"
+        "先综合 index、搜索结果和读到的 wiki 文件，再给出中文 markdown 答案。\n"
+        "如果材料不足，请明确说明知识库里暂无足够材料，不要编造。\n"
+        "答案末尾必须包含 `## 📚 引用来源`，只列出你在材料区真正读到的文件名。\n\n"
+        f"[历史对话]\n{chr(10).join(history_lines) or '[无历史对话]'}\n\n"
+        f"[当前问题]\n{question}\n\n"
+        f"[index.md]\n{index_text}\n\n"
+        f"[search_wiki 结果]\n{search_result}\n\n"
+        f"[read_wiki 材料]\n{chr(10).join(read_chunks) or '[没有读取到具体 wiki 文件]'}"
+    )
+    final_answer = call_text_model(
+        cfg,
+        model_id=model,
+        system=LOCAL_ASK_SYSTEM_PROMPT,
+        user=user_prompt,
+        reasoning_effort=reasoning_effort,
+        max_tokens=2600,
+        temperature=0.3,
+    ).strip()
+    duration_ms = int((perf_counter() - started) * 1000)
+    return AskResult(
+        answer=final_answer,
+        cited_files=_extract_cited_files(final_answer, trace),
+        trace=trace,
+        model=model,
+        duration_ms=duration_ms,
+        steps=len(trace),
+    )
+
+
 # --- main loop ----------------------------------------------------------
 
 
@@ -329,12 +469,26 @@ def run_ask_agent(
     history: Optional[list[dict[str, str]]] = None,
     api_key: str,
     model: str,
+    reasoning_effort: Optional[str] = None,
 ) -> AskResult:
-    if not api_key:
-        raise AskAgentUnavailable("OpenAI API key not configured")
-
     started = perf_counter()
-    client = OpenAI(api_key=api_key)
+    cfg = load_config()
+    if _provider_type_for_model(cfg, model) == "codex_cli":
+        return _run_local_retrieval_agent(
+            cfg,
+            question=question,
+            history=history,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    try:
+        client, model, _, _ = create_openai_client_for_model(
+            cfg,
+            model,
+            api_key_override=api_key,
+        )
+    except Exception as exc:
+        raise AskAgentUnavailable(str(exc))
     trace: list[TraceStep] = []
     final_answer: Optional[str] = None
 
@@ -353,6 +507,11 @@ def run_ask_agent(
                 tools=RESPONSES_TOOLS,
                 tool_choice="auto",
                 temperature=0.3,
+                **(
+                    {"reasoning": {"effort": reasoning_effort}}
+                    if reasoning_effort in {"low", "medium", "high"}
+                    else {}
+                ),
                 **(
                     {"previous_response_id": previous_response_id}
                     if previous_response_id
@@ -410,6 +569,8 @@ def run_ask_agent(
                 ],
                 "temperature": 0.3,
             }
+            if reasoning_effort in {"low", "medium", "high"}:
+                wrap_kwargs["reasoning"] = {"effort": reasoning_effort}
             if previous_response_id:
                 wrap_kwargs["previous_response_id"] = previous_response_id
             else:

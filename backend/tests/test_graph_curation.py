@@ -3,12 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.graph_service import is_publishable_concept_node
+from services.graph_service import _add_similarity_edges, is_publishable_concept_node
 from services.wiki_compiler import compile_paper_page
 
 
@@ -57,6 +57,28 @@ class GraphCurationTests(unittest.TestCase):
         self.assertFalse(
             is_publishable_concept_node(_node(source_paper_ids=[1]), {2})
         )
+
+    @patch("services.graph_service._add_edge")
+    @patch("services.graph_service.cosine_similarity", return_value=0.9)
+    def test_similarity_edges_skip_nodes_without_embedding(
+        self,
+        mock_cosine,
+        mock_add_edge,
+    ):
+        db = MagicMock()
+        db.query.return_value.filter.return_value.all.return_value = [
+            SimpleNamespace(id=2, embedding=None),
+            SimpleNamespace(id=3, embedding=[1.0, 0.0]),
+        ]
+
+        _add_similarity_edges(
+            db,
+            SimpleNamespace(id=1, embedding=[1.0, 0.0]),
+            0.6,
+        )
+
+        mock_cosine.assert_called_once_with([1.0, 0.0], [1.0, 0.0])
+        mock_add_edge.assert_called_once_with(db, 1, 3, "similar", 0.9)
 
 
 class WikiCompileSkipTests(unittest.TestCase):

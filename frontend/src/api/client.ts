@@ -119,6 +119,64 @@ export interface AvailableModel {
   label: string
   desc: string
   supports_vision?: boolean
+  provider_id?: string
+  upstream_model?: string
+  model_kind?: string
+  supported_tasks?: string[]
+  builtin?: boolean
+}
+
+export interface ProviderTypeOption {
+  id: string
+  label: string
+}
+
+export interface ModelGatewayTaskSpec {
+  id: string
+  label: string
+  description: string
+  category: string
+  task_type: 'llm' | 'vlm' | 'embedding'
+  recommended_model_id?: string
+  legacy_field?: string
+}
+
+export interface ModelGatewayTaskBinding {
+  model_id: string
+  reasoning_effort?: 'low' | 'medium' | 'high'
+}
+
+export interface ModelGatewayProvider {
+  id: string
+  label: string
+  provider_type: 'openai' | 'openai_compatible' | 'codex_cli'
+  base_url?: string
+  api_key?: string
+  command?: string
+  healthcheck_model?: string
+  enabled: boolean
+  last_tested_at: string | null
+  last_test_status: 'ok' | 'error' | 'never'
+  last_test_message: string
+}
+
+export interface ModelGatewayModel {
+  id: string
+  label: string
+  provider_id: string
+  upstream_model: string
+  model_kind: 'chat' | 'embedding'
+  supports_vision: boolean
+  supported_tasks: string[]
+  builtin: boolean
+}
+
+export interface ModelGatewayConfig {
+  providers: ModelGatewayProvider[]
+  models: ModelGatewayModel[]
+  task_bindings: Record<string, string | ModelGatewayTaskBinding>
+  task_specs: ModelGatewayTaskSpec[]
+  available_provider_types: ProviderTypeOption[]
 }
 
 export interface Config {
@@ -132,6 +190,8 @@ export interface Config {
   available_models: AvailableModel[]
   available_embedding_models: AvailableModel[]
   available_wiki_compile_models: AvailableModel[]
+  available_model_gateway_models: AvailableModel[]
+  model_gateway: ModelGatewayConfig
 }
 
 export interface PromptData {
@@ -143,6 +203,11 @@ export interface PromptData {
 export const getConfig = () => api.get<Config>('/config').then(r => r.data)
 export const updateConfig = (data: Partial<Omit<Config, 'available_models'>>) =>
   api.post<Config>('/config', data).then(r => r.data)
+export const testModelGatewayProvider = (providerId: string, modelGateway?: ModelGatewayConfig) =>
+  api.post<{ result: { provider_id: string; status: string; message: string; tested_at: string }; config: Config }>(
+    `/config/model_gateway/providers/${providerId}/test`,
+    modelGateway ? { model_gateway: modelGateway } : undefined,
+  ).then(r => r.data)
 
 // Prompt
 export const getPrompt = () => api.get<PromptData>('/prompt').then(r => r.data)

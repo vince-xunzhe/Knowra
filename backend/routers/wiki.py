@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from config import load_config
+from config import load_config, task_model_id
 from database import get_db
 from models import KnowledgeNode, Paper
 from services.wiki_graph_service import build_wiki_graph
@@ -229,8 +229,8 @@ def wiki_reindex():
 def _drive_concept_recompile():
     from database import SessionLocal
     cfg = load_config()
-    api_key = cfg.get("openai_api_key")
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    api_key = cfg.get("openai_api_key") or ""
+    model = task_model_id(cfg, "wiki_compile")
     db = SessionLocal()
     try:
         cleanup = reconcile_concept_pages_dir(db, prune_orphans=True)
@@ -274,8 +274,8 @@ def _drive_paper_recompile():
     from database import SessionLocal
     from models import Paper
     cfg = load_config()
-    api_key = cfg.get("openai_api_key")
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    api_key = cfg.get("openai_api_key") or ""
+    model = task_model_id(cfg, "wiki_compile")
     db = SessionLocal()
     try:
         cleanup = reconcile_paper_pages_dir(db, prune_orphans=True)
@@ -334,9 +334,7 @@ def recompile_all_concepts():
     """Force a full re-compile of every concept page in the background.
     Returns immediately; poll /api/wiki/status for live progress."""
     cfg = load_config()
-    if not cfg.get("openai_api_key"):
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured")
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    model = task_model_id(cfg, "wiki_compile")
     if not _try_acquire("concepts", total=0, model=model):
         raise HTTPException(status_code=409, detail="Wiki compile already running")
     _spawn(_drive_concept_recompile)
@@ -349,9 +347,7 @@ def recompile_all_paper_pages():
     paper. Useful when adopting Phase 1 against an existing corpus —
     `_process_single` only auto-compiles for newly-processed papers."""
     cfg = load_config()
-    if not cfg.get("openai_api_key"):
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured")
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    model = task_model_id(cfg, "wiki_compile")
     if not _try_acquire("papers", total=0, model=model):
         raise HTTPException(status_code=409, detail="Wiki compile already running")
     _spawn(_drive_paper_recompile)
@@ -364,8 +360,6 @@ def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
     button so the user can refresh one paper without retriggering the
     full extraction pipeline."""
     cfg = load_config()
-    if not cfg.get("openai_api_key"):
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured")
     paper = db.query(Paper).filter(Paper.id == paper_id).first()
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -376,7 +370,7 @@ def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
         )
     try:
         path = compile_paper_page(
-            paper, cfg["openai_api_key"], cfg["wiki_compile_model"]
+            paper, cfg.get("openai_api_key") or "", task_model_id(cfg, "wiki_compile")
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -388,14 +382,12 @@ def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
 @router.post("/concepts/{concept_id}/recompile")
 def recompile_one_concept(concept_id: int, db: Session = Depends(get_db)):
     cfg = load_config()
-    if not cfg.get("openai_api_key"):
-        raise HTTPException(status_code=400, detail="OpenAI API key not configured")
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == concept_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Concept not found")
     try:
         path = compile_concept_page(
-            node, db, cfg["openai_api_key"], cfg["wiki_compile_model"]
+            node, db, cfg.get("openai_api_key") or "", task_model_id(cfg, "wiki_compile")
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

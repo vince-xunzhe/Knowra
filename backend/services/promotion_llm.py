@@ -17,10 +17,9 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import List, Optional
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
-from config import load_config
+from config import load_config, task_model_id
 from models import KnowledgeNode, Paper
 from services.graph_service import (
     PROMOTED_BY_LLM,
@@ -163,16 +162,13 @@ def _parse_decisions(raw: str) -> dict[int, dict]:
 
 def run_llm_pass(db: Session) -> LLMRunResult:
     cfg = load_config()
-    api_key = cfg.get("openai_api_key")
-    if not api_key:
-        raise PromotionLLMUnavailable("OpenAI API key not configured")
     user_prompt_template = (cfg.get("promotion_prompt") or "").strip()
     if not user_prompt_template:
         raise PromotionLLMUnavailable(
             "未配置剔除提示词 — 跳过 Agent，本次只跑启发式"
         )
     system_prompt = user_prompt_template + PROMOTION_LLM_OUTPUT_CONTRACT
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    model = task_model_id(cfg, "promotion_judge")
 
     candidates = _candidates_for_llm(db)
     if not candidates:
@@ -184,7 +180,6 @@ def run_llm_pass(db: Session) -> LLMRunResult:
     papers = db.query(Paper).filter(Paper.id.in_(list(paper_ids))).all() if paper_ids else []
     papers_by_id = {p.id: p for p in papers}
 
-    client = OpenAI(api_key=api_key)
     promoted = rejected = still_ambiguous = 0
     now = _now()
 
@@ -193,11 +188,12 @@ def run_llm_pass(db: Session) -> LLMRunResult:
         batch_payload = [_build_candidate_block(n, papers_by_id) for n in batch_nodes]
         try:
             raw = _call_llm(
-                client,
+                None,
                 model,
                 system_prompt,
                 _user_prompt(batch_payload),
                 max_tokens=1500,
+                task_id="promotion_judge",
             )
         except Exception as exc:
             log.warning("LLM batch failed (%s); leaving %d nodes pending", exc, len(batch_nodes))

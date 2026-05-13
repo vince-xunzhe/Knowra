@@ -11,6 +11,7 @@ RUN python -m pip install --upgrade pip \
     && python -m pip install -r requirements.txt
 
 COPY backend/ .
+COPY model_gateway /app/model_gateway
 
 EXPOSE 8000
 

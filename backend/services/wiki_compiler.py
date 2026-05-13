@@ -23,10 +23,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
+from config import load_config, task_reasoning_effort
+from path_setup import ensure_project_root_on_path
+
+ensure_project_root_on_path()
+
 from models import KnowledgeNode, Paper
+from model_gateway import call_text_model
 from path_utils import DATA_DIR
 from services.graph_service import (
     is_publishable_concept_node,
@@ -34,7 +39,6 @@ from services.graph_service import (
     normalize_source_paper_ids,
 )
 from services.paper_category_service import effective_paper_category
-from services.vlm_service import model_uses_responses_api
 
 
 def _log(msg: str) -> None:
@@ -245,34 +249,32 @@ def count_publishable_concepts(db: Session) -> int:
 # --- LLM call ---------------------------------------------------------------
 
 def _call_llm(
-    client: OpenAI,
+    _client,
     model: str,
     system: str,
     user: str,
     max_tokens: int = 1800,
+    reasoning_effort: Optional[str] = None,
+    task_id: Optional[str] = None,
 ) -> str:
-    """Route to the right OpenAI surface based on the model. Responses-only
-    models (GPT-5.4/5.5) can't be reached via chat.completions; everything
-    else uses chat.completions for simplicity. No JSON mode — output is
-    markdown."""
-    if model_uses_responses_api(model):
-        resp = client.responses.create(
-            model=model,
-            instructions=system,
-            input=user,
-        )
-        return (getattr(resp, "output_text", "") or "").strip()
+    """Dispatch plain text generation through the shared model gateway.
 
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=0.3,
+    `model` is a registry id such as `openai/gpt-4o-mini` or a legacy raw
+    OpenAI model name such as `gpt-4o-mini`. The first `_client` parameter is
+    kept for backwards compatibility with older call sites and tests.
+    """
+    cfg = load_config()
+    if task_id and not reasoning_effort:
+        reasoning_effort = task_reasoning_effort(cfg, task_id)
+    return call_text_model(
+        cfg,
+        model_id=model,
+        system=system,
+        user=user,
         max_tokens=max_tokens,
+        temperature=0.3,
+        reasoning_effort=reasoning_effort,
     )
-    return (resp.choices[0].message.content or "").strip()
 
 
 # --- compile_paper_page -----------------------------------------------------
@@ -478,12 +480,12 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
             _cleanup_same_id_pages(WIKI_PAPERS_DIR, "paper_id", paper.id, path)
             return path
 
-    client = OpenAI(api_key=api_key)
     body = _call_llm(
-        client,
+        None,
         model,
         PAPER_PAGE_SYSTEM,
         _paper_user_prompt(paper, extraction),
+        task_id="wiki_compile",
     )
 
     title = _paper_page_title(paper)
@@ -598,13 +600,13 @@ def compile_concept_page(
             _cleanup_same_id_pages(WIKI_CONCEPTS_DIR, "concept_id", node.id, path)
             return path
 
-    client = OpenAI(api_key=api_key)
     body = _call_llm(
-        client,
+        None,
         model,
         CONCEPT_PAGE_SYSTEM,
         _concept_user_prompt(node, snippets),
         max_tokens=1500,
+        task_id="wiki_compile",
     )
 
     meta = {

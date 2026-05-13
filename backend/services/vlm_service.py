@@ -16,6 +16,26 @@ from typing import Optional
 from openai import OpenAI
 from openai import NotFoundError, APIStatusError
 
+from config import load_config
+from path_setup import ensure_project_root_on_path
+from path_utils import resolve_artifact_path
+from services.pdf_service import (
+    compute_hash,
+    extract_text_pages,
+    render_pdf_pages,
+    select_key_pages,
+)
+
+ensure_project_root_on_path()
+
+from model_gateway import (
+    ModelGatewayError,
+    call_text_model,
+    embed_text,
+    get_model_entry,
+    get_provider_entry,
+)
+
 
 class PaperExtractionError(RuntimeError):
     """Raised when extraction fails. Carries the raw response so the caller
@@ -46,14 +66,39 @@ ASSISTANT_INSTRUCTIONS = (
     "请使用 file_search 工具阅读 PDF 全文，严格按用户消息中的要求返回 JSON。"
     "不要输出 JSON 以外的文字，不要 markdown 代码块围栏，不要 file_search 引用标记。"
 )
+LOCAL_EXTRACTION_INSTRUCTIONS = (
+    "你是一位学术论文分析助手。用户会提供论文的本地 PDF 文本、可选的首页图像，以及抽取 schema。"
+    "请综合这些材料严格输出单个 JSON 对象，不要代码围栏，不要额外解释，不要编造。"
+)
+LOCAL_EXTRACTION_NOTES_INSTRUCTIONS = (
+    "你是一位学术论文阅读助手。用户会给你一段按页切分的论文正文。"
+    "请提炼这一段对结构化抽取有用的证据笔记，重点关注：标题、作者、任务定义、方法、技术名词、数据集、基线、实验结果、局限性。"
+    "输出中文要点列表即可，短一些，但要保留关键实体名和数字。不要输出 JSON。"
+)
 
 ASSISTANT_NAME = "knowledge-tree-paper-extractor"
 RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 LOCAL_TEXT_FALLBACK_MAX_CHARS = 32000
+LOCAL_CHAT_CONTEXT_MAX_CHARS = 24000
+LOCAL_EXTRACTION_CHUNK_CHAR_BUDGET = 12000
+LOCAL_EXTRACTION_MAX_CHUNKS = 4
+LOCAL_EXTRACTION_CHUNK_TIMEOUT_S = 150
+LOCAL_EXTRACTION_FINAL_TIMEOUT_S = 600
 
 
 def model_uses_responses_api(model: str) -> bool:
     return model in RESPONSES_ONLY_MODELS
+
+
+def _resolve_model_gateway_context(model: str) -> tuple[dict, str]:
+    cfg = load_config()
+    model_entry = get_model_entry(cfg, model)
+    if model_entry is None:
+        return cfg, "openai"
+    provider = get_provider_entry(cfg, model_entry.get("provider_id", ""))
+    if provider is None:
+        return cfg, "openai"
+    return cfg, str(provider.get("provider_type") or "openai")
 
 
 def _has_substantive_value(value) -> bool:
@@ -129,6 +174,97 @@ def _build_local_text_fallback_prompt(prompt: str, fallback_text: str) -> str:
         f"{text}\n"
         "[LOCAL_PDF_TEXT_END]\n"
     )
+
+
+def _truncate_local_context(text: str, limit: int = LOCAL_CHAT_CONTEXT_MAX_CHARS) -> str:
+    raw = (text or "").strip()
+    if len(raw) <= limit:
+        return raw
+    return raw[:limit].rstrip() + "\n\n[...TRUNCATED CONTEXT...]"
+
+
+def _existing_image_paths(*paths: Optional[str]) -> list[str]:
+    resolved: list[str] = []
+    for raw in paths:
+        path_text = str(raw or "").strip()
+        if not path_text:
+            continue
+        path = Path(path_text)
+        if path.is_file():
+            resolved.append(str(path))
+    return resolved
+
+
+def _history_to_transcript(chat_history: Optional[list]) -> str:
+    turns: list[str] = []
+    for item in chat_history or []:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        speaker = "用户" if role == "user" else "助手"
+        turns.append(f"{speaker}: {content}")
+    return "\n".join(turns)
+
+
+def _build_page_chunks(page_texts: list[dict]) -> list[dict]:
+    chunks: list[dict] = []
+    current_pages: list[int] = []
+    current_parts: list[str] = []
+    current_len = 0
+
+    def _flush():
+        nonlocal current_pages, current_parts, current_len
+        if current_pages and current_parts:
+            chunks.append({
+                "start_page": current_pages[0],
+                "end_page": current_pages[-1],
+                "text": "\n\n".join(current_parts),
+            })
+        current_pages = []
+        current_parts = []
+        current_len = 0
+
+    for item in page_texts:
+        page_number = int(item.get("page_number") or 0)
+        text = str(item.get("text") or "").strip()
+        if page_number <= 0 or not text:
+            continue
+        page_block = f"[PAGE {page_number}]\n{text}"
+        if current_parts and current_len + len(page_block) > LOCAL_EXTRACTION_CHUNK_CHAR_BUDGET:
+            _flush()
+            if len(chunks) >= LOCAL_EXTRACTION_MAX_CHUNKS:
+                break
+        current_pages.append(page_number)
+        current_parts.append(page_block)
+        current_len += len(page_block)
+
+    if len(chunks) < LOCAL_EXTRACTION_MAX_CHUNKS:
+        _flush()
+    return chunks[:LOCAL_EXTRACTION_MAX_CHUNKS]
+
+
+def _resolve_image_paths_for_pages(
+    pdf_filepath: str,
+    *,
+    file_hash: Optional[str],
+    first_page_image_path: Optional[str],
+    num_pages: int,
+) -> list[str]:
+    key_pages = select_key_pages(num_pages, max_pages=5)
+    if not key_pages:
+        return _existing_image_paths(first_page_image_path)
+    hash_value = (file_hash or "").strip() or compute_hash(pdf_filepath)
+    rendered = render_pdf_pages(pdf_filepath, hash_value, key_pages)
+    local_paths = [str(resolve_artifact_path(path)) for path in rendered]
+    return _existing_image_paths(first_page_image_path, *local_paths)
+
+
+def _is_timeout_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "timed out" in text or "timeout" in text
 
 
 # --- assistant lifecycle -----------------------------------------------------
@@ -305,14 +441,18 @@ def _run_with_responses_file_search(
     model: str,
     vector_store_id: str,
     prompt: str,
+    reasoning_effort: Optional[str] = None,
 ) -> tuple[str, str]:
-    response = client.responses.create(
-        model=model,
-        instructions=ASSISTANT_INSTRUCTIONS,
-        input=prompt,
-        tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
-        text={"format": {"type": "json_object"}},
-    )
+    kwargs = {
+        "model": model,
+        "instructions": ASSISTANT_INSTRUCTIONS,
+        "input": prompt,
+        "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+        "text": {"format": {"type": "json_object"}},
+    }
+    if reasoning_effort in {"low", "medium", "high"}:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
+    response = client.responses.create(**kwargs)
     raw = getattr(response, "output_text", "") or ""
     preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
     _log(f"responses id={response.id} raw_len={len(raw)} preview={preview!r}")
@@ -324,6 +464,7 @@ def _run_extraction_once(
     model: str,
     file_id: str,
     prompt: str,
+    reasoning_effort: Optional[str] = None,
     cached_assistant_id: Optional[str] = None,
     cached_vector_store_id: Optional[str] = None,
 ) -> tuple[dict, str, str, str, str]:
@@ -335,7 +476,7 @@ def _run_extraction_once(
             client, cached_vector_store_id, file_id
         )
         raw, thread_id = _run_with_responses_file_search(
-            client, model, vector_store_id, prompt
+            client, model, vector_store_id, prompt, reasoning_effort=reasoning_effort
         )
     else:
         assistant_id = _ensure_assistant(client, cached_assistant_id, model)
@@ -591,10 +732,13 @@ def extract_knowledge_from_paper(
     prompt: str,
     api_key: str,
     model: str,
+    reasoning_effort: Optional[str] = None,
     cached_file_id: Optional[str] = None,
     cached_assistant_id: Optional[str] = None,
     cached_vector_store_id: Optional[str] = None,
     fallback_text: Optional[str] = None,
+    first_page_image_path: Optional[str] = None,
+    file_hash: Optional[str] = None,
 ) -> tuple[dict, str, str, str, str, str]:
     """Run structured extraction on a single PDF via Assistants + file_search.
 
@@ -602,6 +746,135 @@ def extract_knowledge_from_paper(
     Callers should persist file_id on the Paper row, assistant_id in config,
     and thread_id on the Paper row so follow-up chat can reuse the thread.
     """
+    cfg, provider_type = _resolve_model_gateway_context(model)
+    if provider_type == "codex_cli":
+        local_prompt = _build_local_text_fallback_prompt(prompt, fallback_text or "")
+        page_texts, num_pages = extract_text_pages(
+            pdf_filepath,
+            max_chars_per_page=4500,
+            max_total_chars=54000,
+        )
+        page_chunks = _build_page_chunks(page_texts)
+        page_overview = ", ".join(
+            f"{chunk['start_page']}-{chunk['end_page']}" if chunk["start_page"] != chunk["end_page"] else str(chunk["start_page"])
+            for chunk in page_chunks
+        ) or "无有效文本页"
+        chunk_notes: list[str] = []
+        for index, chunk in enumerate(page_chunks, start=1):
+            chunk_prompt = (
+                "请阅读下面这段论文正文，提炼对最终结构化抽取有帮助的证据笔记。\n"
+                "尽量保留技术名词、数据集名、实验数字和因果关系。\n\n"
+                f"[PDF_FILEPATH]\n{pdf_filepath}\n\n"
+                f"[CHUNK_INDEX]\n{index}/{len(page_chunks)}\n\n"
+                f"[PAGE_RANGE]\n{chunk['start_page']}-{chunk['end_page']}\n\n"
+                f"[CHUNK_TEXT]\n{chunk['text']}"
+            )
+            try:
+                notes = call_text_model(
+                    cfg,
+                    model_id=model,
+                    system=LOCAL_EXTRACTION_NOTES_INSTRUCTIONS,
+                    user=chunk_prompt,
+                    reasoning_effort=reasoning_effort,
+                    max_tokens=1200,
+                    temperature=0.1,
+                    timeout_s=LOCAL_EXTRACTION_CHUNK_TIMEOUT_S,
+                ).strip()
+            except Exception as exc:
+                _log(
+                    f"codex chunk notes failed for pages {chunk['start_page']}-{chunk['end_page']}: {exc}"
+                )
+                notes = ""
+            if notes:
+                chunk_notes.append(
+                    f"## Chunk {index} | pages {chunk['start_page']}-{chunk['end_page']}\n{notes}"
+                )
+
+        image_paths = _resolve_image_paths_for_pages(
+            pdf_filepath,
+            file_hash=file_hash,
+            first_page_image_path=first_page_image_path,
+            num_pages=num_pages,
+        )
+        raw = ""
+        try:
+            final_strategies = [
+                {
+                    "name": "full",
+                    "chunk_notes": chunk_notes,
+                    "image_paths": image_paths,
+                    "timeout_s": LOCAL_EXTRACTION_FINAL_TIMEOUT_S,
+                },
+                {
+                    "name": "fewer_images",
+                    "chunk_notes": chunk_notes,
+                    "image_paths": image_paths[:2],
+                    "timeout_s": 420,
+                },
+                {
+                    "name": "text_only",
+                    "chunk_notes": chunk_notes[:2],
+                    "image_paths": [],
+                    "timeout_s": 300,
+                },
+            ]
+            last_timeout_exc: Optional[Exception] = None
+            for strategy in final_strategies:
+                local_user = (
+                    "你正在执行单篇论文结构化抽取任务。\n"
+                    "请严格遵守用户给出的 JSON schema 与字段要求，输出单个 JSON 对象。\n"
+                    "如果某些字段材料不足，可以留空，但不要省略整个对象结构，也不要编造。\n\n"
+                    f"[PDF_FILEPATH]\n{pdf_filepath}\n\n"
+                    f"[PAGE_OVERVIEW]\n共 {num_pages} 页；本地分段覆盖：{page_overview}\n\n"
+                    f"[CHUNK_NOTES]\n{chr(10).join(strategy['chunk_notes']) or '[无分段笔记，退回使用本地全文文本]'}\n\n"
+                    f"[TASK_PROMPT]\n{local_prompt}"
+                )
+                try:
+                    raw = call_text_model(
+                        cfg,
+                        model_id=model,
+                        system=LOCAL_EXTRACTION_INSTRUCTIONS,
+                        user=local_user,
+                        reasoning_effort=reasoning_effort,
+                        image_paths=strategy["image_paths"],
+                        max_tokens=4000,
+                        temperature=0.1,
+                        timeout_s=strategy["timeout_s"],
+                    )
+                    break
+                except Exception as exc:
+                    if not _is_timeout_error(exc):
+                        raise
+                    last_timeout_exc = exc
+                    _log(
+                        f"codex extraction strategy={strategy['name']} timed out; retrying with lighter context"
+                    )
+            else:
+                raise last_timeout_exc or ModelGatewayError("Codex CLI request timed out")
+            parsed = _normalize_extraction(_parse_json_lenient(raw))
+            issues = extraction_quality_issues(parsed)
+            if extraction_has_critical_issues(parsed):
+                raise PaperExtractionError(
+                    "抽取结果缺少关键内容: " + "；".join(issues),
+                    raw=raw,
+                    file_id="",
+                    assistant_id="",
+                )
+        except PaperExtractionError:
+            raise
+        except Exception as e:
+            preview = raw if raw else "<empty response>"
+            if len(preview) > 200:
+                preview = preview[:200] + "…"
+            raise PaperExtractionError(
+                f"解析失败: {e} | raw={preview!r}",
+                raw=raw,
+                file_id="",
+                assistant_id="",
+            ) from e
+        synthetic_thread_id = f"local-codex-extract:{Path(pdf_filepath).stem}"
+        return parsed, raw, "", "", synthetic_thread_id, ""
+
     client = OpenAI(api_key=api_key)
     file_id = _ensure_file(client, cached_file_id, pdf_filepath)
     assistant_id = ""
@@ -615,6 +888,7 @@ def extract_knowledge_from_paper(
             model,
             file_id,
             prompt,
+            reasoning_effort=reasoning_effort,
             cached_assistant_id=cached_assistant_id,
             cached_vector_store_id=cached_vector_store_id,
         )
@@ -630,6 +904,7 @@ def extract_knowledge_from_paper(
                 model,
                 file_id,
                 fallback_prompt,
+                reasoning_effort=reasoning_effort,
                 cached_assistant_id=assistant_id or cached_assistant_id,
                 cached_vector_store_id=vector_store_id or cached_vector_store_id,
             )
@@ -667,6 +942,10 @@ CHAT_INSTRUCTIONS = (
     "可以使用 Markdown 排版，但不要输出 file_search 引用标记（如【n:m†source】）。"
     "不要用 JSON 格式回答，正常讲人话即可。"
 )
+LOCAL_CHAT_INSTRUCTIONS = (
+    "你是一位学术论文分析助手。用户会提供单篇论文的结构化抽取结果、本地 PDF 文本、可选首页图像、用户笔记和历史对话。"
+    "请基于这些材料用中文自然回答追问。材料不足时请明确说明，不要编造，也不要假装使用 file_search。"
+)
 
 
 def _ensure_chat_thread(
@@ -696,9 +975,15 @@ def run_chat_turn(
     assistant_id: str,
     file_id: str,
     user_message: str,
+    reasoning_effort: Optional[str] = None,
     cached_vector_store_id: Optional[str] = None,
     cached_thread_id: Optional[str] = None,
     chat_history: Optional[list] = None,
+    paper_title: Optional[str] = None,
+    paper_notes: Optional[str] = None,
+    paper_raw_llm_response: Optional[str] = None,
+    paper_extracted_text: Optional[str] = None,
+    first_page_image_path: Optional[str] = None,
     timeout_s: int = 300,
 ) -> tuple[str, str, bool, str]:
     """Send a user message on the paper's thread and return
@@ -707,6 +992,44 @@ def run_chat_turn(
     Reuses the persisted thread so the assistant sees prior turns. Recreates
     the thread and re-attaches the PDF when the old one is gone.
     """
+    cfg, provider_type = _resolve_model_gateway_context(model)
+    if provider_type == "codex_cli":
+        history_block = _history_to_transcript(chat_history)
+        extraction_block = (paper_raw_llm_response or "").strip()
+        parsed_extraction = None
+        if extraction_block:
+            try:
+                parsed_extraction = _normalize_extraction(_parse_json_lenient(extraction_block))
+            except Exception:
+                parsed_extraction = None
+        if parsed_extraction:
+            extraction_block = json.dumps(parsed_extraction, ensure_ascii=False, indent=2)
+        extracted_text_block = _truncate_local_context(paper_extracted_text or "")
+        notes_block = _truncate_local_context(paper_notes or "", limit=8000)
+        local_user = (
+            "请基于下面这篇论文的本地材料回答用户追问。\n"
+            "优先依据结构化抽取结果；若不够，再参考 PDF 文本、首页图像和用户笔记。\n"
+            "如果材料不足，请明确说不知道，不要编造。\n\n"
+            f"[PAPER_TITLE]\n{(paper_title or '').strip()}\n\n"
+            f"[CHAT_HISTORY]\n{history_block or '[无历史对话]'}\n\n"
+            f"[STRUCTURED_EXTRACTION]\n{extraction_block or '[暂无结构化抽取结果]'}\n\n"
+            f"[LOCAL_PDF_TEXT]\n{extracted_text_block or '[暂无本地 PDF 文本]'}\n\n"
+            f"[USER_NOTES]\n{notes_block or '[暂无用户笔记]'}\n\n"
+            f"[CURRENT_QUESTION]\n{user_message.strip()}"
+        )
+        reply = call_text_model(
+            cfg,
+            model_id=model,
+            system=LOCAL_CHAT_INSTRUCTIONS,
+            user=local_user,
+            reasoning_effort=reasoning_effort,
+            image_paths=_existing_image_paths(first_page_image_path),
+            max_tokens=2400,
+            temperature=0.3,
+        )
+        thread_id = cached_thread_id or f"local-codex-chat:{(paper_title or 'paper').strip() or 'paper'}"
+        return reply.strip(), thread_id, not bool(cached_thread_id), ""
+
     client = OpenAI(api_key=api_key)
 
     if model_uses_responses_api(model):
@@ -717,6 +1040,8 @@ def run_chat_turn(
             "input": [{"role": "user", "content": user_message}],
             "tools": [{"type": "file_search", "vector_store_ids": [vector_store_id]}],
         }
+        if reasoning_effort in {"low", "medium", "high"}:
+            create_kwargs["reasoning"] = {"effort": reasoning_effort}
         is_new = not bool(cached_thread_id)
         if cached_thread_id:
             create_kwargs["previous_response_id"] = cached_thread_id
@@ -737,6 +1062,11 @@ def run_chat_turn(
                     instructions=CHAT_INSTRUCTIONS,
                     input=history,
                     tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+                    **(
+                        {"reasoning": {"effort": reasoning_effort}}
+                        if reasoning_effort in {"low", "medium", "high"}
+                        else {}
+                    ),
                 )
                 is_new = True
         else:
@@ -754,6 +1084,11 @@ def run_chat_turn(
                 instructions=CHAT_INSTRUCTIONS,
                 input=history,
                 tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+                **(
+                    {"reasoning": {"effort": reasoning_effort}}
+                    if reasoning_effort in {"low", "medium", "high"}
+                    else {}
+                ),
             )
 
         reply = _strip_citations((getattr(response, "output_text", "") or "")).strip()
@@ -799,9 +1134,18 @@ def run_chat_turn(
 # --- embeddings (unchanged) --------------------------------------------------
 
 def get_embedding(text: str, api_key: str, model: str = "text-embedding-3-small") -> list:
-    client = OpenAI(api_key=api_key)
-    response = client.embeddings.create(input=text, model=model)
-    return response.data[0].embedding
+    cfg = load_config()
+    try:
+        return embed_text(
+            cfg,
+            model_id=model,
+            text=text,
+            api_key_override=api_key or None,
+        )
+    except Exception:
+        client = OpenAI(api_key=api_key)
+        response = client.embeddings.create(input=text, model=model)
+        return response.data[0].embedding
 
 
 def cosine_similarity(a: list, b: list) -> float:

@@ -12,10 +12,10 @@ from services.ask_agent import run_ask_agent
 
 class AskAgentResponsesTests(unittest.TestCase):
     @patch("services.ask_agent._dispatch_tool", return_value="INDEX CONTENT")
-    @patch("services.ask_agent.OpenAI")
+    @patch("services.ask_agent.create_openai_client_for_model")
     def test_responses_models_can_complete_tool_loop(
         self,
-        mock_openai,
+        mock_create_client,
         mock_dispatch_tool,
     ):
         tool_call = SimpleNamespace(
@@ -37,7 +37,12 @@ class AskAgentResponsesTests(unittest.TestCase):
 
         client = MagicMock()
         client.responses.create.side_effect = [first_response, second_response]
-        mock_openai.return_value = client
+        mock_create_client.return_value = (
+            client,
+            "gpt-5.4",
+            {"id": "openai", "provider_type": "openai"},
+            {"id": "openai/gpt-5.4", "upstream_model": "gpt-5.4"},
+        )
 
         result = run_ask_agent(
             MagicMock(),
@@ -77,6 +82,43 @@ class AskAgentResponsesTests(unittest.TestCase):
                 }
             ],
         )
+
+    @patch("services.ask_agent.call_text_model", return_value="## Answer\n\nLocal Codex.")
+    @patch("services.ask_agent._tool_read_wiki", return_value="# Paper\n\n内容")
+    @patch(
+        "services.ask_agent._tool_search_wiki",
+        return_value='[{"kind":"paper","filename":"0001-test.md","title":"Test","snippet":"match"}]',
+    )
+    @patch("services.ask_agent._tool_list_wiki_index", return_value="# Index\n\n- test")
+    @patch("services.ask_agent._provider_type_for_model", return_value="codex_cli")
+    @patch("services.ask_agent.load_config", return_value={})
+    def test_codex_cli_can_answer_via_local_retrieval(
+        self,
+        mock_load_config,
+        mock_provider_type,
+        mock_list_index,
+        mock_search_wiki,
+        mock_read_wiki,
+        mock_call_text_model,
+    ):
+        result = run_ask_agent(
+            MagicMock(),
+            question="测试问题",
+            history=[{"role": "user", "content": "先看知识库"}],
+            api_key="",
+            model="codex-cli/gpt-5.4",
+            reasoning_effort="high",
+        )
+
+        self.assertEqual(result.answer, "## Answer\n\nLocal Codex.")
+        self.assertEqual(result.model, "codex-cli/gpt-5.4")
+        self.assertEqual(result.steps, 3)
+        self.assertEqual([step.tool for step in result.trace], ["list_wiki_index", "search_wiki", "read_wiki"])
+        self.assertIn("data/wiki/papers/0001-test.md", result.cited_files)
+        self.assertEqual(mock_call_text_model.call_args.kwargs["reasoning_effort"], "high")
+        self.assertIn("[index.md]", mock_call_text_model.call_args.kwargs["user"])
+        self.assertIn("[read_wiki 材料]", mock_call_text_model.call_args.kwargs["user"])
+        mock_read_wiki.assert_called_once_with("0001-test.md", "papers")
 
 
 if __name__ == "__main__":

@@ -35,7 +35,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from models import KnowledgeNode, Paper
@@ -149,13 +148,13 @@ def rebuild_index(
         # rely on the file existing.
         body = "# Knowra 知识库索引\n\n_库里还没有论文或概念页，请先在「论文」页处理 PDF。_\n"
     else:
-        client = OpenAI(api_key=api_key)
         body = _call_llm(
-            client,
+            None,
             model,
             INDEX_SYSTEM_PROMPT,
             _user_prompt(payload),
             max_tokens=4000,
+            task_id="wiki_compile",
         )
 
     meta = {

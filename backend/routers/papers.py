@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from database import get_db
 from logging_utils import get_logger
 from models import Paper, KnowledgeNode
-from config import load_config, save_config
+from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
+from model_gateway import get_model_entry, get_provider_entry
 from path_utils import (
     portable_data_path,
     resolve_artifact_path,
@@ -147,10 +148,17 @@ def _chat_state(p: Paper) -> dict:
     """Chat-related fields surfaced to the frontend. `days_remaining` and
     `expires_at` are derived from `thread_created_at` so the UI can show a
     countdown without guessing the TTL."""
+    cfg = load_config()
+    paper_chat_model = task_model_name(cfg, "paper_chat")
+    model_entry = get_model_entry(cfg, paper_chat_model)
+    provider = get_provider_entry(cfg, model_entry.get("provider_id", "")) if model_entry else None
+    provider_type = str(provider.get("provider_type") or "openai") if provider else "openai"
+    uses_local_context = provider_type == "codex_cli"
+
     created = p.thread_created_at
     expires_at = None
     days_remaining = None
-    if created is not None:
+    if created is not None and not uses_local_context:
         # Treat naive datetimes as UTC (SQLite round-trips lose tzinfo).
         if created.tzinfo is None:
             created = created.replace(tzinfo=timezone.utc)
@@ -164,7 +172,7 @@ def _chat_state(p: Paper) -> dict:
         "expires_at": expires_at,
         "days_remaining": days_remaining,
         "ttl_days": THREAD_TTL_DAYS,
-        "ready": bool(p.openai_file_id) and p.processed,
+        "ready": p.processed and (uses_local_context or bool(p.openai_file_id)),
     }
 
 
@@ -363,11 +371,18 @@ def _process_single(paper_id: int):
             pdf_filepath=str(pdf_path),
             prompt=cfg["extraction_prompt"],
             api_key=cfg["openai_api_key"],
-            model=cfg["vlm_model"],
+            model=task_model_name(cfg, "paper_extract"),
+            reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
             cached_file_id=cached_file_id,
             cached_assistant_id=cached_assistant_id,
             cached_vector_store_id=cached_vector_store_id,
             fallback_text=p.extracted_text or "",
+            first_page_image_path=(
+                str(resolve_artifact_path(p.first_page_image_path))
+                if cfg.get("use_first_page_image") and p.first_page_image_path
+                else None
+            ),
+            file_hash=p.file_hash,
         )
 
         # Defensive check: if the model returned an empty response without
@@ -400,7 +415,7 @@ def _process_single(paper_id: int):
         p.raw_llm_response = raw
         # Stamp which model produced this raw response so the Review page
         # can show it alongside processed_at.
-        p.extraction_model = cfg["vlm_model"]
+        p.extraction_model = task_model_name(cfg, "paper_extract")
         p.title = (extraction.get("title") or p.filename)[:200]
         p.authors = extraction.get("authors") or []
         p.paper_category_model = derive_model_paper_category(p, extraction)
@@ -409,7 +424,7 @@ def _process_single(paper_id: int):
             extraction,
             p.id,
             cfg["openai_api_key"],
-            cfg["embedding_model"],
+            task_model_id(cfg, "embedding"),
             cfg["similarity_threshold"],
             db,
         )
@@ -430,7 +445,7 @@ def _process_single(paper_id: int):
                 compile_concept_pages_for_paper,
                 reconcile_concept_pages_dir,
             )
-            compile_model = cfg["wiki_compile_model"]
+            compile_model = task_model_id(cfg, "wiki_compile")
             compile_paper_page(p, cfg["openai_api_key"], compile_model)
             compile_concept_pages_for_paper(
                 p.id, db, cfg["openai_api_key"], compile_model
@@ -652,7 +667,7 @@ def update_paper_response(
         extraction,
         p.id,
         cfg.get("openai_api_key", ""),
-        cfg.get("embedding_model", "text-embedding-3-small"),
+        task_model_id(cfg, "embedding"),
         cfg.get("similarity_threshold", 0.6),
         db,
     )
@@ -733,16 +748,22 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
     _sync_paper_from_record_if_needed(db, p)
-    if not p.processed or not p.openai_file_id:
+    if not p.processed:
         raise HTTPException(status_code=400, detail="论文尚未完成处理，无法追问")
 
     cfg = load_config()
     api_key = cfg.get("openai_api_key")
     assistant_id = cfg.get("openai_assistant_id")
-    model = cfg.get("vlm_model", "gpt-4o")
-    if not api_key:
+    model = task_model_name(cfg, "paper_chat")
+    model_entry = get_model_entry(cfg, model)
+    provider = get_provider_entry(cfg, model_entry.get("provider_id", "")) if model_entry else None
+    provider_type = str(provider.get("provider_type") or "openai") if provider else "openai"
+    uses_local_context = provider_type == "codex_cli"
+    if not uses_local_context and not p.openai_file_id:
+        raise HTTPException(status_code=400, detail="论文缺少远程文件索引，无法追问")
+    if not uses_local_context and not api_key:
         raise HTTPException(status_code=400, detail="OpenAI 未配置")
-    if not model_uses_responses_api(model) and not assistant_id:
+    if not uses_local_context and not model_uses_responses_api(model) and not assistant_id:
         raise HTTPException(status_code=400, detail="assistant 未创建")
 
     user_text = (body.message or "").strip()
@@ -751,14 +772,24 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
 
     try:
         reply, thread_id, was_recreated, vector_store_id = run_chat_turn(
-            api_key=api_key,
+            api_key=api_key or "",
             model=model,
-            assistant_id=assistant_id,
-            file_id=p.openai_file_id,
+            assistant_id=assistant_id or "",
+            file_id=p.openai_file_id or "",
             user_message=user_text,
+            reasoning_effort=task_reasoning_effort(cfg, "paper_chat"),
             cached_vector_store_id=p.openai_vector_store_id,
             cached_thread_id=p.openai_thread_id,
             chat_history=p.chat_history,
+            paper_title=p.title or p.filename,
+            paper_notes=p.notes or "",
+            paper_raw_llm_response=p.raw_llm_response or "",
+            paper_extracted_text=p.extracted_text or "",
+            first_page_image_path=(
+                str(resolve_artifact_path(p.first_page_image_path))
+                if cfg.get("use_first_page_image") and p.first_page_image_path
+                else None
+            ),
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"对话失败: {e}")

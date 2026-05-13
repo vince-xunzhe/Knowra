@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from config import load_config
+from config import load_config, task_model_id, task_model_name, task_reasoning_effort
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
 from services import ask_agent, wiki_index
@@ -68,7 +68,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="question 不能为空")
     cfg = load_config()
     api_key = cfg.get("openai_api_key") or ""
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    model = task_model_name(cfg, "ask_agent")
     try:
         result = ask_agent.run_ask_agent(
             db,
@@ -76,6 +76,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
             history=body.history,
             api_key=api_key,
             model=model,
+            reasoning_effort=task_reasoning_effort(cfg, "ask_agent"),
         )
     except ask_agent.AskAgentUnavailable as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -102,9 +103,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
 def rebuild_index(db: Session = Depends(get_db)):
     cfg = load_config()
     api_key = cfg.get("openai_api_key") or ""
-    if not api_key:
-        raise HTTPException(status_code=400, detail="OpenAI API key 未配置")
-    model = cfg.get("wiki_compile_model") or "gpt-4o-mini"
+    model = task_model_id(cfg, "wiki_compile")
     try:
         path = wiki_index.rebuild_index(db, api_key=api_key, model=model)
     except Exception as exc:
@@ -269,7 +268,7 @@ def create_concept_from_synthesis(
         source_paper_ids=paper_ids,
         user_tags=tag_set,
         api_key=cfg.get("openai_api_key") or "",
-        model=cfg.get("wiki_compile_model") or "gpt-4o-mini",
+        model=task_model_id(cfg, "ask_synthesis"),
     )
     summary = (analysis.summary or "").strip() or title
     body_markdown = (analysis.body_markdown or "").strip() or md_body

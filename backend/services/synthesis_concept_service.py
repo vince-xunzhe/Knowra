@@ -5,7 +5,6 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from openai import OpenAI
 from sqlalchemy.orm import Session
 
 from models import KnowledgeNode, Paper
@@ -375,7 +374,7 @@ def analyze_synthesis_concept(
         source_papers=source_papers,
         synthesis_scope=synthesis_scope,
     )
-    if not api_key or not model:
+    if not model:
         return SynthesisConceptAnalysis(
             used_model=False,
             model=None,
@@ -389,9 +388,8 @@ def analyze_synthesis_concept(
         )
 
     try:
-        client = OpenAI(api_key=api_key)
         raw = _call_llm(
-            client,
+            None,
             model,
             SYNTHESIS_CONCEPT_SYSTEM,
             _analysis_prompt(
@@ -404,6 +402,7 @@ def analyze_synthesis_concept(
                 candidate_nodes=candidate_nodes,
             ),
             max_tokens=2200,
+            task_id="ask_synthesis",
         )
         parsed = _parse_analysis(raw)
     except Exception:

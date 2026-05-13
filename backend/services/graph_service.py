@@ -272,13 +272,15 @@ def _add_edge(db: Session, src_id: int, tgt_id: int, relation: str, weight: floa
 
 
 def _add_similarity_edges(db: Session, node: KnowledgeNode, threshold: float):
-    if not node.embedding:
+    if not isinstance(node.embedding, list) or not node.embedding:
         return
     others = db.query(KnowledgeNode).filter(
         KnowledgeNode.id != node.id,
         KnowledgeNode.embedding.isnot(None),
     ).all()
     for other in others:
+        if not isinstance(other.embedding, list) or not other.embedding:
+            continue
         sim = cosine_similarity(node.embedding, other.embedding)
         if sim >= threshold:
             _add_edge(db, node.id, other.id, "similar", round(sim, 4))
