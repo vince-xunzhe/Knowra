@@ -310,10 +310,10 @@ export default function GraphPage() {
       const node = graphData.nodes.find(n => n.id === String(targetId))
       if (node) {
         setDrawerInitialTab('wiki')
-        focusNode(node)
+        setSelectedNode(node)
       }
     },
-    [graphData.nodes, focusNode],
+    [graphData.nodes],
   )
 
   // Convert the leading `0042-...md` filename → graph node id. Wiki pages
@@ -366,6 +366,14 @@ export default function GraphPage() {
     const node = graphData.nodes.find(n => n.id === nodeId)
     if (node) focusNode(node)
   }
+
+  // In the flat 概念 catalog, clicking a row should feel like browsing a
+  // list with a detail pane, not a navigation jump into 节点图谱.
+  const handleConceptPick = useCallback((node: GraphNode) => {
+    const freshest = graphDataRef.current?.nodes.find(n => n.id === node.id) || node
+    setDrawerInitialTab('detail')
+    setSelectedNode(freshest)
+  }, [])
 
   const handleOpenCreate = () => {
     setEditingNode(null)
@@ -754,7 +762,7 @@ export default function GraphPage() {
             <ConceptListView
               nodes={visibleData.nodes.filter(n => CONCEPT_ELIGIBLE_TYPES.has(n.node_type))}
               selectedId={selectedNode?.id || null}
-              onPick={focusNode}
+              onPick={handleConceptPick}
             />
           ) : filteredData.nodes.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-5 px-6 text-center">

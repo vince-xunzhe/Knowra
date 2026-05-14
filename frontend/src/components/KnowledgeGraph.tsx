@@ -87,6 +87,7 @@ function applyGraphEmphasis(
   selectedNodeId: string | null,
   hoveredNodeId: string | null,
 ) {
+  if (cy.destroyed()) return
   cy.nodes().removeClass('highlighted hovered neighbor faded')
   cy.edges().removeClass('neighbor faded')
 
@@ -103,9 +104,38 @@ function applyGraphEmphasis(
   target.addClass(hoveredNodeId ? 'hovered' : 'highlighted')
 }
 
+function graphElements(data: GraphData) {
+  return [
+    ...data.nodes.map(n => ({
+      data: {
+        id: n.id,
+        label: compactLabel(n.title, n.node_type === 'paper' ? 28 : 18),
+        fullTitle: n.title,
+        node_type: n.node_type,
+        promotion_status: n.promotion_status || 'promoted',
+        promoted_by: n.promoted_by || '',
+        color: NODE_COLORS[n.node_type] || '#94a3b8',
+      },
+    })),
+    ...data.edges.map(e => ({
+      data: {
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        relation_type: e.relation_type,
+        label: e.relation_type !== 'similar' ? e.relation_type : '',
+        weight: e.weight,
+      },
+    })),
+  ]
+}
+
 export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
+  const activeLayoutRef = useRef<cytoscape.Layouts | null>(null)
+  const dataNodesRef = useRef<GraphNode[]>(data.nodes)
+  const onNodeClickRef = useRef(onNodeClick)
   const focusedNodeIdRef = useRef<string | null>(null)
   const selectedNodeIdRef = useRef<string | null>(selectedNodeId)
   const hoveredNodeIdRef = useRef<string | null>(null)
@@ -118,13 +148,46 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   const pauseIdleAutoplayRef = useRef<((clearAutoHover?: boolean) => void) | null>(null)
   const scheduleIdleAutoplayRef = useRef<(() => void) | null>(null)
 
-  const handleNodeClick = useCallback(
-    (nodeId: string) => {
-      const node = data.nodes.find(n => n.id === nodeId)
-      if (node) onNodeClick(node)
-    },
-    [data.nodes, onNodeClick]
-  )
+  const handleNodeClick = useCallback((nodeId: string) => {
+    const node = dataNodesRef.current.find(n => n.id === nodeId)
+    if (node) onNodeClickRef.current(node)
+  }, [])
+
+  useEffect(() => {
+    dataNodesRef.current = data.nodes
+  }, [data.nodes])
+
+  useEffect(() => {
+    onNodeClickRef.current = onNodeClick
+  }, [onNodeClick])
+
+  const stopActiveLayout = useCallback(() => {
+    const layout = activeLayoutRef.current
+    if (!layout) return
+    try {
+      layout.stop()
+      layout.removeAllListeners()
+    } catch {
+      // Best-effort cleanup; Cytoscape can already be tearing down.
+    }
+    activeLayoutRef.current = null
+  }, [])
+
+  const startLayout = useCallback((
+    cy: cytoscape.Core,
+    nodeCount: number,
+    options: { fit: boolean; animate: boolean; numIter: number },
+  ) => {
+    stopActiveLayout()
+    const layout = cy.layout(graphLayout(nodeCount, options))
+    activeLayoutRef.current = layout
+    layout.one('layoutstop', () => {
+      if (activeLayoutRef.current === layout) {
+        activeLayoutRef.current = null
+      }
+    })
+    layout.run()
+  }, [stopActiveLayout])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -133,35 +196,10 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       container: containerRef.current,
       minZoom: 0.28,
       maxZoom: 2.4,
-      wheelSensitivity: 0.18,
       motionBlur: true,
       pixelRatio: 'auto',
       textureOnViewport: false,
-      elements: [
-        ...data.nodes.map(n => ({
-          data: {
-            id: n.id,
-            label: compactLabel(n.title, n.node_type === 'paper' ? 28 : 18),
-            fullTitle: n.title,
-            node_type: n.node_type,
-            // promotion_status drives the candidate-mode visual layer:
-            // pending nodes get a dashed border + lower opacity so the eye
-            // immediately separates "needs review" from "already decided".
-            promotion_status: n.promotion_status || 'promoted',
-            promoted_by: n.promoted_by || '',
-            color: NODE_COLORS[n.node_type] || '#94a3b8',
-          },
-        })),
-        ...data.edges.map(e => ({
-          data: {
-            id: e.id,
-            source: e.source,
-            target: e.target,
-            label: e.relation_type !== 'similar' ? e.relation_type : '',
-            weight: e.weight,
-          },
-        })),
-      ],
+      elements: graphElements(data),
       style: [
         {
           selector: 'node',
@@ -325,8 +363,22 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           },
         },
       ],
-      layout: graphLayout(data.nodes.length, { fit: true, animate: true, numIter: 2200 }),
+      layout: graphLayout(data.nodes.length, { fit: true, animate: false, numIter: 2200 }),
     })
+    const cyInternal = cy as cytoscape.Core & {
+      headless?: () => boolean
+      _private?: { renderer?: { isHeadless?: () => boolean } | null }
+    }
+    const originalHeadless = typeof cyInternal.headless === 'function'
+      ? cyInternal.headless.bind(cy)
+      : () => false
+    cyInternal.headless = () => {
+      const renderer = cyInternal._private?.renderer
+      if (!renderer || typeof renderer.isHeadless !== 'function') {
+        return true
+      }
+      return originalHeadless()
+    }
 
     const clearIdleAutoplayTimers = () => {
       if (idleAutoplayDelayRef.current != null) {
@@ -423,9 +475,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       }
       relayoutTimerRef.current = window.setTimeout(() => {
         if (!cyRef.current) return
-        cyRef.current.layout(
-          graphLayout(cyRef.current.nodes().length, { fit: false, animate: true, numIter: 520 }),
-        ).run()
+        startLayout(
+          cyRef.current,
+          cyRef.current.nodes().length,
+          { fit: false, animate: true, numIter: 520 },
+        )
         applyGraphEmphasis(cyRef.current, selectedNodeIdRef.current, hoveredNodeIdRef.current)
       }, 60)
     })
@@ -442,6 +496,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     selectedNodeIdRef.current = selectedNodeId
     applyGraphEmphasis(cy, selectedNodeId, null)
     scheduleIdleAutoplay()
+    startLayout(cy, data.nodes.length, { fit: true, animate: true, numIter: 2200 })
 
     return () => {
       if (relayoutTimerRef.current != null) {
@@ -450,15 +505,39 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       clearIdleAutoplayTimers()
       pauseIdleAutoplayRef.current = null
       scheduleIdleAutoplayRef.current = null
+      stopActiveLayout()
+      cy.removeAllListeners()
       cy.destroy()
       cyRef.current = null
     }
-  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [data.nodes.length, handleNodeClick, startLayout, stopActiveLayout]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
+
+    pauseIdleAutoplayRef.current?.(true)
+    hoveredNodeIdRef.current = null
+    idleAutoplayNodeIdRef.current = null
+    focusedNodeIdRef.current = null
+    stopActiveLayout()
+
+    cy.batch(() => {
+      cy.elements().remove()
+      cy.add(graphElements(data))
+    })
+    cy.resize()
+    startLayout(cy, data.nodes.length, { fit: true, animate: true, numIter: 2200 })
+    applyGraphEmphasis(cy, selectedNodeIdRef.current, null)
+    if (!selectedNodeIdRef.current) {
+      scheduleIdleAutoplayRef.current?.()
+    }
+  }, [data, startLayout, stopActiveLayout])
 
   // Highlight selected node
   useEffect(() => {
     const cy = cyRef.current
-    if (!cy) return
+    if (!cy || cy.destroyed()) return
     selectedNodeIdRef.current = selectedNodeId
     pauseIdleAutoplayRef.current?.(Boolean(selectedNodeId))
     applyGraphEmphasis(cy, selectedNodeId, hoveredNodeIdRef.current)
