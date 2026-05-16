@@ -117,6 +117,47 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_model VARCHAR"))
         if "paper_category_override" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_override VARCHAR"))
+        if "processing_status" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN processing_status VARCHAR"))
+        if "retry_count" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN retry_count INTEGER"))
+        if "last_error_stage" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN last_error_stage VARCHAR"))
+        if "last_error_reason" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN last_error_reason TEXT"))
+        if "last_error_recoverable" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN last_error_recoverable BOOLEAN"))
+
+        conn.execute(
+            text(
+                "UPDATE papers "
+                "SET processing_status = COALESCE(NULLIF(processing_status, ''), "
+                "  CASE "
+                "    WHEN processed = 1 THEN 'done' "
+                "    WHEN COALESCE(error, '') != '' THEN 'failed' "
+                "    ELSE 'scanning' "
+                "  END)"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE papers SET retry_count = COALESCE(retry_count, 0)"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE papers "
+                "SET last_error_reason = COALESCE(NULLIF(last_error_reason, ''), error) "
+                "WHERE COALESCE(error, '') != ''"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE papers "
+                "SET last_error_stage = COALESCE(NULLIF(last_error_stage, ''), 'extracting') "
+                "WHERE processing_status = 'failed' AND COALESCE(error, '') != ''"
+            )
+        )
 
         node_cols = conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()
         node_existing = {row[1] for row in node_cols}
