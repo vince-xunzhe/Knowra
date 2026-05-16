@@ -451,6 +451,11 @@ def _process_single(paper_id: int):
                 p.id, db, cfg["openai_api_key"], compile_model
             )
             reconcile_concept_pages_dir(db, prune_orphans=True)
+            try:
+                from services import wiki_index
+                wiki_index.refresh_index()
+            except Exception as idx_err:
+                print(f"[wiki_index] refresh after paper {p.id} failed: {idx_err}")
             # Refresh the FTS index so the new wiki page is searchable
             # immediately. Cheap (<1s) at this scale.
             try:

@@ -14,6 +14,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from config import load_config, task_model_id
@@ -21,6 +22,7 @@ from database import get_db
 from models import KnowledgeNode, Paper
 from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
+from services import wiki_index
 from services.wiki_compiler import (
     count_publishable_concepts,
     compile_all_concept_pages,
@@ -58,6 +60,7 @@ compile_state: dict = {
     "model": None,       # which compile model is being used
     "current_item_id": None,
     "current_item_kind": None,  # "paper" | "concept" | None
+    "failed_items": [],  # recent failed items for single-item retry UX
 }
 
 
@@ -97,6 +100,27 @@ def _tick(success: bool, err: Optional[BaseException] = None) -> None:
                 compile_state["last_error"] = f"{type(err).__name__}: {err}"
 
 
+def _record_failure(
+    item_kind: str,
+    item_id: int,
+    label: str,
+    err: BaseException,
+) -> None:
+    with _state_lock:
+        failures = compile_state.get("failed_items")
+        if not isinstance(failures, list):
+            failures = []
+        failures.append({
+            "kind": item_kind,
+            "id": item_id,
+            "label": label,
+            "error": f"{type(err).__name__}: {err}",
+            "failed_at": _now_iso(),
+        })
+        compile_state["failed_items"] = failures[-200:]
+        compile_state["last_error"] = failures[-1]["error"]
+
+
 def _finish() -> None:
     with _state_lock:
         compile_state["running"] = False
@@ -125,6 +149,7 @@ def _try_acquire(kind: str, total: int, model: str) -> bool:
             "model": model,
             "current_item_id": None,
             "current_item_kind": None,
+            "failed_items": [],
         })
         return True
 
@@ -254,6 +279,8 @@ def _drive_concept_recompile():
                 item_kind="concept",
             )
             _tick(success=(err is None), err=err)
+            if err is not None:
+                _record_failure("concept", node.id, node.title or f"concept-{node.id}", err)
 
         compile_all_concept_pages(db, api_key, model, on_progress=on_progress)
     except Exception as e:
@@ -264,6 +291,12 @@ def _drive_concept_recompile():
     finally:
         db.close()
         _finish()
+        try:
+            wiki_index.refresh_index()
+        except Exception as ix_err:
+            with _state_lock:
+                compile_state["last_error"] = f"{type(ix_err).__name__}: {ix_err}"
+            print(f"[wiki_index] post-compile refresh failed: {ix_err}")
         try:
             wiki_search_service.rebuild_index()
         except Exception as ix_err:
@@ -298,6 +331,8 @@ def _drive_paper_recompile():
                 item_kind="paper",
             )
             _tick(success=(err is None), err=err)
+            if err is not None:
+                _record_failure("paper", paper.id, label, err)
 
         compile_all_paper_pages(db, api_key, model, on_progress=on_progress)
     except Exception as e:
@@ -308,6 +343,12 @@ def _drive_paper_recompile():
     finally:
         db.close()
         _finish()
+        try:
+            wiki_index.refresh_index()
+        except Exception as ix_err:
+            with _state_lock:
+                compile_state["last_error"] = f"{type(ix_err).__name__}: {ix_err}"
+            print(f"[wiki_index] post-compile refresh failed: {ix_err}")
         try:
             wiki_search_service.rebuild_index()
         except Exception as ix_err:
@@ -373,10 +414,23 @@ def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
             paper, cfg.get("openai_api_key") or "", task_model_id(cfg, "wiki_compile")
         )
     except Exception as e:
+        _record_failure("paper", paper_id, paper.title or paper.filename or f"paper-{paper_id}", e)
         raise HTTPException(status_code=500, detail=str(e))
     if not path:
         raise HTTPException(status_code=400, detail="Nothing to compile")
-    return {"path": str(path), "filename": path.name}
+    warnings: list[str] = []
+    try:
+        wiki_index.refresh_index()
+    except Exception as ix_err:
+        warnings.append(f"index_refresh_failed: {ix_err}")
+    try:
+        wiki_search_service.rebuild_index()
+    except Exception as ix_err:
+        warnings.append(f"search_reindex_failed: {ix_err}")
+    resp = {"path": str(path), "filename": path.name}
+    if warnings:
+        resp["warnings"] = warnings
+    return resp
 
 
 @router.post("/concepts/{concept_id}/recompile")
@@ -390,10 +444,38 @@ def recompile_one_concept(concept_id: int, db: Session = Depends(get_db)):
             node, db, cfg.get("openai_api_key") or "", task_model_id(cfg, "wiki_compile")
         )
     except Exception as e:
+        _record_failure("concept", concept_id, node.title or f"concept-{concept_id}", e)
         raise HTTPException(status_code=500, detail=str(e))
     if not path:
         raise HTTPException(
             status_code=400,
             detail="Concept has no processed source papers yet",
         )
-    return {"path": str(path), "filename": path.name}
+    warnings: list[str] = []
+    try:
+        wiki_index.refresh_index()
+    except Exception as ix_err:
+        warnings.append(f"index_refresh_failed: {ix_err}")
+    try:
+        wiki_search_service.rebuild_index()
+    except Exception as ix_err:
+        warnings.append(f"search_reindex_failed: {ix_err}")
+    resp = {"path": str(path), "filename": path.name}
+    if warnings:
+        resp["warnings"] = warnings
+    return resp
+
+
+class RetryFailedItemInput(BaseModel):
+    kind: str
+    item_id: int
+
+
+@router.post("/retry_failed_item")
+def retry_failed_item(body: RetryFailedItemInput, db: Session = Depends(get_db)):
+    kind = (body.kind or "").strip().lower()
+    if kind == "paper":
+        return recompile_one_paper(body.item_id, db)
+    if kind == "concept":
+        return recompile_one_concept(body.item_id, db)
+    raise HTTPException(status_code=400, detail="kind must be 'paper' or 'concept'")

@@ -5,6 +5,7 @@ from database import get_db
 from models import Paper, KnowledgeNode, KnowledgeEdge
 from config import load_config
 from services import wiki_search as wiki_search_service
+from services import wiki_index
 from services import promotion_service
 from services.graph_service import (
     AUTO_NODE_ORIGIN,
@@ -72,6 +73,10 @@ def _validate_paper_ids(db: Session, paper_ids: list[int]) -> list[int]:
 
 def _reconcile_curated_wiki(db: Session) -> None:
     reconcile_concept_pages_dir(db, prune_orphans=True)
+    try:
+        wiki_index.refresh_index()
+    except Exception:
+        pass
     try:
         wiki_search_service.rebuild_index()
     except Exception:
