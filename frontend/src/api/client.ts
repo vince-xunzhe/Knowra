@@ -487,12 +487,22 @@ export interface AskTraceStep {
   duration_ms: number
 }
 
+export interface AskCitation {
+  kind: 'paper' | 'concept' | 'unknown' | string
+  ref: string
+  path?: string | null
+  filename?: string | null
+  paper_id?: number | null
+}
+
 export interface AskResponse {
   answer: string
   cited_files: string[]
+  citations: AskCitation[]
   trace: AskTraceStep[]
   model: string
   session_title?: string | null
+  session_id?: string | null
   duration_ms: number
   steps: number
 }
@@ -500,11 +510,12 @@ export interface AskResponse {
 export const askWiki = (
   question: string,
   history?: { role: 'user' | 'assistant'; content: string }[],
+  sessionId?: string,
 ) =>
   api
     .post<AskResponse>(
       '/wiki/ask',
-      { question, history },
+      { question, history, session_id: sessionId },
       { timeout: 600000 }, // agent loops can run minutes on cold cache
     )
     .then(r => r.data)
@@ -547,6 +558,10 @@ export interface SynthesisConceptInput {
   source_question?: string
   source_questions?: string[]
   synthesis_scope?: 'turn' | 'session'
+  source_session_id?: string
+  source_session_title?: string
+  source_turn_indexes?: number[]
+  source_cited_files?: string[]
   force_create?: boolean
   source_paper_ids?: number[]
   tags?: string[]

@@ -115,6 +115,8 @@ class AskAgentResponsesTests(unittest.TestCase):
         self.assertEqual(result.steps, 3)
         self.assertEqual([step.tool for step in result.trace], ["list_wiki_index", "search_wiki", "read_wiki"])
         self.assertIn("data/wiki/papers/0001-test.md", result.cited_files)
+        self.assertEqual(result.citations[0]["kind"], "paper")
+        self.assertEqual(result.citations[0]["paper_id"], 1)
         self.assertEqual(mock_call_text_model.call_args.kwargs["reasoning_effort"], "high")
         self.assertIn("[index.md]", mock_call_text_model.call_args.kwargs["user"])
         self.assertIn("[read_wiki 材料]", mock_call_text_model.call_args.kwargs["user"])
