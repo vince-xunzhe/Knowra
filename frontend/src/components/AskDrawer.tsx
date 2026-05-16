@@ -24,6 +24,7 @@ import {
   type SynthesisConceptResult,
   type WikiIndexStatus,
 } from '../api/client'
+import TaskNotice, { type TaskNoticeTone } from './TaskNotice'
 
 interface Props {
   open: boolean
@@ -73,6 +74,12 @@ const ASK_DRAWER_STORAGE_KEY = 'knowra:ask-drawer:sessions'
 interface PersistedAskState {
   sessions: AskSession[]
   activeSessionId: string | null
+}
+
+interface IndexNotice {
+  tone: TaskNoticeTone
+  title: string
+  detail?: string
 }
 
 function isPristineSession(session: AskSession): boolean {
@@ -280,6 +287,11 @@ function extractDuplicateConceptConflict(error: unknown): DuplicateConceptConfli
   }
 }
 
+function getApiErrorDetail(error: unknown): string {
+  const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
+  return apiError.response?.data?.detail || apiError.message || '未知错误'
+}
+
 /**
  * Cross-wiki Q&A surface. The user types a question; the backend agent
  * uses tool-calls (list_wiki_index / search_wiki / read_wiki) to gather
@@ -298,6 +310,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   const [notice, setNotice] = useState<{ tone: 'emerald' | 'amber'; text: string } | null>(null)
   const [indexStatus, setIndexStatus] = useState<WikiIndexStatus | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
+  const [indexNotice, setIndexNotice] = useState<IndexNotice | null>(null)
   const [synthesisDraft, setSynthesisDraft] = useState<SynthesisDraft | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -317,6 +330,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   // (index.md) ready.
   useEffect(() => {
     if (!open) return
+    setIndexNotice(null)
     getWikiIndexStatus().then(setIndexStatus).catch(() => setIndexStatus(null))
     requestAnimationFrame(() => inputRef.current?.focus())
   }, [open])
@@ -477,13 +491,26 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
 
   const handleRebuildIndex = useCallback(async () => {
     setRebuilding(true)
-    setError(null)
+    setIndexNotice({
+      tone: 'info',
+      title: '正在重建 index.md…',
+      detail: 'Ask 会在重建完成后自动读取最新索引。',
+    })
     try {
       await rebuildWikiIndex()
       const fresh = await getWikiIndexStatus()
       setIndexStatus(fresh)
+      setIndexNotice({
+        tone: 'success',
+        title: 'index.md 重建完成',
+        detail: `${fresh.current_papers ?? 0} 论文 · ${fresh.current_concepts ?? 0} 概念 · ${(fresh.size / 1024).toFixed(1)} KB`,
+      })
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setIndexNotice({
+        tone: 'error',
+        title: '重建索引失败',
+        detail: getApiErrorDetail(e),
+      })
     } finally {
       setRebuilding(false)
     }
@@ -622,6 +649,19 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             </>
           )}
         </div>
+
+        {indexNotice && (
+          <div className="px-5 py-2 border-b border-slate-800/70">
+            <TaskNotice
+              tone={indexNotice.tone}
+              title={indexNotice.title}
+              detail={indexNotice.detail}
+              busy={rebuilding && indexNotice.tone === 'info'}
+              onRetry={indexNotice.tone === 'error' ? () => { void handleRebuildIndex() } : undefined}
+              retryLabel="重试重建"
+            />
+          </div>
+        )}
 
         {/* Conversation scroll area */}
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
