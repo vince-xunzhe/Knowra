@@ -12,7 +12,6 @@ from services.graph_service import (
     PROMOTED_BY_USER,
     PROMOTION_PROMOTED,
     PROMOTION_REJECTED,
-    _add_similarity_edges,
     find_existing_concept_node,
     get_graph_data,
     get_hidden_graph_nodes,
@@ -22,6 +21,8 @@ from services.graph_service import (
     node_is_hidden,
     normalize_source_paper_ids,
     promotion_status,
+    _serialize_graph_node,
+    rebuild_similarity_edges,
 )
 from services.paper_record_service import sync_record_from_paper
 from services.wiki_compiler import reconcile_concept_pages_dir
@@ -318,18 +319,7 @@ def rebuild_edges(db: Session = Depends(get_db)):
     """Recompute similarity edges with current threshold. Does NOT re-call VLM."""
     cfg = load_config()
     threshold = cfg.get("similarity_threshold", 0.6)
-
-    # Delete only similarity edges, keep explicit relationships
-    db.query(KnowledgeEdge).filter(KnowledgeEdge.relation_type == "similar").delete()
-    db.commit()
-
-    nodes = db.query(KnowledgeNode).filter(KnowledgeNode.embedding.isnot(None)).all()
-    for node in nodes:
-        _add_similarity_edges(db, node, threshold)
-    db.commit()
-
-    edge_count = db.query(KnowledgeEdge).count()
-    return {"threshold": threshold, "total_edges": edge_count}
+    return rebuild_similarity_edges(db, threshold)
 
 
 @router.post("/graph/reset")
@@ -371,25 +361,8 @@ def search_nodes(q: str, db: Session = Depends(get_db)):
     ][:20]
     return [
         {
-            "id": str(n.id),
-            "title": n.title,
+            **_serialize_graph_node(n, processed_ids),
             "content": (n.content or "")[:200],
-            "node_type": n.node_type,
-            "origin": n.node_origin or AUTO_NODE_ORIGIN,
-            "hidden": bool(n.hidden),
-            "concept_candidate": is_concept_candidate_node(n),
-            "publishable_concept": is_publishable_concept_node(n, processed_ids),
-            "promotion_status": promotion_status(n),
-            "promoted_by": getattr(n, "promoted_by", None),
-            "promotion_reason": getattr(n, "promotion_reason", None),
-            "last_promotion_eval_at": (
-                n.last_promotion_eval_at.isoformat()
-                if getattr(n, "last_promotion_eval_at", None)
-                else None
-            ),
-            "tags": n.tags or [],
-            "source_paper_ids": normalize_source_paper_ids(n.source_paper_ids),
-            "created_at": n.created_at.isoformat() if getattr(n, "created_at", None) else None,
         }
         for n in nodes
     ]
