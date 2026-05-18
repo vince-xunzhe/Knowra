@@ -58,6 +58,7 @@ class AskRequest(BaseModel):
     # Conversation context: [{role: 'user'|'assistant', content: str}, ...]
     # Stay 3.9-compatible by using typing-module forms instead of `|`.
     history: Optional[List[dict]] = None
+    session_id: Optional[str] = None
 
 
 class AskTraceStep(BaseModel):
@@ -68,12 +69,22 @@ class AskTraceStep(BaseModel):
     duration_ms: int
 
 
+class AskCitation(BaseModel):
+    kind: str
+    ref: str
+    path: Optional[str] = None
+    filename: Optional[str] = None
+    paper_id: Optional[int] = None
+
+
 class AskResponse(BaseModel):
     answer: str
     cited_files: List[str]
+    citations: List[AskCitation] = []
     trace: List[AskTraceStep]
     model: str
     session_title: Optional[str] = None
+    session_id: Optional[str] = None
     duration_ms: int
     steps: int
 
@@ -146,9 +157,21 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
         model=model,
         reasoning_effort=task_reasoning_effort(cfg, "ask_agent"),
     )
+    session_id = (body.session_id or "").strip() or None
     return AskResponse(
         answer=result.answer,
         cited_files=result.cited_files,
+        citations=[
+            AskCitation(
+                kind=str(item.get("kind") or "unknown"),
+                ref=str(item.get("ref") or ""),
+                path=item.get("path"),
+                filename=item.get("filename"),
+                paper_id=item.get("paper_id"),
+            )
+            for item in result.citations
+            if isinstance(item, dict)
+        ],
         trace=[
             AskTraceStep(
                 step=t.step,
@@ -161,6 +184,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
         ],
         model=result.model,
         session_title=session_title,
+        session_id=session_id,
         duration_ms=result.duration_ms,
         steps=result.steps,
     )
@@ -203,6 +227,10 @@ class SynthesisConceptInput(BaseModel):
     source_question: Optional[str] = None
     source_questions: List[str] = []
     synthesis_scope: Optional[str] = "turn"
+    source_session_id: Optional[str] = None
+    source_session_title: Optional[str] = None
+    source_turn_indexes: List[int] = []
+    source_cited_files: List[str] = []
     force_create: bool = False
     source_paper_ids: List[int] = []
     tags: List[str] = []
@@ -295,6 +323,8 @@ def create_concept_from_synthesis(
     synthesis_scope = (body.synthesis_scope or "turn").strip().lower()
     if synthesis_scope not in {"turn", "session"}:
         synthesis_scope = "turn"
+    source_session_id = (body.source_session_id or "").strip()[:120] or None
+    source_session_title = (body.source_session_title or "").strip()[:120] or None
 
     source_questions: list[str] = []
     seen_questions: set[str] = set()
@@ -307,6 +337,21 @@ def create_concept_from_synthesis(
     if source_question and source_question not in seen_questions:
         source_questions.insert(0, source_question)
         seen_questions.add(source_question)
+    source_turn_indexes = sorted({
+        int(raw)
+        for raw in (body.source_turn_indexes or [])
+        if isinstance(raw, int) and raw > 0
+    })
+    source_cited_files: list[str] = []
+    seen_cited: set[str] = set()
+    for raw in body.source_cited_files or []:
+        cited = (raw or "").strip()
+        if not cited or cited in seen_cited:
+            continue
+        seen_cited.add(cited)
+        source_cited_files.append(cited)
+        if len(source_cited_files) >= 64:
+            break
 
     # Normalize tags + paper ids the same way manual_concepts does.
     tag_set: list[str] = []
@@ -348,7 +393,21 @@ def create_concept_from_synthesis(
 
     # Title duplicates stay deterministic: exact visible title match still
     # blocks creation even if the model judged "create_new".
-    duplicate = find_existing_concept_node(db, title)
+    dedupe_aliases = list(analysis.aliases or [])
+    duplicate = find_existing_concept_node(
+        db,
+        title,
+        aliases=dedupe_aliases,
+    )
+    if duplicate is None and dedupe_aliases:
+        # Secondary pass: allow existing tag hits only when we already have
+        # explicit alias candidates from analysis, to reduce false positives.
+        duplicate = find_existing_concept_node(
+            db,
+            title,
+            aliases=dedupe_aliases,
+            include_tags=True,
+        )
     if duplicate is None and analysis.duplicate_concept_id is not None:
         duplicate = next(
             (
@@ -378,6 +437,11 @@ def create_concept_from_synthesis(
                     "filename": duplicate_path.name,
                     "path": str(duplicate_path),
                 },
+                "duplicate_strategy": (
+                    "model_duplicate_id"
+                    if getattr(duplicate, "id", None) == analysis.duplicate_concept_id
+                    else "title_or_alias_match"
+                ),
                 "can_force_create": True,
             },
         )
@@ -418,6 +482,11 @@ def create_concept_from_synthesis(
         "synthesis_scope": synthesis_scope,
         "synthesis_question": source_question,
         "synthesis_questions": source_questions,
+        "source_session_id": source_session_id,
+        "source_session_title": source_session_title,
+        "source_turn_indexes": source_turn_indexes,
+        "source_turn_count": len(source_turn_indexes),
+        "source_cited_files": source_cited_files,
         "aliases": list(analysis.aliases or []),
         "tags": tag_set,
         "source_paper_ids": paper_ids,

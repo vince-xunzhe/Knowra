@@ -16,7 +16,16 @@ class AskRouterTitleTests(unittest.TestCase):
         "routers.ask.ask_agent.run_ask_agent",
         return_value=AskResult(
             answer="## 回答\n\n它负责在注意力里建模因果约束。",
-            cited_files=[],
+            cited_files=["data/wiki/papers/0001-causal-transformer.md"],
+            citations=[
+                {
+                    "kind": "paper",
+                    "ref": "data/wiki/papers/0001-causal-transformer.md",
+                    "path": "data/wiki/papers/0001-causal-transformer.md",
+                    "filename": "0001-causal-transformer.md",
+                    "paper_id": 1,
+                }
+            ],
             trace=[],
             model="codex-cli/gpt-5.5",
             duration_ms=123,
@@ -35,13 +44,19 @@ class AskRouterTitleTests(unittest.TestCase):
         mock_call_text_model,
     ):
         response = ask(
-            AskRequest(question="因果注意力在模型构建里扮演什么角色？", history=[]),
+            AskRequest(
+                question="因果注意力在模型构建里扮演什么角色？",
+                history=[],
+                session_id="ask-session-001",
+            ),
             db=MagicMock(),
         )
 
         self.assertEqual(response.session_title, "因果注意力")
+        self.assertEqual(response.session_id, "ask-session-001")
         self.assertEqual(response.model, "codex-cli/gpt-5.5")
         self.assertEqual(response.answer, "## 回答\n\n它负责在注意力里建模因果约束。")
+        self.assertEqual(response.citations[0].paper_id, 1)
         self.assertEqual(mock_call_text_model.call_args.kwargs["reasoning_effort"], "low")
 
 
