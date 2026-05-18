@@ -371,6 +371,84 @@ class AskSynthesisConceptTests(unittest.TestCase):
         self.assertEqual(db.added[0].source_paper_ids, [1])
         self.assertEqual(db.added[0].tags, ["synthesis"])
 
+    def test_session_traceability_fields_are_written_to_frontmatter(self):
+        db = _FakeDB(nodes=[_concept(3, "基础概念")], papers=[SimpleNamespace(id=1)])
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch("routers.ask.WIKI_CONCEPTS_DIR", base), patch(
+                "routers.ask._concept_page_path",
+                side_effect=lambda node: base / f"{node.id:04d}-traceable.md",
+            ), patch("routers.ask.reconcile_concept_pages_dir"), patch(
+                "routers.ask.wiki_search_service.rebuild_index"
+            ):
+                result = create_concept_from_synthesis(
+                    SynthesisConceptInput(
+                        title="可追溯概念",
+                        body="总结正文",
+                        source_question="什么是可追溯概念？",
+                        source_questions=["什么是可追溯概念？", "它来自哪些论文？"],
+                        synthesis_scope="session",
+                        source_session_id="ask-session-xyz",
+                        source_session_title="可追溯性讨论",
+                        source_turn_indexes=[1, 2],
+                        source_cited_files=[
+                            "data/wiki/papers/0001-test.md",
+                            "data/wiki/concepts/0003-base.md",
+                        ],
+                        source_paper_ids=[1],
+                        tags=["synthesis"],
+                    ),
+                    db=db,
+                )
+
+            created_path = base / f"{result['concept_id']:04d}-traceable.md"
+            text = created_path.read_text(encoding="utf-8")
+            self.assertIn('source_session_id: "ask-session-xyz"', text)
+            self.assertIn('source_session_title: "可追溯性讨论"', text)
+            self.assertIn("source_turn_indexes:", text)
+            self.assertIn("- 1", text)
+            self.assertIn("- 2", text)
+            self.assertIn('source_turn_count: 2', text)
+            self.assertIn('source_cited_files:', text)
+            self.assertIn('- "data/wiki/papers/0001-test.md"', text)
+            self.assertIn('- "data/wiki/concepts/0003-base.md"', text)
+
+    def test_alias_match_blocks_duplicate_even_without_model_duplicate_id(self):
+        existing = _concept(11, "Low-Rank Adaptation", node_type="technique", node_origin="manual")
+        db = _FakeDB(nodes=[existing])
+
+        with patch(
+            "routers.ask.analyze_synthesis_concept",
+            return_value=SimpleNamespace(
+                used_model=True,
+                model="gpt-4o-mini",
+                summary="LoRA 摘要",
+                body_markdown="## 定义\n\nLoRA 正文",
+                tags=["低秩适配"],
+                aliases=["Low-Rank Adaptation"],
+                related_links=[],
+                duplicate_concept_id=None,
+                duplicate_reason="",
+            ),
+        ), patch(
+            "routers.ask._concept_page_path",
+            return_value=Path("/tmp/0011-lora.md"),
+        ), self.assertRaises(Exception) as exc:
+            create_concept_from_synthesis(
+                SynthesisConceptInput(
+                    title="LoRA",
+                    body="Ask 回答正文",
+                    tags=["ask归纳"],
+                ),
+                db=db,
+            )
+
+        err = exc.exception
+        self.assertEqual(getattr(err, "status_code", None), 409)
+        self.assertEqual(err.detail["duplicate_concept"]["concept_id"], 11)
+        self.assertEqual(err.detail["duplicate_strategy"], "title_or_alias_match")
+        self.assertEqual(db.added, [])
+
 
 if __name__ == "__main__":
     unittest.main()

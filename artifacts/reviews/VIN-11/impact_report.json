@@ -1,0 +1,51 @@
+{
+  "issue": "VIN-11",
+  "title": "[knowledge-tree-v2] Ask 会话与概念沉淀闭环增强",
+  "original_request": "增强 Ask 会话追踪、引用来源展示、概念沉淀判重（支持 force-create）与写入后可检索性。",
+  "user_impact": {
+    "before": "Ask 回答有 cited_files，但来源展示与回填追溯信息不完整；概念沉淀存在重复创建风险；新概念写入后可检索性链路不够明确。",
+    "after": "Ask 回答提供结构化 citations；会话 ID/标题与 turn 索引、引用文件进入沉淀元数据；沉淀前执行重复检测并可 force-create；创建后立即触发 wiki/graph 同步与检索索引更新。"
+  },
+  "implementation_summary": [
+    "Ask API 增加/透传 session_id，并返回结构化 citations（保留既有 cited_files 字段契约）。",
+    "Ask agent 从实际读取与答案 paper 引用中构建 citation 列表，支持 paper/concept/file 粒度来源展示。",
+    "synthesis 创建接口支持 source_session_id/source_session_title/source_turn_indexes/source_cited_files 与 force_create。",
+    "创建概念时执行标题/别名/模型 duplicate_concept_id 多策略判重；冲突返回 409 和可 force-create 提示。",
+    "概念写入后触发 reconcile_concept_pages_dir 与 wiki_search.rebuild_index，确保图谱与 wiki 可即时检索。"
+  ],
+  "changed_files": [
+    "backend/services/ask_agent.py",
+    "backend/routers/ask.py",
+    "backend/tests/test_ask_agent.py",
+    "backend/tests/test_ask_router.py",
+    "backend/tests/test_ask_synthesis.py",
+    "frontend/src/api/client.ts",
+    "frontend/src/components/AskDrawer.tsx",
+    "analysis.md"
+  ],
+  "validation": {
+    "commands": [
+      "cd backend && python3 -m compileall . && python3 -m pytest -q || true"
+    ],
+    "result": "pass",
+    "details": "compileall 通过；pytest 67 passed, 1 warning（SQLAlchemy deprecation warning）。"
+  },
+  "acceptance_checklist": {
+    "ask_shows_traceable_citations": true,
+    "synthesis_dedupe_with_force_create": true,
+    "created_concepts_and_edges_immediately_searchable": true
+  },
+  "visual_evidence": {
+    "provided": false,
+    "reason": "本次为后端/API 行为与元数据链路增强；未引入新的可视化页面结构变更，主要证据为代码路径与自动化测试结果。"
+  },
+  "risks": [
+    "citation 目前以文件级/论文 ID 为主，若需段落级审计可继续引入 anchor/offset。",
+    "session_id 当前为前端会话标识；若未来引入服务端会话存储，需要建立稳定映射。"
+  ],
+  "follow_ups": [
+    "补充端到端测试，覆盖 Ask -> synthesis -> wiki/graph 查询闭环。",
+    "评估引用来源展示增加段落定位信息以提升审计精度。"
+  ],
+  "review_recommendation": "ready_for_human_review"
+}

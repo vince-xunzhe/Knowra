@@ -19,6 +19,7 @@ import {
   createSynthesisConcept,
   getWikiIndexStatus,
   rebuildWikiIndex,
+  type AskCitation,
   type AskResponse,
   type AskTraceStep,
   type SynthesisConceptResult,
@@ -39,6 +40,7 @@ interface Turn {
   content: string
   trace?: AskTraceStep[]
   citedFiles?: string[]
+  citations?: AskCitation[]
   durationMs?: number
   steps?: number
   model?: string
@@ -56,6 +58,7 @@ interface AskSession {
 type SynthesisScope = 'turn' | 'session'
 
 interface SynthesisDraft {
+  sessionId: string
   sessionTitle: string
   sessionTurns: Turn[]
 }
@@ -420,7 +423,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     setError(null)
     setNotice(null)
     try {
-      const result: AskResponse = await askWiki(q, history)
+      const result: AskResponse = await askWiki(q, history, sessionId)
       updateSessionById(sessionId, session => ({
         ...session,
         title:
@@ -437,6 +440,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             content: result.answer,
             trace: result.trace,
             citedFiles: result.cited_files,
+            citations: result.citations,
             durationMs: result.duration_ms,
             steps: result.steps,
             model: result.model,
@@ -675,10 +679,11 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
               onFileBack={
                 turn.role === 'assistant'
                   ? () =>
-                      setSynthesisDraft({
-                        sessionTitle: activeSession.title,
-                        sessionTurns: turns.slice(0, i + 1),
-                      })
+                    setSynthesisDraft({
+                      sessionId: activeSession.id,
+                      sessionTitle: activeSession.title,
+                      sessionTurns: turns.slice(0, i + 1),
+                    })
                   : undefined
               }
             />
@@ -841,6 +846,12 @@ function AssistantTurn({
 }) {
   const [traceOpen, setTraceOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const citations = useMemo(() => {
+    if (turn.citations && turn.citations.length > 0) {
+      return turn.citations
+    }
+    return (turn.citedFiles || []).map(ref => ({ kind: 'unknown', ref }))
+  }, [turn.citations, turn.citedFiles])
 
   const handleCopy = useCallback(async () => {
     try {
@@ -895,10 +906,22 @@ function AssistantTurn({
         <div className="markdown-notes max-w-none text-[12.5px] leading-7 text-slate-100">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.content}</ReactMarkdown>
         </div>
+        {citations.length > 0 && (
+          <div className="mt-3 rounded-md border border-slate-800/70 bg-slate-950/60 px-2.5 py-2">
+            <div className="text-[10px] font-medium text-slate-400">引用来源</div>
+            <ul className="mt-1.5 space-y-1 text-[10.5px] text-slate-500">
+              {citations.map((citation, index) => (
+                <li key={`${citation.ref}-${index}`} className="truncate">
+                  <code>{formatCitation(citation)}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         <div className="mt-3 pt-2 border-t border-slate-800/60 flex items-center gap-2 text-[10.5px] text-slate-500">
-          {turn.citedFiles && turn.citedFiles.length > 0 && (
+          {citations.length > 0 && (
             <span className="truncate">
-              📚 {turn.citedFiles.length} 处引用
+              📚 {citations.length} 处引用
             </span>
           )}
           <button
@@ -931,6 +954,19 @@ function summarizeArgs(args: Record<string, unknown>): string {
     .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v}"` : JSON.stringify(v)}`)
     .join(', ')
     .slice(0, 80)
+}
+
+function formatCitation(citation: AskCitation): string {
+  if (citation.path && citation.path.trim()) {
+    return citation.path
+  }
+  if (citation.ref && citation.ref.trim()) {
+    return citation.ref
+  }
+  if (citation.filename && citation.filename.trim()) {
+    return citation.filename
+  }
+  return 'unknown'
 }
 
 function SynthesisSaveModal({
@@ -1011,6 +1047,12 @@ function SynthesisSaveModal({
     }
     return [...ids]
   }, [selectedCitedFiles])
+  const selectedTurnIndexes = useMemo(() => {
+    if (scope === 'session') {
+      return rounds.map((_, index) => index + 1)
+    }
+    return rounds.length > 0 ? [rounds.length] : []
+  }, [rounds, scope])
 
   const submitSave = useCallback(async (forceCreate = false) => {
     if (!title.trim() || saving || !selectedBody.trim()) return
@@ -1026,6 +1068,10 @@ function SynthesisSaveModal({
         source_question: selectedQuestions[0] || '',
         source_questions: selectedQuestions,
         synthesis_scope: scope,
+        source_session_id: draft.sessionId,
+        source_session_title: draft.sessionTitle,
+        source_turn_indexes: selectedTurnIndexes,
+        source_cited_files: selectedCitedFiles,
         force_create: forceCreate,
         source_paper_ids: sourcePaperIds,
         tags: tagsInput
@@ -1048,7 +1094,20 @@ function SynthesisSaveModal({
     } finally {
       setSaving(false)
     }
-  }, [title, selectedBody, selectedQuestions, scope, sourcePaperIds, tagsInput, saving, onSaved])
+  }, [
+    title,
+    selectedBody,
+    selectedQuestions,
+    scope,
+    draft.sessionId,
+    draft.sessionTitle,
+    selectedTurnIndexes,
+    selectedCitedFiles,
+    sourcePaperIds,
+    tagsInput,
+    saving,
+    onSaved,
+  ])
 
   if (!currentRound) return null
 
