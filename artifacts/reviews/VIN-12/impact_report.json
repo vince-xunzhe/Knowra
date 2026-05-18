@@ -1,0 +1,81 @@
+{
+  "issue": "VIN-12",
+  "title": "[knowledge-tree-v2] 前端信息架构与操作可观测性优化",
+  "generated_at": "2026-05-18",
+  "original_request": {
+    "summary": "优化 Papers/Review/Graph/Settings/Ask 的可观测性，统一进度反馈、错误提示、重试入口与结果可视化。",
+    "acceptance_criteria": [
+      "Papers/Review 页面显示结构化处理状态与最近错误摘要。",
+      "关键后台操作（重建相似边、重建 index、重处理论文）均有明确反馈与结果提示。",
+      "主要页面不出现阻塞式卡死，失败可回退并支持重试。"
+    ]
+  },
+  "user_impact": {
+    "before": "论文处理链路状态分散，失败原因与可重试入口不统一，用户需要额外排查。",
+    "after": "用户可在核心页面直接看到阶段状态、近期错误摘要、操作结果提示和重试入口，降低黑盒感并缩短排障路径。"
+  },
+  "implementation_summary": {
+    "files_changed": [
+      "frontend/src/components/TaskNotice.tsx",
+      "frontend/src/components/PaperProcessBadge.tsx",
+      "frontend/src/pages/PapersPage.tsx",
+      "frontend/src/pages/ReviewPage.tsx",
+      "frontend/src/pages/GraphPage.tsx",
+      "frontend/src/pages/SettingsPage.tsx",
+      "frontend/src/components/AskDrawer.tsx",
+      "analysis.md",
+      "artifacts/reviews/VIN-12/impact_report.json",
+      "artifacts/reviews/VIN-12/impact_report.md",
+      "artifacts/reviews/VIN-12/build_output.txt"
+    ],
+    "highlights": [
+      "新增统一 TaskNotice 组件，标准化 info/success/warning/error 提示与 retry CTA。",
+      "新增 PaperProcessBadge 及阶段推断逻辑，统一呈现 待处理/处理中/已处理/失败。",
+      "Papers/Review 增加结构化阶段文案与最近失败摘要，支持单篇/批量重试反馈。",
+      "Graph/Settings/Ask 的关键后台动作增加明确的进行中、成功、失败反馈，并提供重试入口。"
+    ]
+  },
+  "validation": {
+    "commands": [
+      {
+        "command": "cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-12/frontend && npm --version && npm run build",
+        "status": "passed",
+        "summary": "npm 11.11.0；tsc -b && vite build 成功。"
+      }
+    ],
+    "notes": [
+      "Vite 仍有既有 chunk-size 警告（>500kB），无编译或类型错误。"
+    ]
+  },
+  "metric_delta": {
+    "type": "qualitative",
+    "primary_metric": "用户可清晰看到每篇论文阶段、失败原因与可重试操作，减少人工排障时间",
+    "delta": [
+      "前端状态信息从二元 processed/error 提升为结构化阶段+摘要。",
+      "关键维护动作反馈从弱提示提升为统一可重试通知流。"
+    ]
+  },
+  "risks": [
+    "处理中阶段依赖 status.current 与 filename 匹配，若后端字段语义调整需同步前端映射。",
+    "当前收益为定性评估，建议后续补充 retry 点击率与失败恢复时长等埋点。"
+  ],
+  "visual_evidence": {
+    "applicable": false,
+    "reason": "当前会话未运行后端服务（127.0.0.1:8000 不可达），无法在无额外环境启动下采集稳定的全链路交互截图。"
+  },
+  "acceptance_checklist": [
+    {
+      "item": "Papers/Review 页面显示结构化处理状态与最近错误摘要",
+      "status": "done"
+    },
+    {
+      "item": "关键后台操作均有明确反馈与结果提示",
+      "status": "done"
+    },
+    {
+      "item": "主要页面不阻塞，失败可回退并支持重试",
+      "status": "done"
+    }
+  ],
+  "review_recommendation": "ready_for_human_review"
+}

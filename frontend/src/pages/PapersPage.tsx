@@ -1,13 +1,15 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
-  RotateCw, Loader2, Search, LayoutGrid, List as ListIcon,
+  RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
   type PaperRecord,
 } from '../api/client'
 import PromptPanel from '../components/PromptPanel'
+import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
+import PaperProcessBadge, { inferPaperProcessMeta, summarizePaperError } from '../components/PaperProcessBadge'
 
 interface ProcStatus {
   running: boolean
@@ -20,6 +22,12 @@ interface ProcStatus {
 type ViewMode = 'grid' | 'list'
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 
+interface ActionNotice {
+  tone: TaskNoticeTone
+  title: string
+  detail?: string
+}
+
 export default function PapersPage() {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -29,7 +37,7 @@ export default function PapersPage() {
   const [view, setView] = useState<ViewMode>('grid')
   const [filter, setFilter] = useState<Filter>('all')
   const [search, setSearch] = useState('')
-  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [bulkProcessingPending, setBulkProcessingPending] = useState(false)
   const [bulkRetrying, setBulkRetrying] = useState(false)
   const wasRunningRef = useRef(false)
@@ -73,7 +81,19 @@ export default function PapersPage() {
         setStatus(s)
         if (wasRunningRef.current && !s.running) {
           setPendingIds(new Set())
-          setActionMessage(s.errors > 0 ? `处理结束，${s.errors} 个失败。` : '处理完成。')
+          setActionNotice(
+            s.errors > 0
+              ? {
+                  tone: 'warning',
+                  title: `处理结束，${s.errors} 篇论文失败`,
+                  detail: '可切换到“失败”筛选并逐条重试。',
+                }
+              : {
+                  tone: 'success',
+                  title: '处理完成',
+                  detail: '所有任务已处理完成。',
+                },
+          )
           load()
         } else if (s.running && s.current) {
           load()
@@ -82,7 +102,11 @@ export default function PapersPage() {
       } catch (error) {
         console.error('Failed to poll processing status', error)
         setPendingIds(new Set())
-        setActionMessage('无法获取处理状态: ' + getErrorMessage(error))
+        setActionNotice({
+          tone: 'error',
+          title: '无法获取处理状态',
+          detail: getErrorMessage(error),
+        })
       }
     }
     void poll()
@@ -92,12 +116,20 @@ export default function PapersPage() {
 
   const handleProcessOne = async (p: PaperRecord) => {
     setPendingIds(prev => new Set(prev).add(p.id))
-    setActionMessage(null)
+    setActionNotice(null)
     try {
       await processPaper(p.id)
-      setActionMessage(`已提交处理: ${p.filename}`)
+      setActionNotice({
+        tone: 'info',
+        title: `已提交处理：${p.filename}`,
+        detail: '可在页面顶部看到整体进度，完成后会自动刷新列表。',
+      })
     } catch (error) {
-      setActionMessage('处理启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: `处理启动失败：${p.filename}`,
+        detail: getErrorMessage(error),
+      })
     } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
@@ -105,12 +137,20 @@ export default function PapersPage() {
 
   const handleRetry = async (p: PaperRecord) => {
     setPendingIds(prev => new Set(prev).add(p.id))
-    setActionMessage(null)
+    setActionNotice(null)
     try {
       await retryPaper(p.id)
-      setActionMessage(`已提交重试: ${p.filename}`)
+      setActionNotice({
+        tone: 'info',
+        title: `已提交重试：${p.filename}`,
+        detail: '系统会清理该论文错误状态并重新进入处理队列。',
+      })
     } catch (error) {
-      setActionMessage('重试启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: `重试启动失败：${p.filename}`,
+        detail: getErrorMessage(error),
+      })
     } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
@@ -121,12 +161,20 @@ export default function PapersPage() {
     if (!ok) return
 
     setPendingIds(prev => new Set(prev).add(p.id))
-    setActionMessage(null)
+    setActionNotice(null)
     try {
       await reprocessPaper(p.id)
-      setActionMessage(`已提交重新处理: ${p.filename}`)
+      setActionNotice({
+        tone: 'info',
+        title: `已提交重新处理：${p.filename}`,
+        detail: '旧抽取结果已清空，等待后端重新生成结构化结果。',
+      })
     } catch (error) {
-      setActionMessage('重新处理启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: `重新处理启动失败：${p.filename}`,
+        detail: getErrorMessage(error),
+      })
     } finally {
       setPendingIds(prev => { const n = new Set(prev); n.delete(p.id); return n })
     }
@@ -135,7 +183,10 @@ export default function PapersPage() {
   const handleRetryFailedAll = async () => {
     const failedPapers = papers.filter(p => p.error && !p.processed)
     if (failedPapers.length === 0) {
-      setActionMessage('当前没有失败论文需要重试。')
+      setActionNotice({
+        tone: 'info',
+        title: '当前没有失败论文可重试',
+      })
       return
     }
 
@@ -147,18 +198,25 @@ export default function PapersPage() {
     const failedIds = failedPapers.map(p => p.id)
     setBulkRetrying(true)
     setPendingIds(prev => new Set([...prev, ...failedIds]))
-    setActionMessage(null)
+    setActionNotice(null)
     try {
       const result = await retryFailedPapers()
       if ((result.retried || 0) > 0) {
-        setActionMessage(`已提交批量重试：${result.retried} 篇失败论文`)
+        setActionNotice({
+          tone: 'info',
+          title: `已提交批量重试：${result.retried} 篇失败论文`,
+          detail: '可在失败筛选里跟踪每篇论文状态变化。',
+        })
       } else {
         setPendingIds(prev => {
           const next = new Set(prev)
           failedIds.forEach(id => next.delete(id))
           return next
         })
-        setActionMessage('当前没有失败论文需要重试。')
+        setActionNotice({
+          tone: 'info',
+          title: '当前没有失败论文可重试',
+        })
       }
     } catch (error) {
       setPendingIds(prev => {
@@ -166,7 +224,11 @@ export default function PapersPage() {
         failedIds.forEach(id => next.delete(id))
         return next
       })
-      setActionMessage('批量重试启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '批量重试启动失败',
+        detail: getErrorMessage(error),
+      })
     } finally {
       setBulkRetrying(false)
     }
@@ -175,7 +237,10 @@ export default function PapersPage() {
   const handleProcessPendingAll = async () => {
     const pendingPapers = papers.filter(p => !p.processed && !p.error)
     if (pendingPapers.length === 0) {
-      setActionMessage('当前没有待处理论文需要重试。')
+      setActionNotice({
+        tone: 'info',
+        title: '当前没有待处理论文',
+      })
       return
     }
 
@@ -185,17 +250,25 @@ export default function PapersPage() {
     const pendingPaperIds = pendingPapers.map(p => p.id)
     setBulkProcessingPending(true)
     setPendingIds(prev => new Set([...prev, ...pendingPaperIds]))
-    setActionMessage(null)
+    setActionNotice(null)
     try {
       await processAll()
-      setActionMessage(`已提交批量处理：${pendingPapers.length} 篇待处理论文`)
+      setActionNotice({
+        tone: 'info',
+        title: `已提交批量处理：${pendingPapers.length} 篇待处理论文`,
+        detail: '进度会在顶部状态条和每篇论文卡片中实时体现。',
+      })
     } catch (error) {
       setPendingIds(prev => {
         const next = new Set(prev)
         pendingPaperIds.forEach(id => next.delete(id))
         return next
       })
-      setActionMessage('批量处理启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '批量处理启动失败',
+        detail: getErrorMessage(error),
+      })
     } finally {
       setBulkProcessingPending(false)
     }
@@ -209,6 +282,19 @@ export default function PapersPage() {
     failed: papers.filter(p => p.error && !p.processed).length,
     pending: papers.filter(p => !p.processed && !p.error).length,
   }), [papers])
+
+  const recentFailures = useMemo(
+    () =>
+      papers
+        .filter(p => p.error && !p.processed)
+        .map(p => ({
+          id: p.id,
+          title: p.title || p.filename,
+          summary: summarizePaperError(p.error) || '未知错误',
+        }))
+        .slice(0, 3),
+    [papers],
+  )
 
   const filtered = useMemo(() => {
     let list = papers
@@ -246,10 +332,13 @@ export default function PapersPage() {
             </div>
 
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-              {actionMessage && (
-                <span className="max-w-sm rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 leading-relaxed text-safe-wrap">
-                  {actionMessage}
-                </span>
+              {actionNotice && (
+                <TaskNotice
+                  tone={actionNotice.tone}
+                  title={actionNotice.title}
+                  detail={actionNotice.detail}
+                  className="max-w-md"
+                />
               )}
               <div className="relative">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -325,6 +414,23 @@ export default function PapersPage() {
               </button>
             ))}
           </div>
+
+          {recentFailures.length > 0 && (
+            <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2.5">
+              <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-rose-200">
+                <AlertTriangle size={12} />
+                最近失败摘要
+              </p>
+              <ul className="space-y-1.5">
+                {recentFailures.map(item => (
+                  <li key={item.id} className="text-[11px] leading-relaxed text-rose-100/90 text-safe-wrap">
+                    <span className="font-medium text-rose-100">{item.title}</span>
+                    <span className="text-rose-200/80"> · {item.summary}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </header>
 
         {/* Selected-paper strip — sits between toolbar and the grid as a
@@ -413,6 +519,7 @@ function PaperDetailStrip({
   onRetry: () => void
   onReprocess: () => void
 }) {
+  const stage = inferPaperProcessMeta(paper, null, pending)
   return (
     <div className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-3">
       <div className="flex items-start gap-4">
@@ -446,7 +553,7 @@ function PaperDetailStrip({
           </div>
 
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-slate-500">
-            <PaperStatus paper={paper} pending={pending} />
+            <PaperProcessBadge paper={paper} pending={pending} />
             {paper.authors.length > 0 && (
               <span className="line-clamp-1 max-w-[28rem] text-safe-wrap">
                 {paper.authors.slice(0, 4).join(', ')}
@@ -464,9 +571,14 @@ function PaperDetailStrip({
             <span className="font-mono text-slate-600 break-all">{paper.filename}</span>
           </div>
 
-          {paper.error && (
+          <div className="mt-2 rounded-lg border border-slate-800/70 bg-slate-900/50 px-2.5 py-1.5 text-[11px] text-slate-300">
+            <span className="font-semibold text-slate-200">阶段：</span>
+            <span className="ml-1">{stage.summary}</span>
+          </div>
+
+          {stage.errorSummary && (
             <div className="mt-2 bg-red-500/10 border border-red-500/30 rounded-md px-2.5 py-1.5 text-[11px] text-red-300 break-words leading-relaxed">
-              <span className="font-semibold">错误：</span>{paper.error}
+              <span className="font-semibold">最近错误：</span>{stage.errorSummary}
             </div>
           )}
 
@@ -553,6 +665,7 @@ function PaperGridCard({
 function PaperListRow({
   paper, active, pending, onClick,
 }: { paper: PaperRecord; active: boolean; pending: boolean; onClick: () => void }) {
+  const stage = inferPaperProcessMeta(paper, null, pending)
   return (
     <button
       onClick={onClick}
@@ -582,40 +695,14 @@ function PaperListRow({
           {paper.authors.length > 0 ? paper.authors.slice(0, 3).join(', ') : paper.filename}
           {paper.num_pages && <span className="text-slate-600"> · {paper.num_pages}p</span>}
         </p>
+        <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${stage.stage === 'failed' ? 'text-rose-300' : 'text-slate-500'}`}>
+          {stage.stage === 'failed' ? (stage.errorSummary || stage.summary) : stage.summary}
+        </p>
       </div>
       <div className="shrink-0">
-        <PaperStatus paper={paper} pending={pending} />
+        <PaperProcessBadge paper={paper} pending={pending} />
       </div>
     </button>
-  )
-}
-
-function PaperStatus({ paper, pending }: { paper: PaperRecord; pending: boolean }) {
-  if (pending) {
-    return (
-      <span className="chip bg-indigo-500/15 text-indigo-300 text-xs">
-        <Loader2 size={11} className="animate-spin" /> 处理中
-      </span>
-    )
-  }
-  if (paper.processed) {
-    return (
-      <span className="chip bg-emerald-500/15 text-emerald-300 text-xs">
-        <CheckCircle2 size={11} /> 已处理
-      </span>
-    )
-  }
-  if (paper.error) {
-    return (
-      <span className="chip bg-red-500/15 text-red-300 text-xs">
-        <XCircle size={11} /> 失败
-      </span>
-    )
-  }
-  return (
-    <span className="chip bg-slate-800 text-slate-400 text-xs">
-      <Clock size={11} /> 待处理
-    </span>
   )
 }
 

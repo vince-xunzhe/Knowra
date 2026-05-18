@@ -3,7 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import katex from 'katex'
 import {
-  CheckCircle2, XCircle, Clock, Search, ExternalLink,
+  XCircle, Search, ExternalLink,
   BookOpen, Users, Calendar, Sparkles, Target, Lightbulb,
   Wrench, Database, Swords, Award, Flag, Hash, FileText,
   Pencil, Save, RotateCw, Loader2, X, NotebookPen, Eye,
@@ -14,11 +14,18 @@ import {
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperCategory, updatePaperNotes,
+  getStatus,
   pdfFileUrl, firstPageUrl,
   sendPaperChat, resetPaperChat, uploadNoteImage,
   type PaperRecord, type PaperDetail,
   type ChatState, type ChatMessage,
 } from '../api/client'
+import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
+import PaperProcessBadge, {
+  inferPaperProcessMeta,
+  summarizePaperError,
+  type ProcessStatusHint,
+} from '../components/PaperProcessBadge'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 type Technique = { name?: string; aliases?: string[]; role?: string; builds_on?: string[] }
@@ -79,6 +86,12 @@ interface PaperExtraction {
 const PAPER_CATEGORY_OPTIONS = ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] as const
 const CATEGORY_INHERIT = '__inherit__'
 
+interface ActionNotice {
+  tone: TaskNoticeTone
+  title: string
+  detail?: string
+}
+
 export default function ReviewPage() {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
@@ -95,6 +108,8 @@ export default function ReviewPage() {
   const [categorySaving, setCategorySaving] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
   const [reprocessing, setReprocessing] = useState(false)
+  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
+  const [processStatus, setProcessStatus] = useState<ProcessStatusHint | null>(null)
 
   useEffect(() => {
     listPapers().then(ps => {
@@ -103,6 +118,25 @@ export default function ReviewPage() {
       if (first) setSelectedId(first.id)
       setLoading(false)
     })
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const status = await getStatus()
+        if (cancelled) return
+        setProcessStatus({ running: status.running, current: status.current })
+      } catch {
+        if (!cancelled) setProcessStatus(null)
+      }
+    }
+    void poll()
+    const id = setInterval(poll, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
   }, [])
 
   useEffect(() => {
@@ -140,6 +174,17 @@ export default function ReviewPage() {
   }, [papers, filter, search])
 
   const visibleDetail = selectedId !== null && detail?.id === selectedId ? detail : null
+  const visibleProcessMeta = useMemo(
+    () =>
+      visibleDetail
+        ? inferPaperProcessMeta(visibleDetail, processStatus, reprocessing)
+        : null,
+    [visibleDetail, processStatus, reprocessing],
+  )
+  const visibleErrorSummary = useMemo(
+    () => summarizePaperError(visibleDetail?.error),
+    [visibleDetail?.error],
+  )
   const rawResponse = visibleDetail?.raw_llm_response || ''
   const parsed = useMemo<PaperExtraction | null>(() => {
     // Backend already canonicalized the JSON (keys + nesting). Prefer that.
@@ -160,6 +205,7 @@ export default function ReviewPage() {
     setRawDraft('')
     setRawError(null)
     setCategoryError(null)
+    setActionNotice(null)
   }
 
   const startRawEdit = () => {
@@ -198,6 +244,7 @@ export default function ReviewPage() {
     if (!ok) return
 
     setReprocessing(true)
+    setActionNotice(null)
     try {
       await reprocessPaper(visibleDetail.id)
       const updated: PaperDetail = {
@@ -215,8 +262,17 @@ export default function ReviewPage() {
       setDetail(updated)
       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
       cancelRawEdit()
+      setActionNotice({
+        tone: 'info',
+        title: `已提交重新处理：${visibleDetail.title || visibleDetail.filename}`,
+        detail: '论文状态已回退为待处理，后端完成后会在论文库/回顾页更新。',
+      })
     } catch (error) {
-      setRawError(getApiErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '重新处理启动失败',
+        detail: getApiErrorMessage(error),
+      })
     } finally {
       setReprocessing(false)
     }
@@ -313,7 +369,7 @@ export default function ReviewPage() {
                         </p>
                       )}
                       <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <StatusBadge paper={p} />
+                        <PaperProcessBadge paper={p} status={processStatus} />
                         {p.paper_category && (
                           <span className="rounded-md border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[10.5px] text-indigo-200">
                             {p.paper_category}
@@ -321,6 +377,11 @@ export default function ReviewPage() {
                         )}
                         {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
                       </div>
+                      {p.error && (
+                        <p className="text-[11px] leading-relaxed text-rose-300 text-safe-wrap">
+                          最近错误：{summarizePaperError(p.error)}
+                        </p>
+                      )}
                     </button>
                   </li>
                 )
@@ -342,7 +403,7 @@ export default function ReviewPage() {
             <header className="mb-6 lg:mb-8">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge paper={visibleDetail} large />
+                  <PaperProcessBadge paper={visibleDetail} status={processStatus} pending={reprocessing} large />
                   {visibleDetail.processed_at && (
                     <span className="text-xs text-slate-500">
                       于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
@@ -467,6 +528,30 @@ export default function ReviewPage() {
                   <span className="basis-full text-[11px] text-red-300">{categoryError}</span>
                 )}
               </div>
+
+              {visibleProcessMeta && (
+                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                  <p className="text-[11px] font-medium text-slate-200">
+                    处理阶段：{visibleProcessMeta.label}
+                  </p>
+                  <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${visibleProcessMeta.stage === 'failed' ? 'text-rose-300' : 'text-slate-400'}`}>
+                    {visibleProcessMeta.stage === 'failed'
+                      ? (visibleErrorSummary || visibleProcessMeta.summary)
+                      : visibleProcessMeta.summary}
+                  </p>
+                </div>
+              )}
+
+              {actionNotice && (
+                <TaskNotice
+                  tone={actionNotice.tone}
+                  title={actionNotice.title}
+                  detail={actionNotice.detail}
+                  onRetry={actionNotice.tone === 'error' ? () => { void handleReprocess() } : undefined}
+                  retryLabel="重试重新处理"
+                  className="mt-3"
+                />
+              )}
             </header>
 
             {editingRaw ? (
@@ -1032,30 +1117,6 @@ function RawResponseEditor({
         </div>
       </div>
     </ReviewBlock>
-  )
-}
-
-function StatusBadge({ paper, large }: { paper: PaperRecord | PaperDetail; large?: boolean }) {
-  const sz = large ? 14 : 11
-  const cls = large ? 'text-xs px-2 py-0.5' : 'text-[11px] px-1.5 py-0'
-  if (paper.processed) {
-    return (
-      <span className={`chip bg-emerald-500/15 text-emerald-300 ${cls}`}>
-        <CheckCircle2 size={sz} /> 已处理
-      </span>
-    )
-  }
-  if (paper.error) {
-    return (
-      <span className={`chip bg-red-500/15 text-red-300 ${cls}`}>
-        <XCircle size={sz} /> 失败
-      </span>
-    )
-  }
-  return (
-    <span className={`chip bg-slate-700/40 text-slate-400 ${cls}`}>
-      <Clock size={sz} /> 待处理
-    </span>
   )
 }
 
