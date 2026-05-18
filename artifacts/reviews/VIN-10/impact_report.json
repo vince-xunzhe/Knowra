@@ -12,27 +12,22 @@
   "implementation_summary": {
     "highlights": [
       "保留并完善单项重编译入口：/api/wiki/papers/{paper_id}/recompile 与 /api/wiki/concepts/{concept_id}/recompile。",
+      "新增按脏标记驱动的增量入口：/api/wiki/recompile/dirty（支持 include_missing/include_stale 与 paper_ids/concept_ids）。",
       "新增失败项重试入口：/api/wiki/retry_failed_item（kind=paper|concept, item_id）。",
-      "编译状态记录 failed_items，单项失败不阻断其它页面产出。",
-      "引入 deterministic 的 wiki_index.refresh_index()，在增量编译后本地刷新 index.md，避免频繁 LLM 全量重建。",
-      "index frontmatter 写入 source_digest，并在 index_summary 中做脏标记判定。",
-      "在批量编译、单项编译、论文处理后编译路径中统一触发 index refresh + wiki_search reindex。"
+      "编译失败记录 failed_items，并在 dirty compile 中做到“单项失败不中断其它页面产出”。",
+      "增量编译后统一触发 index refresh + wiki_search reindex，保证 Ask 在一次任务内可见最新标题与摘要。"
     ],
     "key_files": [
       "backend/routers/wiki.py",
-      "backend/services/wiki_index.py",
-      "backend/routers/papers.py",
-      "backend/tests/test_wiki_index_incremental.py"
+      "backend/tests/test_wiki_router_incremental.py"
     ]
   },
   "validation": {
     "commands": [
-      "cd backend && python3 -m compileall .",
-      "cd backend && python3 -m pytest -q",
       "cd backend && python3 -m compileall . && python3 -m pytest -q || true"
     ],
     "result": "pass",
-    "details": "67 passed, 1 warning (SQLAlchemy deprecation warning)."
+    "details": "69 passed, 1 warning (SQLAlchemy deprecation warning)."
   },
   "acceptance_checklist": [
     {
@@ -43,12 +38,12 @@
     {
       "item": "编译失败记录错误并支持单项重试，不影响其他页面产出",
       "status": "done",
-      "evidence": "compile_state.failed_items + /retry_failed_item；批量 on_progress 中失败仅计数并记录。"
+      "evidence": "compile_state.failed_items + /retry_failed_item；/recompile/dirty 中单项异常写入 failed.items 并继续后续项。"
     },
     {
       "item": "index 重建后 Ask 检索能命中新页面标题与摘要",
       "status": "done",
-      "evidence": "增量流程统一调用 wiki_index.refresh_index() 与 wiki_search.rebuild_index()；test_wiki_index_incremental 覆盖 index 内容与 stale 检测。"
+      "evidence": "dirty compile 与单项重编译流程统一调用 wiki_index.refresh_index() 与 wiki_search.rebuild_index()；新增 router 测试断言两者被触发。"
     }
   ],
   "risks": [
