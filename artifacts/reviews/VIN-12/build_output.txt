@@ -1,0 +1,8 @@
+$ cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-12/frontend && npm --version && npm run build
+11.11.0
+
+> frontend@0.0.0 build
+> tsc -b && vite build
+
+Result: PASS
+Notes: existing vite chunk-size warning (>500kB), no compile/type errors.
