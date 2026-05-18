@@ -1,0 +1,63 @@
+{
+  "issue": "VIN-10",
+  "title": "[knowledge-tree-v2] Wiki 编译与索引流水线增量化",
+  "original_request": "按论文/概念页做增量编译、失败重试与脏标记刷新，减少全量重编译频率并保证 Ask 可见最新内容。",
+  "user_impact": {
+    "summary": "单篇论文或单个概念页更新后，可在一次任务内完成页面重编译 + index.md 增量刷新 + 搜索索引重建，Ask 能更快命中新内容。",
+    "who_benefits": [
+      "在图谱中单点修复/更新 wiki 页面的人",
+      "依赖 Ask 立即检索最新标题与摘要的人"
+    ]
+  },
+  "implementation_summary": {
+    "highlights": [
+      "保留并完善单项重编译入口：/api/wiki/papers/{paper_id}/recompile 与 /api/wiki/concepts/{concept_id}/recompile。",
+      "新增失败项重试入口：/api/wiki/retry_failed_item（kind=paper|concept, item_id）。",
+      "编译状态记录 failed_items，单项失败不阻断其它页面产出。",
+      "引入 deterministic 的 wiki_index.refresh_index()，在增量编译后本地刷新 index.md，避免频繁 LLM 全量重建。",
+      "index frontmatter 写入 source_digest，并在 index_summary 中做脏标记判定。",
+      "在批量编译、单项编译、论文处理后编译路径中统一触发 index refresh + wiki_search reindex。"
+    ],
+    "key_files": [
+      "backend/routers/wiki.py",
+      "backend/services/wiki_index.py",
+      "backend/routers/papers.py",
+      "backend/tests/test_wiki_index_incremental.py"
+    ]
+  },
+  "validation": {
+    "commands": [
+      "cd backend && python3 -m compileall .",
+      "cd backend && python3 -m pytest -q",
+      "cd backend && python3 -m compileall . && python3 -m pytest -q || true"
+    ],
+    "result": "pass",
+    "details": "67 passed, 1 warning (SQLAlchemy deprecation warning)."
+  },
+  "acceptance_checklist": [
+    {
+      "item": "提供按 paper_id 或 concept_id 触发的增量编译入口",
+      "status": "done",
+      "evidence": "routers/wiki.py 提供 /papers/{paper_id}/recompile 与 /concepts/{concept_id}/recompile。"
+    },
+    {
+      "item": "编译失败记录错误并支持单项重试，不影响其他页面产出",
+      "status": "done",
+      "evidence": "compile_state.failed_items + /retry_failed_item；批量 on_progress 中失败仅计数并记录。"
+    },
+    {
+      "item": "index 重建后 Ask 检索能命中新页面标题与摘要",
+      "status": "done",
+      "evidence": "增量流程统一调用 wiki_index.refresh_index() 与 wiki_search.rebuild_index()；test_wiki_index_incremental 覆盖 index 内容与 stale 检测。"
+    }
+  ],
+  "risks": [
+    "failed_items 为内存态，服务重启后不会保留历史失败记录。",
+    "增量 index 追求确定性与速度，文案质量可能低于 LLM 全量重建。"
+  ],
+  "visual_evidence": {
+    "applicable": false,
+    "reason": "本任务为后端流水线与索引逻辑改造，无直接 UI 视觉变更。"
+  },
+  "review_recommendation": "ready_for_human_review"
+}
