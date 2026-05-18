@@ -1,54 +1,42 @@
-# VIN-8 Analysis
+# VIN-11 Analysis
 
-## Changed files
-- `backend/models.py`
-- `backend/database.py`
-- `backend/config.py`
-- `backend/routers/papers.py`
-- `backend/services/scanner_service.py`
-- `backend/services/paper_record_service.py`
-- `backend/services/paper_pipeline_service.py` (new)
-- `backend/tests/test_paper_pipeline_service.py` (new)
+## Scope
+- Implementation target is this `knowledge-tree-v2` workspace on branch `agent/VIN-11`.
 
-## What changed
-- Added pipeline status persistence on `Paper`:
-  - `processing_status` (`scanning/extracting/parsing/graphing/failed/done`)
-  - `retry_count`
-  - `last_error_stage`
-  - `last_error_reason`
-  - `last_error_recoverable`
-- Added SQLite migration/backfill for new columns (idempotent).
-- Implemented recoverable vs non-recoverable error classification and exponential backoff retry helper.
-- Refactored paper processing main chain to:
-  - stage transitions with DB commits for observability
-  - bounded retry with exponential backoff for recoverable failures
-  - final failure classification + reason/stage persistence
-  - keep per-paper isolation so single-paper failure does not stop batch loop
-- Extended batch runtime status payload with:
-  - `succeeded`
-  - `failed_papers` list
-  - `max_retries`
-- Extended batch/retry API responses to include runtime stats payload and failed-paper list.
-- Synced new fields into markdown paper records.
-- Added unit tests for retry/backoff/error-classification helpers.
+## Changed Files
+- `backend/services/ask_agent.py`
+- `backend/routers/ask.py`
+- `backend/tests/test_ask_agent.py`
+- `backend/tests/test_ask_router.py`
+- `backend/tests/test_ask_synthesis.py`
+- `frontend/src/api/client.ts`
+- `frontend/src/components/AskDrawer.tsx`
 
-## Commands run
-- `cd /Users/vince/Documents/vince-studio-v2/workspaces/VIN-8/target/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true`
-- `cd /Users/vince/Documents/vince-studio-v2/workspaces/VIN-8/target/knowledge-tree-v2/backend && python3 tests/test_paper_pipeline_service.py`
-- Also executed issue-provided command path for parity check:
-  - `cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true`
+## What Changed
+- Added structured Ask citations (`citations`) while preserving existing `cited_files` contract.
+- Added Ask session passthrough (`session_id`) in request/response for trace continuity.
+- Exposed citations in Ask UI as explicit source list (not only count).
+- Extended synthesis payload with traceability fields:
+  - `source_session_id`, `source_session_title`, `source_turn_indexes`, `source_cited_files`
+- Persisted those traceability fields into concept page frontmatter.
+- Strengthened synthesis dedupe by including model aliases in deterministic duplicate checks; still supports `force_create` override.
 
-## Validation result
-- `compileall`: passed.
-- `pytest`: blocked by environment (`No module named pytest`).
-- Additional unit validation: `tests/test_paper_pipeline_service.py` passed (`Ran 4 tests`).
-- Existing broader tests in this environment are additionally blocked by missing runtime dependency `pypdf` when importing PDF service.
+## Commands Run
+- `python3 -m pytest -q backend/tests/test_ask_agent.py backend/tests/test_ask_router.py backend/tests/test_ask_synthesis.py`
+- `cd backend && python3 -m compileall . && python3 -m pytest -q || true`
+- `cd frontend && npm ci`
+- `cd frontend && npm run build`
 
-## Metric delta (qualitative)
-- Before: extraction chain failure handling was mostly terminal per paper with coarse `processed/error` signals.
-- After: recoverable failures now retry with exponential backoff; each paper records stage + failure reason + recoverability; batch status surfaces failed-paper list and success/failure counters while continuing remaining papers.
+## Validation Result
+- Backend targeted tests: pass (`11 passed`).
+- Backend full suite via issue eval command form: pass (`58 passed`).
+- Frontend build: pass (`tsc -b` + `vite build`).
 
-## Risks and follow-ups
-- Current recoverable classification is keyword/status-code based; tune with production error telemetry to reduce false positives/negatives.
-- Stage commits increase DB writes slightly during processing.
-- Recommend adding API-level tests for `/api/status`, `/api/process`, and `/api/papers/retry_failed` payload shape and pipeline state transitions.
+## Metric Delta (Qualitative)
+- Duplicate concept creation risk reduced via alias-aware deterministic dedupe plus existing model duplicate judgement.
+- Concept pages now include session/turn/source citation metadata, improving post-hoc provenance and backfill traceability.
+- Ask responses now present concrete citation sources in UI, improving source traceability for users before synthesis.
+
+## Risks / Follow-up
+- `session_id` is currently client-provided and local-session based; if server-side session storage is introduced later, map this ID to persisted session records.
+- Citation granularity is currently file-level provenance (plus paper refs), not paragraph offsets; add paragraph anchors if stricter auditability is needed.

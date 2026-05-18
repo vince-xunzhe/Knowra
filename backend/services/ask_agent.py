@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -197,6 +198,7 @@ class TraceStep:
 class AskResult:
     answer: str
     cited_files: list[str] = field(default_factory=list)
+    citations: list[dict[str, Any]] = field(default_factory=list)
     trace: list[TraceStep] = field(default_factory=list)
     model: str = ""
     duration_ms: int = 0
@@ -311,25 +313,89 @@ def _extract_responses_text(response) -> str:
 # --- citation extraction ------------------------------------------------
 
 
-_PAPER_REF_RE = __import__("re").compile(r"\[\[paper:(\d+)\]\]")
+_PAPER_REF_RE = re.compile(r"\[\[paper:(\d+)\]\]")
+_PAPER_FILE_RE = re.compile(r"^data/wiki/papers/(\d+)-")
+_CONCEPT_FILE_RE = re.compile(r"^data/wiki/concepts/")
 
 
 def _extract_cited_files(answer: str, trace: list[TraceStep]) -> list[str]:
     """Best-effort: collect every wiki file the agent actually read, plus
     any paper id mentioned in the final answer (mapped to that paper's
-    `.md`). De-duped, sorted."""
-    files: set[str] = set()
+    `.md`). De-duped, preserving discovery order."""
+    files: list[str] = []
+    seen: set[str] = set()
+
+    def _append(item: str) -> None:
+        if not item or item in seen:
+            return
+        seen.add(item)
+        files.append(item)
+
     for step in trace:
         if step.tool == "read_wiki":
             kind = step.args.get("kind")
             fn = step.args.get("filename")
             if kind and fn:
-                files.add(f"data/wiki/{kind}/{fn}")
+                _append(f"data/wiki/{kind}/{fn}")
     # Paper ids mentioned in the answer body — useful even if the agent
     # cited them without reading the full .md.
     for match in _PAPER_REF_RE.finditer(answer):
-        files.add(f"paper:{match.group(1)}")
-    return sorted(files)
+        _append(f"paper:{match.group(1)}")
+    return files
+
+
+def _citation_from_ref(ref: str) -> Optional[dict[str, Any]]:
+    if not ref:
+        return None
+    if ref.startswith("paper:"):
+        try:
+            pid = int(ref.split(":", 1)[1])
+        except (TypeError, ValueError):
+            return None
+        return {
+            "kind": "paper",
+            "paper_id": pid,
+            "path": ref,
+            "filename": None,
+            "ref": ref,
+        }
+    match = _PAPER_FILE_RE.match(ref)
+    if match:
+        return {
+            "kind": "paper",
+            "paper_id": int(match.group(1)),
+            "path": ref,
+            "filename": Path(ref).name,
+            "ref": ref,
+        }
+    if _CONCEPT_FILE_RE.match(ref):
+        return {
+            "kind": "concept",
+            "paper_id": None,
+            "path": ref,
+            "filename": Path(ref).name,
+            "ref": ref,
+        }
+    return {
+        "kind": "unknown",
+        "paper_id": None,
+        "path": ref,
+        "filename": Path(ref).name if "/" in ref else None,
+        "ref": ref,
+    }
+
+
+def _build_citations(cited_files: list[str]) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for ref in cited_files:
+        if ref in seen:
+            continue
+        seen.add(ref)
+        citation = _citation_from_ref(ref)
+        if citation is not None:
+            citations.append(citation)
+    return citations
 
 
 def _provider_type_for_model(cfg: dict[str, Any], model: str) -> str:
@@ -449,9 +515,11 @@ def _run_local_retrieval_agent(
         temperature=0.3,
     ).strip()
     duration_ms = int((perf_counter() - started) * 1000)
+    cited_files = _extract_cited_files(final_answer, trace)
     return AskResult(
         answer=final_answer,
-        cited_files=_extract_cited_files(final_answer, trace),
+        cited_files=cited_files,
+        citations=_build_citations(cited_files),
         trace=trace,
         model=model,
         duration_ms=duration_ms,
@@ -665,9 +733,11 @@ def run_ask_agent(
             final_answer = (wrap_up.choices[0].message.content or "").strip()
 
     duration_ms = int((perf_counter() - started) * 1000)
+    cited_files = _extract_cited_files(final_answer, trace)
     return AskResult(
         answer=final_answer,
-        cited_files=_extract_cited_files(final_answer, trace),
+        cited_files=cited_files,
+        citations=_build_citations(cited_files),
         trace=trace,
         model=model,
         duration_ms=duration_ms,
