@@ -20,7 +20,7 @@
 
 ## Validation
 - `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m compileall .` ✅
-- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q` ✅ (`70 passed, 1 warning`)
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q` ✅ (`72 passed, 1 warning`)
 - `cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true` ✅ (`61 passed, 1 warning`)
 
 ## Risks

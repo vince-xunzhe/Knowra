@@ -30,7 +30,7 @@
       "cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true"
     ],
     "result": "pass",
-    "details": "workspace: 70 passed, 1 warning; issue eval path: 61 passed, 1 warning (SQLAlchemy deprecation warning)."
+    "details": "workspace: 72 passed, 1 warning; issue eval path: 61 passed, 1 warning (SQLAlchemy deprecation warning)."
   },
   "acceptance_checklist": [
     {
