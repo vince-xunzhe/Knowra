@@ -18,6 +18,7 @@ import PipelineStatusBar from '../components/PipelineStatusBar'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import ConceptListView from '../components/ConceptListView'
 import AskDrawer from '../components/AskDrawer'
+import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import {
   createManualConcept,
   getGraph,
@@ -45,6 +46,12 @@ interface ProcStatus {
   done: number
   errors: number
   current: string
+}
+
+interface ActionNotice {
+  tone: TaskNoticeTone
+  title: string
+  detail?: string
 }
 
 const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
@@ -99,9 +106,7 @@ export default function GraphPage() {
   const [scanning, setScanning] = useState(false)
   const [starting, setStarting] = useState(false)
   const [status, setStatus] = useState<ProcStatus | null>(null)
-  const [scanResult, setScanResult] = useState<string | null>(null)
-  const [processResult, setProcessResult] = useState<string | null>(null)
-  const [statusError, setStatusError] = useState<string | null>(null)
+  const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [paperCatalog, setPaperCatalog] = useState<PaperRecord[]>([])
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingNode, setEditingNode] = useState<GraphNode | null>(null)
@@ -156,10 +161,21 @@ export default function GraphPage() {
       try {
         const s = await getStatus()
         if (cancelled) return
-        setStatusError(null)
         setStatus(s)
         if (wasRunningRef.current && !s.running) {
-          setProcessResult(s.errors > 0 ? `处理结束，${s.errors} 个失败。` : '处理完成。')
+          setActionNotice(
+            s.errors > 0
+              ? {
+                  tone: 'warning',
+                  title: `处理结束，${s.errors} 篇论文失败`,
+                  detail: '可切换到论文页查看失败摘要并执行重试。',
+                }
+              : {
+                  tone: 'success',
+                  title: '处理完成',
+                  detail: '图谱与论文状态已刷新。',
+                },
+          )
           loadGraph()
         }
         wasRunningRef.current = s.running
@@ -167,7 +183,11 @@ export default function GraphPage() {
       } catch (error) {
         console.error('Failed to poll processing status', error)
         if (!cancelled) {
-          setStatusError('无法获取处理状态: ' + getErrorMessage(error))
+          setActionNotice({
+            tone: 'error',
+            title: '无法获取处理状态',
+            detail: getErrorMessage(error),
+          })
           setStarting(false)
         }
       }
@@ -339,24 +359,40 @@ export default function GraphPage() {
 
   const handleScan = async () => {
     setScanning(true)
-    setScanResult(null)
+    setActionNotice(null)
     try {
       const result = await scanPapers()
-      setScanResult(`发现 ${result.new_found} 篇新论文，共 ${result.total} 篇，待处理 ${result.unprocessed} 篇`)
+      setActionNotice({
+        tone: 'success',
+        title: `扫描完成：发现 ${result.new_found} 篇新论文`,
+        detail: `当前共 ${result.total} 篇，待处理 ${result.unprocessed} 篇。`,
+      })
     } catch (error) {
-      setScanResult('扫描失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '扫描失败',
+        detail: getErrorMessage(error),
+      })
     }
     setScanning(false)
   }
 
   const handleProcess = async () => {
     setStarting(true)
-    setProcessResult(null)
+    setActionNotice(null)
     try {
       await processAll()
-      setProcessResult('已提交处理任务，正在等待后端状态更新。')
+      setActionNotice({
+        tone: 'info',
+        title: '已提交处理任务',
+        detail: '等待后端状态更新，进度会在页面顶部实时显示。',
+      })
     } catch (error) {
-      setProcessResult('处理启动失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '处理启动失败',
+        detail: getErrorMessage(error),
+      })
     } finally {
       setStarting(false)
     }
@@ -403,16 +439,25 @@ export default function GraphPage() {
         if (response.merged_papers > 0) additions.push(`${response.merged_papers} 篇关联论文`)
         if (response.content_applied) additions.push('概念简介')
         const additionText = additions.length > 0 ? `，并补充了${additions.join('、')}` : ''
-        setProcessResult(
-          response.adopted_existing
-            ? `发现同名自动节点，已转为手动概念${additionText}。`
-            : `发现同名概念，已复用现有概念${additionText}。`,
-        )
+        setActionNotice({
+          tone: 'success',
+          title: response.adopted_existing
+            ? '已将同名自动节点转为手动概念'
+            : '已复用同名概念',
+          detail: additionText.replace(/^，/, ''),
+        })
       } else {
-        setProcessResult(editingNode ? '概念已更新。' : '新概念已加入图谱。')
+        setActionNotice({
+          tone: 'success',
+          title: editingNode ? '概念已更新' : '新概念已加入图谱',
+        })
       }
     } catch (error) {
-      setProcessResult('概念保存失败: ' + getErrorMessage(error))
+      setActionNotice({
+        tone: 'error',
+        title: '概念保存失败',
+        detail: getErrorMessage(error),
+      })
     } finally {
       setActionBusyId(null)
     }
@@ -578,10 +623,13 @@ export default function GraphPage() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-            {(scanResult || processResult || statusError) && (
-              <span className="max-w-sm rounded-xl border border-slate-800 bg-slate-900/50 px-3 py-2 text-xs text-slate-400 leading-relaxed text-safe-wrap">
-                {statusError || processResult || scanResult}
-              </span>
+            {actionNotice && (
+              <TaskNotice
+                tone={actionNotice.tone}
+                title={actionNotice.title}
+                detail={actionNotice.detail}
+                className="max-w-md"
+              />
             )}
 
             <button

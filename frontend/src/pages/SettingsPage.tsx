@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Save, RefreshCw, Trash2, FolderOpen, Image as ImageIcon,
   GitBranch, PlayCircle, Key, Cpu, ChevronDown, ChevronRight,
+  Loader2,
 } from 'lucide-react'
 import {
   getConfig,
@@ -15,8 +16,18 @@ import {
   type ModelGatewayTaskBinding,
   type ModelGatewayTaskSpec,
 } from '../api/client'
+import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 
 type ProviderRoute = 'open_api' | 'codex'
+
+type MaintenanceAction = 'rebuild-edges' | 'reset-graph'
+
+interface MaintenanceNotice {
+  action: MaintenanceAction
+  tone: TaskNoticeTone
+  title: string
+  detail?: string
+}
 
 const TASK_TYPE_LABELS: Record<ModelGatewayTaskSpec['task_type'], string> = {
   embedding: 'Embedding',
@@ -116,12 +127,19 @@ function normalizeGatewayForSubmit(gateway: ModelGatewayConfig): ModelGatewayCon
   }
 }
 
+function getApiErrorDetail(error: unknown): string {
+  const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
+  return apiError.response?.data?.detail || apiError.message || '未知错误'
+}
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<Partial<Config>>({})
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null)
   const [selectedProviderId, setSelectedProviderId] = useState('')
+  const [maintenanceBusy, setMaintenanceBusy] = useState<MaintenanceAction | null>(null)
+  const [maintenanceNotice, setMaintenanceNotice] = useState<MaintenanceNotice | null>(null)
 
   const updateGateway = useCallback((updater: (gateway: ModelGatewayConfig) => ModelGatewayConfig) => {
     setConfig(current => {
@@ -211,6 +229,63 @@ export default function SettingsPage() {
       setTestingProviderId(null)
     }
   }, [gateway])
+
+  const handleRebuildEdges = useCallback(async () => {
+    setMaintenanceBusy('rebuild-edges')
+    setMaintenanceNotice({
+      action: 'rebuild-edges',
+      tone: 'info',
+      title: '正在重建相似度边…',
+      detail: '将按当前阈值重算图谱边。',
+    })
+    try {
+      const result = await rebuildEdges()
+      setMaintenanceNotice({
+        action: 'rebuild-edges',
+        tone: 'success',
+        title: `重建完成：${result.total_edges} 条边`,
+        detail: `阈值 ${result.threshold}。`,
+      })
+    } catch (error) {
+      setMaintenanceNotice({
+        action: 'rebuild-edges',
+        tone: 'error',
+        title: '重建相似度边失败',
+        detail: getApiErrorDetail(error),
+      })
+    } finally {
+      setMaintenanceBusy(null)
+    }
+  }, [])
+
+  const handleResetGraph = useCallback(async () => {
+    if (!confirm('确认重置自动图谱？论文会被标记为未处理，需要重新调用大模型；手动概念会保留。')) return
+    setMaintenanceBusy('reset-graph')
+    setMaintenanceNotice({
+      action: 'reset-graph',
+      tone: 'warning',
+      title: '正在重置图谱…',
+      detail: '自动抽取节点和边会被清空，手动概念保留。',
+    })
+    try {
+      await resetGraph()
+      setMaintenanceNotice({
+        action: 'reset-graph',
+        tone: 'success',
+        title: '图谱已重置',
+        detail: '回到图谱页点击“处理论文”可重新生成抽取结果。',
+      })
+    } catch (error) {
+      setMaintenanceNotice({
+        action: 'reset-graph',
+        tone: 'error',
+        title: '重置图谱失败',
+        detail: getApiErrorDetail(error),
+      })
+    } finally {
+      setMaintenanceBusy(null)
+    }
+  }, [])
 
   if (loading) return <div className="p-10 text-sm text-slate-500">加载中…</div>
 
@@ -583,27 +658,36 @@ export default function SettingsPage() {
         </div>
 
         <SettingGroup title="图谱维护" description="调整阈值或重新处理" defaultExpanded={false}>
+          {maintenanceNotice && (
+            <TaskNotice
+              tone={maintenanceNotice.tone}
+              title={maintenanceNotice.title}
+              detail={maintenanceNotice.detail}
+              busy={maintenanceBusy === maintenanceNotice.action}
+              onRetry={
+                maintenanceNotice.tone === 'error'
+                  ? (maintenanceNotice.action === 'rebuild-edges' ? handleRebuildEdges : handleResetGraph)
+                  : undefined
+              }
+              retryLabel={maintenanceNotice.action === 'rebuild-edges' ? '重试重建' : '重试重置'}
+            />
+          )}
           <ActionRow
             label="重建相似度边"
             desc="用当前阈值重新计算节点间的相似边，不调用大模型，免费快速。"
-            buttonLabel="重建"
-            icon={<RefreshCw size={14} />}
-            onClick={async () => {
-              const r = await rebuildEdges()
-              alert(`已重建 · 共 ${r.total_edges} 条边（阈值 ${r.threshold}）`)
-            }}
+            buttonLabel={maintenanceBusy === 'rebuild-edges' ? '重建中' : '重建'}
+            icon={maintenanceBusy === 'rebuild-edges' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            onClick={handleRebuildEdges}
+            disabled={maintenanceBusy !== null}
           />
           <ActionRow
             label="重置图谱"
             desc="清空自动抽取的知识节点和边，将论文标记为未处理。手动新增的概念会保留；重新处理论文仍会调用大模型。"
-            buttonLabel="清空并重置"
-            icon={<Trash2 size={14} />}
+            buttonLabel={maintenanceBusy === 'reset-graph' ? '重置中' : '清空并重置'}
+            icon={maintenanceBusy === 'reset-graph' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             destructive
-            onClick={async () => {
-              if (!confirm('确认重置自动图谱？论文会被标记为未处理，需要重新调用大模型；手动概念会保留。')) return
-              await resetGraph()
-              alert('已重置，回到图谱页点击「处理论文」重新提取。')
-            }}
+            onClick={handleResetGraph}
+            disabled={maintenanceBusy !== null}
           />
         </SettingGroup>
       </div>
@@ -666,7 +750,7 @@ function Field({
 }
 
 function ActionRow({
-  label, desc, buttonLabel, icon, onClick, destructive,
+  label, desc, buttonLabel, icon, onClick, destructive, disabled,
 }: {
   label: string
   desc: string
@@ -674,6 +758,7 @@ function ActionRow({
   icon: React.ReactNode
   onClick: () => void
   destructive?: boolean
+  disabled?: boolean
 }) {
   return (
     <div className="flex flex-col gap-4 bg-slate-900/40 border border-slate-800 rounded-xl p-4 sm:flex-row sm:items-start sm:justify-between">
@@ -683,11 +768,12 @@ function ActionRow({
       </div>
       <button
         onClick={onClick}
+        disabled={disabled}
         className={`shrink-0 inline-flex items-center justify-center gap-1.5 text-sm px-3 py-2 rounded-xl transition-colors ${
           destructive
             ? 'bg-red-500/10 hover:bg-red-500/20 text-red-300 border border-red-500/30'
             : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/50'
-        }`}
+        } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
       >
         {icon} {buttonLabel}
       </button>
