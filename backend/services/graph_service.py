@@ -1,11 +1,13 @@
 from __future__ import annotations
 import json
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 from models import Paper, KnowledgeNode, KnowledgeEdge
+from logging_utils import get_logger
 from services.paper_category_service import PAPER_CATEGORY_OTHER, effective_paper_category
-from services.vlm_service import get_embedding, cosine_similarity
+from services.vlm_service import get_embedding, cosine_similarity, parse_extraction_response
 
 MAX_TITLE_LEN = 24
 AUTO_NODE_ORIGIN = "auto"
@@ -28,6 +30,8 @@ PROMOTED_BY_LLM = "llm"
 PROMOTED_BY_USER = "user"
 PROMOTED_BY_LEGACY = "legacy"
 
+logger = get_logger("graph_service")
+
 
 def _normalize_name(s: str) -> str:
     return (s or "").strip().lower()
@@ -38,6 +42,17 @@ def _truncate_title(s: str, max_len: int = MAX_TITLE_LEN) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1] + "…"
+
+
+def _paper_title_matches(node_title: str, full_title: str) -> bool:
+    existing = _normalize_name(node_title)
+    target = _normalize_name(full_title)
+    if not existing or not target:
+        return False
+    if existing == target:
+        return True
+    trimmed = existing.rstrip("…").rstrip(".")
+    return bool(trimmed) and target.startswith(trimmed)
 
 
 def normalize_source_paper_ids(values) -> list[int]:
@@ -123,6 +138,255 @@ def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[Knowl
     return None
 
 
+def _find_existing_paper_node(
+    db: Session,
+    *,
+    paper_id: int,
+    title: str,
+    exclude_node_id: Optional[int] = None,
+) -> Optional[KnowledgeNode]:
+    best: Optional[KnowledgeNode] = None
+    best_rank: Optional[tuple[int, int, int, int]] = None
+    for node in db.query(KnowledgeNode).all():
+        if exclude_node_id is not None and getattr(node, "id", None) == exclude_node_id:
+            continue
+        if (node.node_type or "") != "paper":
+            continue
+        source_ids = normalize_source_paper_ids(node.source_paper_ids)
+        has_paper_id = paper_id in source_ids
+        title_match = _paper_title_matches(node.title or "", title)
+        if not has_paper_id and not title_match:
+            continue
+        rank = (
+            0 if has_paper_id else 1,
+            0 if title_match else 1,
+            len(source_ids) if source_ids else 10**9,
+            int(getattr(node, "id", 10**9) or 10**9),
+        )
+        if best is None or rank < best_rank:
+            best = node
+            best_rank = rank
+    return best
+
+
+def _paper_node_payload_from_paper(paper: Optional[Paper]) -> tuple[str, str]:
+    if paper is None:
+        return "", ""
+
+    extraction = None
+    if paper.raw_llm_response:
+        try:
+            extraction = parse_extraction_response(paper.raw_llm_response)
+        except Exception:
+            extraction = None
+
+    title = (paper.title or (extraction or {}).get("title") or paper.filename or f"paper #{paper.id}").strip()
+    abstract = str((extraction or {}).get("abstract_summary") or "").strip()
+    venue = str((extraction or {}).get("venue") or "").strip()
+    year = (extraction or {}).get("year")
+
+    content = abstract
+    if venue or year:
+        prefix = " ".join(part for part in [venue, str(year or "").strip()] if part).strip()
+        content = f"[{prefix}] {abstract}".strip() if abstract else prefix
+    if not content:
+        content = title
+    return title, content
+
+
+def _find_single_source_paper_node(
+    db: Session,
+    *,
+    paper_id: int,
+    title: str,
+    exclude_node_id: Optional[int] = None,
+) -> Optional[KnowledgeNode]:
+    best: Optional[KnowledgeNode] = None
+    best_rank: Optional[tuple[int, int]] = None
+    for node in db.query(KnowledgeNode).all():
+        if exclude_node_id is not None and getattr(node, "id", None) == exclude_node_id:
+            continue
+        if (node.node_type or "") != "paper":
+            continue
+        source_ids = normalize_source_paper_ids(node.source_paper_ids)
+        if source_ids != [paper_id]:
+            continue
+        rank = (
+            0 if _paper_title_matches(node.title or "", title) else 1,
+            int(getattr(node, "id", 10**9) or 10**9),
+        )
+        if best is None or rank < best_rank:
+            best = node
+            best_rank = rank
+    return best
+
+
+def _ensure_single_source_paper_node(
+    db: Session,
+    *,
+    paper_id: int,
+    papers_by_id: dict[int, Paper],
+    exclude_node_id: Optional[int] = None,
+) -> KnowledgeNode:
+    title, content = _paper_node_payload_from_paper(papers_by_id.get(paper_id))
+    existing = _find_single_source_paper_node(
+        db,
+        paper_id=paper_id,
+        title=title,
+        exclude_node_id=exclude_node_id,
+    )
+    if existing:
+        if title and existing.title != title:
+            existing.title = title
+        if content and len(content) > len(existing.content or ""):
+            existing.content = content
+        existing.source_paper_ids = [paper_id]
+        return existing
+
+    node = KnowledgeNode(
+        title=title or f"paper #{paper_id}",
+        content=content or title or f"paper #{paper_id}",
+        node_type="paper",
+        node_origin=AUTO_NODE_ORIGIN,
+        hidden=False,
+        tags=[],
+        embedding=None,
+        source_paper_ids=[paper_id],
+        promotion_status=PROMOTION_PROMOTED,
+    )
+    db.add(node)
+    db.flush()
+    return node
+
+
+def _select_canonical_paper_id(
+    node: KnowledgeNode,
+    source_ids: list[int],
+    papers_by_id: dict[int, Paper],
+) -> tuple[Optional[int], bool]:
+    normalized_title = (node.title or "").strip()
+    for paper_id in source_ids:
+        paper = papers_by_id.get(paper_id)
+        if paper and _paper_title_matches(normalized_title, paper.title or ""):
+            return paper_id, True
+    return (source_ids[0], False) if source_ids else (None, False)
+
+
+def repair_merged_paper_nodes(
+    db: Session,
+    similarity_threshold: float = 0.6,
+) -> int:
+    """Repair legacy paper-node merges caused by title-only upserts.
+
+    Paper nodes should be one-to-one with `Paper.id`. Older builds sometimes
+    appended multiple paper ids onto the same node, which polluted paper
+    titles, the right-side wiki panel, and paper→concept edges. This repair:
+      1. shrinks merged paper nodes back to a single canonical paper id
+      2. redistributes obvious edges to the correct single-paper nodes
+      3. drops ambiguous/stale edges rather than keeping wrong ones
+      4. rebuilds `similar` edges for the repaired canonical node
+
+    Idempotent: once a DB is clean, rerunning is a no-op.
+    """
+    papers_by_id = {paper.id: paper for paper in db.query(Paper).all()}
+    repaired = 0
+
+    merged_nodes = [
+        node
+        for node in db.query(KnowledgeNode).all()
+        if (node.node_type or "") == "paper"
+        and len(normalize_source_paper_ids(node.source_paper_ids)) > 1
+    ]
+
+    for node in merged_nodes:
+        source_ids = list(dict.fromkeys(normalize_source_paper_ids(node.source_paper_ids)))
+        canonical_paper_id, matched_by_title = _select_canonical_paper_id(
+            node,
+            source_ids,
+            papers_by_id,
+        )
+        if canonical_paper_id is None:
+            continue
+
+        extra_paper_ids = [paper_id for paper_id in source_ids if paper_id != canonical_paper_id]
+        target_nodes = {
+            paper_id: _ensure_single_source_paper_node(
+                db,
+                paper_id=paper_id,
+                papers_by_id=papers_by_id,
+                exclude_node_id=node.id,
+            )
+            for paper_id in extra_paper_ids
+        }
+
+        incident_edges = (
+            db.query(KnowledgeEdge)
+            .filter(
+                or_(
+                    KnowledgeEdge.source_id == node.id,
+                    KnowledgeEdge.target_id == node.id,
+                )
+            )
+            .all()
+        )
+
+        for edge in incident_edges:
+            other_id = edge.target_id if edge.source_id == node.id else edge.source_id
+            other = db.query(KnowledgeNode).filter(KnowledgeNode.id == other_id).first()
+            if other is None:
+                db.delete(edge)
+                continue
+
+            if edge.relation_type == "similar":
+                db.delete(edge)
+                continue
+
+            other_source_ids = set(normalize_source_paper_ids(other.source_paper_ids))
+            keep_on_canonical = (
+                edge.relation_type == MANUAL_LINK_RELATION
+                or (
+                    (other.node_type or "") != "paper"
+                    and canonical_paper_id in other_source_ids
+                )
+            )
+
+            for paper_id in extra_paper_ids:
+                if paper_id not in other_source_ids:
+                    continue
+                target_node = target_nodes[paper_id]
+                if target_node.id == other.id:
+                    continue
+                if edge.source_id == node.id:
+                    src_id, tgt_id = target_node.id, other.id
+                else:
+                    src_id, tgt_id = other.id, target_node.id
+                _add_edge(db, src_id, tgt_id, edge.relation_type, edge.weight or 0.0)
+
+            if not keep_on_canonical:
+                db.delete(edge)
+
+        node.source_paper_ids = [canonical_paper_id]
+        canonical_title, canonical_content = _paper_node_payload_from_paper(
+            papers_by_id.get(canonical_paper_id)
+        )
+        if canonical_title:
+            node.title = canonical_title
+        if canonical_content:
+            node.content = canonical_content
+        if not matched_by_title:
+            node.embedding = None
+
+        db.flush()
+        if isinstance(node.embedding, list) and node.embedding:
+            _add_similarity_edges(db, node, similarity_threshold)
+
+        repaired += 1
+
+    if repaired:
+        db.commit()
+    return repaired
+
+
 def find_existing_concept_node(
     db: Session,
     name: str,
@@ -190,23 +454,46 @@ def _upsert_node(
     api_key: str,
     embedding_model: str,
 ) -> KnowledgeNode:
-    title = _truncate_title(title)
-    existing = _find_existing_node(db, title, aliases)
+    raw_title = (title or "").strip()
+    title = raw_title if node_type == "paper" else _truncate_title(raw_title)
+    existing = (
+        _find_existing_paper_node(db, paper_id=paper_id, title=raw_title)
+        if node_type == "paper"
+        else _find_existing_node(db, title, aliases)
+    )
     if existing:
+        before_ids = normalize_source_paper_ids(existing.source_paper_ids)
         ids = list(existing.source_paper_ids or [])
         ids_changed = paper_id not in ids
         if ids_changed:
             ids.append(paper_id)
             existing.source_paper_ids = ids
+        if node_type == "paper" and raw_title and existing.title != raw_title:
+            existing.title = raw_title
+        previous_tags = list(existing.tags or [])
         existing.tags = list({*(existing.tags or []), *tags, *aliases})
         # Enrich content if existing is shorter
+        content_updated = False
         if content and len(content) > len(existing.content or ""):
             existing.content = content
+            content_updated = True
         # New source paper changes the candidate's evidence base — the
         # promotion service uses this to decide who needs re-evaluation
         # (see _select_for_eval). User-overridden status is preserved.
         if ids_changed and promotion_status(existing) == PROMOTION_PENDING:
             existing.last_promotion_eval_at = None
+        logger.info(
+            "node_merge_resolved node_id=%s node_type=%s incoming_title=%r source_papers_before=%s source_papers_after=%s merged_paper_id=%s tags_before=%s tags_after=%s content_updated=%s",
+            existing.id,
+            node_type,
+            raw_title,
+            before_ids,
+            normalize_source_paper_ids(existing.source_paper_ids),
+            paper_id,
+            previous_tags,
+            list(existing.tags or []),
+            content_updated,
+        )
         db.commit()
         return existing
 
@@ -238,9 +525,15 @@ def _upsert_node(
     return node
 
 
-def _add_edge(db: Session, src_id: int, tgt_id: int, relation: str, weight: float):
+def _add_edge(
+    db: Session,
+    src_id: int,
+    tgt_id: int,
+    relation: str,
+    weight: float,
+) -> Optional[KnowledgeEdge]:
     if src_id == tgt_id:
-        return
+        return None
     existing = (
         db.query(KnowledgeEdge)
         .filter(
@@ -251,7 +544,7 @@ def _add_edge(db: Session, src_id: int, tgt_id: int, relation: str, weight: floa
         .first()
     )
     if existing:
-        return
+        return None
     # For 'similar', also check reverse direction to avoid duplicates
     if relation == "similar":
         reverse = (
@@ -264,16 +557,26 @@ def _add_edge(db: Session, src_id: int, tgt_id: int, relation: str, weight: floa
             .first()
         )
         if reverse:
-            return
-    db.add(KnowledgeEdge(
+            return None
+    edge = KnowledgeEdge(
         source_id=src_id, target_id=tgt_id,
         relation_type=relation, weight=weight,
-    ))
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(edge)
+    return edge
 
 
-def _add_similarity_edges(db: Session, node: KnowledgeNode, threshold: float):
+def _add_similarity_edges(
+    db: Session,
+    node: KnowledgeNode,
+    threshold: float,
+    *,
+    context: str = "incremental_build",
+) -> dict[str, int]:
+    summary = {"candidate_edges": 0, "final_edges": 0}
     if not isinstance(node.embedding, list) or not node.embedding:
-        return
+        return summary
     others = db.query(KnowledgeNode).filter(
         KnowledgeNode.id != node.id,
         KnowledgeNode.embedding.isnot(None),
@@ -281,9 +584,93 @@ def _add_similarity_edges(db: Session, node: KnowledgeNode, threshold: float):
     for other in others:
         if not isinstance(other.embedding, list) or not other.embedding:
             continue
+        summary["candidate_edges"] += 1
         sim = cosine_similarity(node.embedding, other.embedding)
         if sim >= threshold:
-            _add_edge(db, node.id, other.id, "similar", round(sim, 4))
+            rounded = round(sim, 4)
+            edge = _add_edge(db, node.id, other.id, "similar", rounded)
+            if edge is None:
+                continue
+            summary["final_edges"] += 1
+            logger.info(
+                "similar_edge_created context=%s source_id=%s source_title=%r target_id=%s target_title=%r threshold=%.4f similarity=%.4f",
+                context,
+                node.id,
+                getattr(node, "title", None),
+                other.id,
+                getattr(other, "title", None),
+                threshold,
+                rounded,
+            )
+    return summary
+
+
+def rebuild_similarity_edges(db: Session, threshold: float) -> dict:
+    """Rebuild only `similar` edges from existing embeddings.
+
+    Safe operation:
+      - does not re-run extraction/embedding calls
+      - does not touch non-similar edges
+      - does not touch any nodes (manual or auto)
+    """
+    total_nodes = db.query(KnowledgeNode).count()
+    removed_similar_edges = (
+        db.query(KnowledgeEdge)
+        .filter(KnowledgeEdge.relation_type == "similar")
+        .delete(synchronize_session=False)
+    )
+
+    embedding_nodes = [
+        node
+        for node in db.query(KnowledgeNode).filter(KnowledgeNode.embedding.isnot(None)).all()
+        if isinstance(node.embedding, list) and node.embedding
+    ]
+
+    candidate_edges = 0
+    final_edges = 0
+    for idx, source in enumerate(embedding_nodes):
+        for target in embedding_nodes[idx + 1:]:
+            candidate_edges += 1
+            sim = cosine_similarity(source.embedding, target.embedding)
+            if sim < threshold:
+                continue
+            rounded = round(sim, 4)
+            edge = _add_edge(db, source.id, target.id, "similar", rounded)
+            if edge is None:
+                continue
+            final_edges += 1
+            logger.info(
+                "similar_edge_created context=rebuild source_id=%s source_title=%r target_id=%s target_title=%r threshold=%.4f similarity=%.4f",
+                source.id,
+                source.title,
+                target.id,
+                target.title,
+                threshold,
+                rounded,
+            )
+
+    db.commit()
+    total_edges = db.query(KnowledgeEdge).count()
+    summary = {
+        "threshold": threshold,
+        "total_nodes": total_nodes,
+        "embedding_nodes": len(embedding_nodes),
+        "candidate_edges": candidate_edges,
+        "final_edges": final_edges,
+        "removed_similar_edges": removed_similar_edges,
+        "total_edges": total_edges,
+    }
+    logger.info(
+        "similar_rebuild_summary total_nodes=%s embedding_nodes=%s candidate_edges=%s final_edges=%s removed_similar_edges=%s threshold=%.4f total_edges=%s",
+        summary["total_nodes"],
+        summary["embedding_nodes"],
+        summary["candidate_edges"],
+        summary["final_edges"],
+        summary["removed_similar_edges"],
+        threshold,
+        summary["total_edges"],
+    )
+    return summary
 
 
 def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
@@ -474,6 +861,9 @@ def _processed_paper_ids(db: Session) -> set[int]:
 
 def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) -> dict:
     last_eval = getattr(node, "last_promotion_eval_at", None)
+    source_paper_ids = normalize_source_paper_ids(node.source_paper_ids)
+    paper_id = source_paper_ids[0] if (node.node_type or "") == "paper" and len(source_paper_ids) == 1 else None
+    concept_id = int(node.id) if (node.node_type or "") != "paper" else None
     return {
         "id": str(node.id),
         "title": node.title,
@@ -488,7 +878,9 @@ def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) ->
         "promotion_reason": getattr(node, "promotion_reason", None),
         "last_promotion_eval_at": last_eval.isoformat() if last_eval else None,
         "tags": node.tags or [],
-        "source_paper_ids": normalize_source_paper_ids(node.source_paper_ids),
+        "source_paper_ids": source_paper_ids,
+        "paper_id": paper_id,
+        "concept_id": concept_id,
         "created_at": node.created_at.isoformat() if node.created_at else None,
     }
 
@@ -547,6 +939,7 @@ def _manual_synthetic_edges(nodes: list[KnowledgeNode]) -> list[dict]:
                 "target": str(paper_node.id),
                 "relation_type": MANUAL_LINK_RELATION,
                 "weight": 1.0,
+                "created_at": None,
             })
     return out
 
@@ -592,6 +985,7 @@ def get_graph_data(db: Session, *, include_candidates: bool = False) -> dict:
                 "target": str(e.target_id),
                 "relation_type": e.relation_type,
                 "weight": e.weight,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
             }
             for e in edges
         ] + synthetic_edges,
@@ -682,6 +1076,7 @@ def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
                 "target": e.target_id,
                 "relation_type": e.relation_type,
                 "weight": e.weight,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
             }
             for e in stored_edges
         ] + [
@@ -691,6 +1086,7 @@ def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
                 "target": int(e["target"]),
                 "relation_type": e["relation_type"],
                 "weight": e["weight"],
+                "created_at": e.get("created_at"),
             }
             for e in synthetic_edges
         ],

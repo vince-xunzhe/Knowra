@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
@@ -43,6 +44,17 @@ from services.paper_record_service import (
     sync_paper_from_record,
     sync_record_from_paper,
 )
+from services.paper_pipeline_service import (
+    PIPELINE_STATUS_DONE,
+    PIPELINE_STATUS_EXTRACTING,
+    PIPELINE_STATUS_FAILED,
+    PIPELINE_STATUS_GRAPHING,
+    PIPELINE_STATUS_PARSING,
+    PIPELINE_STATUS_SCANNING,
+    compute_backoff_seconds,
+    is_recoverable_error,
+    short_error_reason,
+)
 
 
 def _safe_parse(raw):
@@ -77,14 +89,50 @@ def _hydrate_paper_metadata_from_raw(p: Paper) -> bool:
 def _reconcile_processed_paper(p: Paper) -> bool:
     changed = _hydrate_paper_metadata_from_raw(p)
     if not p.processed or not p.raw_llm_response:
+        if p.processed and p.processing_status != PIPELINE_STATUS_DONE:
+            p.processing_status = PIPELINE_STATUS_DONE
+            changed = True
+        if p.processed and (
+            p.last_error_stage is not None
+            or p.last_error_reason is not None
+            or p.last_error_recoverable is not None
+        ):
+            p.last_error_stage = None
+            p.last_error_reason = None
+            p.last_error_recoverable = None
+            changed = True
         return changed
     parsed = _safe_parse(p.raw_llm_response)
     if not parsed:
+        if p.processed and p.processing_status != PIPELINE_STATUS_DONE:
+            p.processing_status = PIPELINE_STATUS_DONE
+            changed = True
+        if p.processed and (
+            p.last_error_stage is not None
+            or p.last_error_reason is not None
+            or p.last_error_recoverable is not None
+        ):
+            p.last_error_stage = None
+            p.last_error_reason = None
+            p.last_error_recoverable = None
+            changed = True
         return changed
     issues = set(extraction_quality_issues(parsed))
     # Auto-heal only the clear "ghost-success" shape we observed in the DB:
     # processed=True, but both the paper identity and graph payload are empty.
     if "title 为空" not in issues or "图谱关键字段全空" not in issues:
+        if p.processing_status != PIPELINE_STATUS_DONE:
+            p.processing_status = PIPELINE_STATUS_DONE
+            changed = True
+        if (
+            p.last_error_stage is not None
+            or p.last_error_reason is not None
+            or p.last_error_recoverable is not None
+        ):
+            p.last_error_stage = None
+            p.last_error_reason = None
+            p.last_error_recoverable = None
+            changed = True
         return changed
 
     if p.processed:
@@ -100,13 +148,95 @@ def _reconcile_processed_paper(p: Paper) -> bool:
     if p.error != next_error:
         p.error = next_error
         changed = True
+    if p.processing_status != PIPELINE_STATUS_FAILED:
+        p.processing_status = PIPELINE_STATUS_FAILED
+        changed = True
+    if p.last_error_stage != PIPELINE_STATUS_PARSING:
+        p.last_error_stage = PIPELINE_STATUS_PARSING
+        changed = True
+    if p.last_error_reason != next_error:
+        p.last_error_reason = next_error
+        changed = True
+    if p.last_error_recoverable is not True:
+        p.last_error_recoverable = True
+        changed = True
     return changed
 
 
 router = APIRouter(prefix="/api", tags=["papers"])
 logger = get_logger("papers")
 
-processing_state = {"running": False, "total": 0, "done": 0, "errors": 0, "current": ""}
+processing_state = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "errors": 0,
+    "current": "",
+    "succeeded": 0,
+    "failed_papers": [],
+    "max_retries": 0,
+}
+
+
+def _retry_settings(cfg: dict) -> tuple[int, float, float]:
+    try:
+        max_retries = int(cfg.get("paper_process_max_retries", 3))
+    except (TypeError, ValueError):
+        max_retries = 3
+    max_retries = min(max(max_retries, 1), 8)
+
+    try:
+        base_seconds = float(cfg.get("paper_process_backoff_base_seconds", 1.5))
+    except (TypeError, ValueError):
+        base_seconds = 1.5
+    base_seconds = min(max(base_seconds, 0.0), 60.0)
+
+    try:
+        max_seconds = float(cfg.get("paper_process_backoff_max_seconds", 20.0))
+    except (TypeError, ValueError):
+        max_seconds = 20.0
+    max_seconds = min(max(max_seconds, base_seconds), 300.0)
+    return max_retries, base_seconds, max_seconds
+
+
+def _set_pipeline_state(
+    db: Session,
+    paper: Paper,
+    *,
+    status: str,
+    retry_count: Optional[int] = None,
+    error: Optional[str] = None,
+    error_stage: Optional[str] = None,
+    error_recoverable: Optional[bool] = None,
+    clear_error: bool = False,
+) -> None:
+    paper.processing_status = status
+    if retry_count is not None:
+        paper.retry_count = max(0, int(retry_count))
+    if clear_error:
+        paper.error = None
+        paper.last_error_stage = None
+        paper.last_error_reason = None
+        paper.last_error_recoverable = None
+    if error is not None:
+        paper.error = error
+        paper.last_error_reason = error
+    if error_stage is not None:
+        paper.last_error_stage = error_stage
+    if error_recoverable is not None:
+        paper.last_error_recoverable = bool(error_recoverable)
+    db.commit()
+
+
+def _paper_failure_item(p: Paper) -> dict:
+    return {
+        "id": p.id,
+        "filename": p.filename,
+        "stage": p.last_error_stage or p.processing_status,
+        "reason": p.last_error_reason or p.error,
+        "recoverable": bool(p.last_error_recoverable),
+        "retry_count": int(p.retry_count or 0),
+    }
 
 
 class RawResponseUpdate(BaseModel):
@@ -193,6 +323,11 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "extracted_text": p.extracted_text,
         "processed": p.processed,
         "processed_at": p.processed_at.isoformat() if p.processed_at else None,
+        "processing_status": p.processing_status,
+        "retry_count": p.retry_count or 0,
+        "last_error_stage": p.last_error_stage,
+        "last_error_reason": p.last_error_reason,
+        "last_error_recoverable": p.last_error_recoverable,
         "extraction_model": p.extraction_model,
         "paper_category": category,
         "paper_category_model": normalize_paper_category(p.paper_category_model),
@@ -253,6 +388,11 @@ def list_papers(db: Session = Depends(get_db)):
             "num_pages": p.num_pages,
             "processed": p.processed,
             "processed_at": p.processed_at.isoformat() if p.processed_at else None,
+            "processing_status": p.processing_status,
+            "retry_count": p.retry_count or 0,
+            "last_error_stage": p.last_error_stage,
+            "last_error_reason": p.last_error_reason,
+            "last_error_recoverable": p.last_error_recoverable,
             "paper_category": effective_paper_category(p, _safe_parse(p.raw_llm_response)),
             "paper_category_model": normalize_paper_category(p.paper_category_model),
             "paper_category_override": normalize_paper_category(p.paper_category_override),
@@ -315,176 +455,288 @@ def serve_first_page(paper_id: int, db: Session = Depends(get_db)):
     return FileResponse(str(image_path), media_type="image/png")
 
 
+def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
+    # Phase 1 wiki compile. Failures here must not break processing — the raw
+    # layer is already saved and the user can manually retry via the Wiki page.
+    try:
+        from services.wiki_compiler import (
+            compile_paper_page,
+            compile_concept_pages_for_paper,
+            reconcile_concept_pages_dir,
+        )
+
+        compile_model = task_model_id(cfg, "wiki_compile")
+        compile_paper_page(p, cfg["openai_api_key"], compile_model)
+        compile_concept_pages_for_paper(
+            p.id, db, cfg["openai_api_key"], compile_model
+        )
+        reconcile_concept_pages_dir(db, prune_orphans=True)
+        # Refresh the FTS index so the new wiki page is searchable immediately.
+        try:
+            from services.wiki_search import rebuild_index
+
+            rebuild_index()
+        except Exception as ix_err:
+            print(f"[wiki_search] reindex after paper {p.id} failed: {ix_err}")
+    except Exception as compile_err:
+        print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
+
+
 def _process_single(paper_id: int):
     from database import SessionLocal
+
     db = SessionLocal()
     try:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
         if not p or p.processed:
             return
+
         cfg = load_config()
+        max_retries, backoff_base_s, backoff_max_s = _retry_settings(cfg)
+        processing_state["max_retries"] = max_retries
+
         if not cfg.get("openai_api_key"):
-            p.error = "OpenAI API key not configured"
-            db.commit()
+            _set_pipeline_state(
+                db,
+                p,
+                status=PIPELINE_STATUS_FAILED,
+                retry_count=0,
+                error="OpenAI API key not configured",
+                error_stage=PIPELINE_STATUS_EXTRACTING,
+                error_recoverable=False,
+            )
             sync_record_from_paper(p, event="process_error")
             processing_state["errors"] += 1
+            processing_state["failed_papers"].append(_paper_failure_item(p))
             return
 
         processing_state["current"] = p.filename
-        pdf_path = resolve_paper_path(p.filepath)
-        if not pdf_path.exists():
-            raise FileNotFoundError(f"PDF not found: {pdf_path}")
-        portable_filepath = portable_data_path(pdf_path)
-        path_conflict = db.query(Paper).filter(
-            Paper.filepath == portable_filepath,
-            Paper.id != p.id,
-        ).first()
-        if p.filepath != portable_filepath and not path_conflict:
-            p.filepath = portable_filepath
-            db.commit()
-
-        # Local preprocessing — no longer fed to the LLM, but still useful:
-        #   - extracted_text: shown in the frontend debug drawer, fallback search
-        #   - first_page_image: UI thumbnails (papers grid, node detail cards)
-        if not p.extracted_text or not p.num_pages:
+        attempt = 1
+        while attempt <= max_retries:
+            stage = PIPELINE_STATUS_SCANNING
             try:
-                text, num_pages = extract_text(str(pdf_path))
-                p.extracted_text = text
-                p.num_pages = num_pages
+                _set_pipeline_state(
+                    db,
+                    p,
+                    status=PIPELINE_STATUS_SCANNING,
+                    retry_count=attempt - 1,
+                    clear_error=(attempt == 1),
+                )
+
+                pdf_path = resolve_paper_path(p.filepath)
+                if not pdf_path.exists():
+                    raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+                portable_filepath = portable_data_path(pdf_path)
+                path_conflict = db.query(Paper).filter(
+                    Paper.filepath == portable_filepath,
+                    Paper.id != p.id,
+                ).first()
+                if p.filepath != portable_filepath and not path_conflict:
+                    p.filepath = portable_filepath
+                    db.commit()
+
+                # Remove leftovers from any prior failed attempt so this run
+                # starts from a clean graph slice for the current paper.
+                remove_nodes_for_paper(db, p.id)
+                p.processed = False
+                p.processed_at = None
                 db.commit()
-            except Exception:
-                pass
 
-        if not p.first_page_image_path:
-            img_path = render_first_page(str(pdf_path), p.file_hash)
-            if img_path:
-                p.first_page_image_path = img_path
+                # Local preprocessing — no longer fed to the LLM, but still
+                # useful for debug and fallback context.
+                if not p.extracted_text or not p.num_pages:
+                    try:
+                        text, num_pages = extract_text(str(pdf_path))
+                        p.extracted_text = text
+                        p.num_pages = num_pages
+                        db.commit()
+                    except Exception:
+                        pass
+
+                if not p.first_page_image_path:
+                    img_path = render_first_page(str(pdf_path), p.file_hash)
+                    if img_path:
+                        p.first_page_image_path = img_path
+                        db.commit()
+
+                stage = PIPELINE_STATUS_EXTRACTING
+                _set_pipeline_state(
+                    db,
+                    p,
+                    status=PIPELINE_STATUS_EXTRACTING,
+                    retry_count=attempt - 1,
+                )
+
+                cached_file_id = p.openai_file_id
+                cached_assistant_id = cfg.get("openai_assistant_id") or None
+                cached_vector_store_id = p.openai_vector_store_id
+                extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
+                    pdf_filepath=str(pdf_path),
+                    prompt=cfg["extraction_prompt"],
+                    api_key=cfg["openai_api_key"],
+                    model=task_model_name(cfg, "paper_extract"),
+                    reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
+                    cached_file_id=cached_file_id,
+                    cached_assistant_id=cached_assistant_id,
+                    cached_vector_store_id=cached_vector_store_id,
+                    fallback_text=p.extracted_text or "",
+                    first_page_image_path=(
+                        str(resolve_artifact_path(p.first_page_image_path))
+                        if cfg.get("use_first_page_image") and p.first_page_image_path
+                        else None
+                    ),
+                    file_hash=p.file_hash,
+                )
+
+                if not raw or not raw.strip():
+                    raise PaperExtractionError(
+                        "模型返回了空响应（可能是 file_search 没命中 PDF，或网络中断）。请重试，或检查 PDF 是否可读。",
+                        raw=raw or "",
+                        file_id=new_file_id or "",
+                        assistant_id=new_assistant_id or "",
+                    )
+
+                stage = PIPELINE_STATUS_PARSING
+                _set_pipeline_state(
+                    db,
+                    p,
+                    status=PIPELINE_STATUS_PARSING,
+                    retry_count=attempt - 1,
+                )
+                extraction = parse_extraction_response(raw)
+                if not isinstance(extraction, dict):
+                    raise PaperExtractionError(
+                        "抽取响应不是 JSON 对象",
+                        raw=raw,
+                        file_id=new_file_id or "",
+                        assistant_id=new_assistant_id or "",
+                    )
+                if extraction_has_critical_issues(extraction):
+                    issues = "；".join(extraction_quality_issues(extraction))
+                    raise PaperExtractionError(
+                        f"抽取结果缺少关键内容: {issues}",
+                        raw=raw,
+                        file_id=new_file_id or "",
+                        assistant_id=new_assistant_id or "",
+                    )
+
+                stage = PIPELINE_STATUS_GRAPHING
+                _set_pipeline_state(
+                    db,
+                    p,
+                    status=PIPELINE_STATUS_GRAPHING,
+                    retry_count=attempt - 1,
+                )
+
+                if new_file_id and new_file_id != cached_file_id:
+                    p.openai_file_id = new_file_id
+                if new_vector_store_id and new_vector_store_id != cached_vector_store_id:
+                    p.openai_vector_store_id = new_vector_store_id
+                if new_assistant_id and new_assistant_id != cached_assistant_id:
+                    save_config({"openai_assistant_id": new_assistant_id})
+                if new_thread_id:
+                    p.openai_thread_id = new_thread_id
+                    p.thread_created_at = datetime.now(timezone.utc)
+                    p.chat_history = []
+
+                p.raw_llm_response = raw
+                p.extraction_model = task_model_name(cfg, "paper_extract")
+                p.title = (extraction.get("title") or p.filename)[:200]
+                p.authors = extraction.get("authors") or []
+                p.paper_category_model = derive_model_paper_category(p, extraction)
+
+                add_nodes_from_paper_extraction(
+                    extraction,
+                    p.id,
+                    cfg["openai_api_key"],
+                    task_model_id(cfg, "embedding"),
+                    cfg["similarity_threshold"],
+                    db,
+                )
+
+                p.processed = True
+                p.processed_at = datetime.now(timezone.utc)
+                p.processing_status = PIPELINE_STATUS_DONE
+                p.retry_count = attempt - 1
+                p.error = None
+                p.last_error_stage = None
+                p.last_error_reason = None
+                p.last_error_recoverable = None
                 db.commit()
+                sync_record_from_paper(p, event="process")
+                processing_state["done"] += 1
+                processing_state["succeeded"] += 1
+                _run_wiki_compile_phase(p, db, cfg)
+                return
+            except PaperExtractionError as e:
+                if e.raw:
+                    p.raw_llm_response = e.raw
+                if e.file_id and not p.openai_file_id:
+                    p.openai_file_id = e.file_id
+                if e.assistant_id:
+                    try:
+                        save_config({"openai_assistant_id": e.assistant_id})
+                    except Exception:
+                        pass
+                reason = short_error_reason(e)
+                recoverable = is_recoverable_error(e)
+                logger.exception(
+                    "paper extraction failed paper_id=%s filename=%s stage=%s attempt=%s/%s",
+                    paper_id,
+                    p.filename if p else None,
+                    stage,
+                    attempt,
+                    max_retries,
+                )
+            except Exception as e:
+                reason = short_error_reason(e)
+                recoverable = is_recoverable_error(e)
+                logger.exception(
+                    "paper processing crashed paper_id=%s filename=%s stage=%s attempt=%s/%s",
+                    paper_id,
+                    p.filename if p else None,
+                    stage,
+                    attempt,
+                    max_retries,
+                )
 
-        # Call LLM via Assistants API + file_search.
-        # The PDF itself is uploaded; cached file_id + assistant_id get reused.
-        cached_file_id = p.openai_file_id
-        cached_assistant_id = cfg.get("openai_assistant_id") or None
-        cached_vector_store_id = p.openai_vector_store_id
+            p.processed = False
+            p.processed_at = None
+            if attempt < max_retries and recoverable:
+                _set_pipeline_state(
+                    db,
+                    p,
+                    status=stage,
+                    retry_count=attempt,
+                    error=reason,
+                    error_stage=stage,
+                    error_recoverable=True,
+                )
+                sync_record_from_paper(p, event="process_retry")
+                delay = compute_backoff_seconds(
+                    attempt,
+                    base_seconds=backoff_base_s,
+                    max_seconds=backoff_max_s,
+                )
+                if delay > 0:
+                    time.sleep(delay)
+                attempt += 1
+                continue
 
-        extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
-            pdf_filepath=str(pdf_path),
-            prompt=cfg["extraction_prompt"],
-            api_key=cfg["openai_api_key"],
-            model=task_model_name(cfg, "paper_extract"),
-            reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
-            cached_file_id=cached_file_id,
-            cached_assistant_id=cached_assistant_id,
-            cached_vector_store_id=cached_vector_store_id,
-            fallback_text=p.extracted_text or "",
-            first_page_image_path=(
-                str(resolve_artifact_path(p.first_page_image_path))
-                if cfg.get("use_first_page_image") and p.first_page_image_path
-                else None
-            ),
-            file_hash=p.file_hash,
-        )
-
-        # Defensive check: if the model returned an empty response without
-        # raising, treat that as a failure rather than silently marking the
-        # paper as processed=True with no extraction. We saw this produce
-        # "ghost-success" rows where every field is null but processed=True.
-        if not raw or not raw.strip():
-            raise PaperExtractionError(
-                "模型返回了空响应（可能是 file_search 没命中 PDF，或网络中断）。请重试，或检查 PDF 是否可读。",
-                raw=raw or "",
-                file_id=new_file_id or "",
-                assistant_id=new_assistant_id or "",
+            _set_pipeline_state(
+                db,
+                p,
+                status=PIPELINE_STATUS_FAILED,
+                retry_count=attempt - 1,
+                error=reason,
+                error_stage=stage,
+                error_recoverable=recoverable,
             )
-
-        # Persist the cached identifiers so subsequent runs skip the upload /
-        # assistant creation round-trips.
-        if new_file_id and new_file_id != cached_file_id:
-            p.openai_file_id = new_file_id
-        if new_vector_store_id and new_vector_store_id != cached_vector_store_id:
-            p.openai_vector_store_id = new_vector_store_id
-        if new_assistant_id and new_assistant_id != cached_assistant_id:
-            save_config({"openai_assistant_id": new_assistant_id})
-        # Keep the thread so follow-up chat can reuse it. Reset history since
-        # a reprocess implicitly starts a fresh conversation.
-        if new_thread_id:
-            p.openai_thread_id = new_thread_id
-            p.thread_created_at = datetime.now(timezone.utc)
-            p.chat_history = []
-
-        p.raw_llm_response = raw
-        # Stamp which model produced this raw response so the Review page
-        # can show it alongside processed_at.
-        p.extraction_model = task_model_name(cfg, "paper_extract")
-        p.title = (extraction.get("title") or p.filename)[:200]
-        p.authors = extraction.get("authors") or []
-        p.paper_category_model = derive_model_paper_category(p, extraction)
-
-        add_nodes_from_paper_extraction(
-            extraction,
-            p.id,
-            cfg["openai_api_key"],
-            task_model_id(cfg, "embedding"),
-            cfg["similarity_threshold"],
-            db,
-        )
-
-        p.processed = True
-        p.processed_at = datetime.now(timezone.utc)
-        p.error = None
-        db.commit()
-        sync_record_from_paper(p, event="process")
-        processing_state["done"] += 1
-
-        # Phase 1 wiki compile. Failures here must not break processing —
-        # the raw layer is already saved and the user can manually retry
-        # via the Wiki page.
-        try:
-            from services.wiki_compiler import (
-                compile_paper_page,
-                compile_concept_pages_for_paper,
-                reconcile_concept_pages_dir,
-            )
-            compile_model = task_model_id(cfg, "wiki_compile")
-            compile_paper_page(p, cfg["openai_api_key"], compile_model)
-            compile_concept_pages_for_paper(
-                p.id, db, cfg["openai_api_key"], compile_model
-            )
-            reconcile_concept_pages_dir(db, prune_orphans=True)
-            # Refresh the FTS index so the new wiki page is searchable
-            # immediately. Cheap (<1s) at this scale.
-            try:
-                from services.wiki_search import rebuild_index
-                rebuild_index()
-            except Exception as ix_err:
-                print(f"[wiki_search] reindex after paper {p.id} failed: {ix_err}")
-        except Exception as compile_err:
-            print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
-    except PaperExtractionError as e:
-        p = db.query(Paper).filter(Paper.id == paper_id).first()
-        logger.exception("paper processing failed during extraction paper_id=%s filename=%s", paper_id, p.filename if p else None)
-        if p:
-            if e.raw:
-                p.raw_llm_response = e.raw
-            if e.file_id and not p.openai_file_id:
-                p.openai_file_id = e.file_id
-            p.error = str(e)[:500]
-            db.commit()
             sync_record_from_paper(p, event="process_error")
-        if e.assistant_id:
-            try:
-                save_config({"openai_assistant_id": e.assistant_id})
-            except Exception:
-                pass
-        processing_state["errors"] += 1
-    except Exception as e:
-        p = db.query(Paper).filter(Paper.id == paper_id).first()
-        logger.exception("paper processing crashed paper_id=%s filename=%s", paper_id, p.filename if p else None)
-        if p:
-            p.error = str(e)[:500]
-            db.commit()
-            sync_record_from_paper(p, event="process_error")
-        processing_state["errors"] += 1
+            processing_state["errors"] += 1
+            processing_state["failed_papers"].append(_paper_failure_item(p))
+            return
     finally:
         db.close()
 
@@ -510,7 +762,10 @@ def _process_one_background(paper_id: int):
 def _process_many_background(paper_ids: list[int]):
     processing_state["total"] = len(paper_ids)
     processing_state["done"] = 0
+    processing_state["succeeded"] = 0
     processing_state["errors"] = 0
+    processing_state["failed_papers"] = []
+    processing_state["max_retries"] = 0
     processing_state["running"] = True
     try:
         for paper_id in paper_ids:
@@ -524,6 +779,11 @@ def _prepare_reprocess(db: Session, p: Paper):
     remove_nodes_for_paper(db, p.id)
     p.processed = False
     p.processed_at = None
+    p.processing_status = PIPELINE_STATUS_SCANNING
+    p.retry_count = 0
+    p.last_error_stage = None
+    p.last_error_reason = None
+    p.last_error_recoverable = None
     p.raw_llm_response = None
     p.extraction_model = None
     p.paper_category_model = None
@@ -547,7 +807,14 @@ def _reconcile_failed_papers(db: Session) -> list[Paper]:
     for paper in papers:
         if _reconcile_processed_paper(paper):
             healed.append(paper)
-        if not paper.processed and paper.error:
+        if (
+            not paper.processed
+            and (
+                paper.processing_status == PIPELINE_STATUS_FAILED
+                or bool(paper.error)
+                or bool(paper.last_error_reason)
+            )
+        ):
             failed.append(paper)
 
     if healed:
@@ -563,7 +830,7 @@ def process_all(background_tasks: BackgroundTasks):
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     background_tasks.add_task(_process_all_background)
-    return {"message": "Processing started"}
+    return {"message": "Processing started", **processing_state}
 
 
 @router.post("/papers/{paper_id}/process")
@@ -574,7 +841,7 @@ def process_one(paper_id: int, background_tasks: BackgroundTasks, db: Session = 
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     background_tasks.add_task(_process_one_background, paper_id)
-    return {"message": f"Processing started for {p.filename}"}
+    return {"message": f"Processing started for {p.filename}", **processing_state}
 
 
 @router.post("/papers/{paper_id}/retry")
@@ -587,7 +854,7 @@ def retry_paper(paper_id: int, background_tasks: BackgroundTasks, db: Session = 
         return {"message": "Processing already running", **processing_state}
     _prepare_reprocess(db, p)
     background_tasks.add_task(_process_one_background, paper_id)
-    return {"message": f"Retry started for {p.filename}"}
+    return {"message": f"Retry started for {p.filename}", **processing_state}
 
 
 @router.post("/papers/retry_failed")
@@ -598,10 +865,17 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
 
     failed = _reconcile_failed_papers(db)
     if not failed:
-        return {"message": "No failed papers to retry", "retried": 0}
+        return {
+            "message": "No failed papers to retry",
+            "retried": 0,
+            "failed_papers": [],
+            **processing_state,
+        }
 
     ids: list[int] = []
+    failed_items: list[dict] = []
     for paper in failed:
+        failed_items.append(_paper_failure_item(paper))
         _prepare_reprocess(db, paper)
         ids.append(paper.id)
 
@@ -609,6 +883,8 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
     return {
         "message": f"Retry started for {len(ids)} failed papers",
         "retried": len(ids),
+        "failed_papers": failed_items,
+        **processing_state,
     }
 
 
@@ -660,7 +936,12 @@ def update_paper_response(
     sync_paper_category_fields(p, extraction, overwrite_model=True)
     p.processed = True
     p.processed_at = datetime.now(timezone.utc)
+    p.processing_status = PIPELINE_STATUS_DONE
+    p.retry_count = 0
     p.error = None
+    p.last_error_stage = None
+    p.last_error_reason = None
+    p.last_error_recoverable = None
     db.flush()
 
     add_nodes_from_paper_extraction(

@@ -1,7 +1,7 @@
 # VIN-11 Analysis
 
 ## Scope
-- Repository mismatch note: issue text referenced `automated-studio`, but implementation target and eval command point to `knowledge-tree-v2/backend`. Work was completed in a clean `knowledge-tree-v2` worktree branch `agent/VIN-11`.
+- Implementation target is this `knowledge-tree-v2` workspace on branch `agent/VIN-11`.
 
 ## Changed Files
 - `backend/services/ask_agent.py`

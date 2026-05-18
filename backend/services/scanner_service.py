@@ -3,6 +3,7 @@ from models import Paper
 from path_utils import portable_data_path, resolve_papers_directory
 from services.pdf_service import compute_hash
 from services.paper_record_service import sync_record_from_paper
+from services.paper_pipeline_service import PIPELINE_STATUS_SCANNING
 
 
 def scan_directory(directory: str, db: Session) -> dict:
@@ -33,6 +34,11 @@ def scan_directory(directory: str, db: Session) -> dict:
                     filename=pdf_path.name,
                     file_hash=file_hash,
                     processed=False,
+                    processing_status=PIPELINE_STATUS_SCANNING,
+                    retry_count=0,
+                    last_error_stage=None,
+                    last_error_reason=None,
+                    last_error_recoverable=None,
                 )
                 db.add(paper)
                 added_papers.append(paper)
