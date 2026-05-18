@@ -234,6 +234,28 @@ def wiki_search(q: str = "", limit: int = 20):
     """Full-text search over the LLM-compiled wiki layer.
     Zero token cost — pure SQLite FTS5 / bm25 ranking on disk."""
     hits = wiki_search_service.search(q, limit=limit) if q.strip() else []
+    if hits:
+        paper_meta_by_filename = {
+            item.get("filename"): item
+            for item in list_paper_pages()
+            if item.get("filename")
+        }
+        concept_meta_by_filename = {
+            item.get("filename"): item
+            for item in list_concept_pages()
+            if item.get("filename")
+        }
+        enriched = []
+        for hit in hits:
+            item = dict(hit)
+            if item.get("kind") == "paper":
+                meta = paper_meta_by_filename.get(item.get("filename"))
+                item["paper_id"] = meta.get("paper_id") if meta else None
+            elif item.get("kind") == "concept":
+                meta = concept_meta_by_filename.get(item.get("filename"))
+                item["concept_id"] = meta.get("concept_id") if meta else None
+            enriched.append(item)
+        hits = enriched
     return {"query": q, "hits": hits}
 
 

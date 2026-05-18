@@ -73,6 +73,8 @@ export interface GraphNode {
   last_promotion_eval_at: string | null
   tags: string[]
   source_paper_ids: number[]
+  paper_id?: number | null
+  concept_id?: number | null
   created_at: string | null
 }
 
@@ -464,6 +466,8 @@ export interface WikiSearchHit {
   compiled_at: string | null
   snippet: string
   score: number
+  paper_id?: number | null
+  concept_id?: number | null
 }
 
 export interface WikiSearchResponse {

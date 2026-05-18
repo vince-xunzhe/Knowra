@@ -102,6 +102,10 @@ export default function NodeDetail({
   const [wikiMissing, setWikiMissing] = useState(false)
   const [wikiBusy, setWikiBusy] = useState(false)
   const nodeId = node?.id
+  const paperWikiId =
+    node?.node_type === 'paper'
+      ? (node.paper_id ?? node.source_paper_ids?.[0] ?? (node?.id ? Number(node.id) : null))
+      : null
 
   useEffect(() => {
     if (!nodeId) return
@@ -147,7 +151,7 @@ export default function NodeDetail({
   useEffect(() => {
     if (!node || tab !== 'wiki' || !wikiKind) return
     if (wiki && wiki.path && (
-      (wikiKind === 'papers' && wiki.paper_id === Number(node.id)) ||
+      (wikiKind === 'papers' && paperWikiId != null && wiki.paper_id === paperWikiId) ||
       (wikiKind === 'concepts' && wiki.concept_id === Number(node.id))
     )) return
 
@@ -157,7 +161,14 @@ export default function NodeDetail({
       setWikiError(null)
       setWikiMissing(false)
       try {
-        const targetId = Number(node.id)
+        const targetId = wikiKind === 'papers'
+          ? paperWikiId
+          : Number(node.id)
+        if (targetId == null) {
+          setWiki(null)
+          setWikiMissing(true)
+          return
+        }
         const items = wikiKind === 'papers' ? await listPaperPages() : await listConceptPages()
         const match = items.find(it =>
           wikiKind === 'papers' ? it.paper_id === targetId : it.concept_id === targetId,
@@ -180,7 +191,7 @@ export default function NodeDetail({
     }
     void load()
     return () => { cancelled = true }
-  }, [node, tab, wikiKind, wiki])
+  }, [node, paperWikiId, tab, wikiKind, wiki])
 
   if (!node) return null
 
@@ -196,7 +207,13 @@ export default function NodeDetail({
     setWikiBusy(true)
     setWikiError(null)
     try {
-      const targetId = Number(node.id)
+      const targetId = wikiKind === 'papers'
+        ? paperWikiId
+        : Number(node.id)
+      if (targetId == null) {
+        setWikiMissing(true)
+        return
+      }
       const result = wikiKind === 'papers'
         ? await recompilePaper(targetId)
         : await recompileConcept(targetId)

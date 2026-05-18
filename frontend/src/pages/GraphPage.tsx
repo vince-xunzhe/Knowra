@@ -71,6 +71,15 @@ const CONCEPT_ELIGIBLE_TYPES = new Set(['technique', 'dataset', 'concept'])
 // filter. Stays in DB and rescue UI but never renders on the canvas.
 const NODE_GRAPH_HIDDEN_TYPES = new Set(['problem_area'])
 
+function paperNodeMatchesTitle(nodeTitle: string, fullTitle: string) {
+  const existing = (nodeTitle || '').trim().toLowerCase()
+  const target = (fullTitle || '').trim().toLowerCase()
+  if (!existing || !target) return false
+  if (existing === target) return true
+  const trimmed = existing.replace(/[….]$/, '')
+  return !!trimmed && target.startsWith(trimmed)
+}
+
 export default function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
@@ -285,6 +294,33 @@ export default function GraphPage() {
     setSelectedNode(freshest)
   }, [candidateMode, typeFilter, viewKind])
 
+  const resolveWikiTargetNode = useCallback((
+    kind: 'paper' | 'concept',
+    targetId: number,
+    title?: string,
+  ) => {
+    const nodes = graphDataRef.current?.nodes || graphData.nodes
+    if (kind === 'paper') {
+      const candidates = nodes.filter(
+        n => n.node_type === 'paper' && (
+          n.paper_id === targetId || (n.source_paper_ids || []).includes(targetId)
+        ),
+      )
+      if (candidates.length === 0) return null
+      candidates.sort((a, b) => {
+        const aPaperId = a.paper_id === targetId ? 0 : 1
+        const bPaperId = b.paper_id === targetId ? 0 : 1
+        if (aPaperId !== bPaperId) return aPaperId - bPaperId
+        const aTitle = title && paperNodeMatchesTitle(a.title, title) ? 0 : 1
+        const bTitle = title && paperNodeMatchesTitle(b.title, title) ? 0 : 1
+        if (aTitle !== bTitle) return aTitle - bTitle
+        return (a.source_paper_ids?.length ?? 9999) - (b.source_paper_ids?.length ?? 9999)
+      })
+      return candidates[0] || null
+    }
+    return nodes.find(n => n.concept_id === targetId || n.id === String(targetId)) || null
+  }, [graphData.nodes])
+
   useEffect(() => {
     if (!searchOpen) return
     const onPointerDown = (event: MouseEvent) => {
@@ -325,26 +361,35 @@ export default function GraphPage() {
   // (orphan compile, manual concept stub etc.).
   const handleWikiGraphPick = useCallback(
     (wikiNode: WikiGraphNode) => {
-      const targetId = wikiNode.paper_id ?? wikiNode.concept_id
-      if (targetId == null) return
-      const node = graphData.nodes.find(n => n.id === String(targetId))
+      const node = wikiNode.paper_id != null
+        ? resolveWikiTargetNode('paper', wikiNode.paper_id, wikiNode.title)
+        : wikiNode.concept_id != null
+          ? resolveWikiTargetNode('concept', wikiNode.concept_id)
+          : null
       if (node) {
         setDrawerInitialTab('wiki')
         setSelectedNode(node)
       }
     },
-    [graphData.nodes],
+    [resolveWikiTargetNode],
   )
 
-  // Convert the leading `0042-...md` filename → graph node id. Wiki pages
-  // never carry the DB id directly, but their slug always starts with the
-  // zero-padded id, so this is the cheapest map.
+  // Wiki search hits now prefer explicit paper_id / concept_id from the
+  // backend. Filename parsing remains only as a backwards-compatible
+  // fallback for stale clients / older responses.
   const handleWikiHitClick = useCallback(
     (hit: WikiSearchHit) => {
-      const match = /^(\d+)-/.exec(hit.filename)
-      if (!match) return
-      const id = String(parseInt(match[1], 10))
-      const targetNode = graphData.nodes.find(n => n.id === id)
+      let targetId: number | null = null
+      if (hit.kind === 'paper' && typeof hit.paper_id === 'number') {
+        targetId = hit.paper_id
+      } else if (hit.kind === 'concept' && typeof hit.concept_id === 'number') {
+        targetId = hit.concept_id
+      } else {
+        const match = /^(\d+)-/.exec(hit.filename)
+        if (match) targetId = parseInt(match[1], 10)
+      }
+      if (targetId == null) return
+      const targetNode = resolveWikiTargetNode(hit.kind, targetId, hit.title)
       if (targetNode) {
         setDrawerInitialTab('wiki')
         focusNode(targetNode)
@@ -354,7 +399,7 @@ export default function GraphPage() {
         setWikiHits([])
       }
     },
-    [graphData.nodes, focusNode],
+    [focusNode, resolveWikiTargetNode],
   )
 
   const handleScan = async () => {

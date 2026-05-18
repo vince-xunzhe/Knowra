@@ -363,7 +363,6 @@ class GraphCurationTests(unittest.TestCase):
             db.close()
             engine.dispose()
 
-
 class WikiCompileSkipTests(unittest.TestCase):
     def test_compile_paper_page_skips_unchanged_signature(self):
         paper = SimpleNamespace(

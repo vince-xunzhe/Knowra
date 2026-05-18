@@ -1,9 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from config import load_config
 from database import init_db, SessionLocal
 from logging_utils import configure_app_logging
 from models import Paper
 from routers import papers, graph, config, prompt, note_images, wiki, promotion, ask
+from services.graph_service import repair_merged_paper_nodes
 from services.paper_category_service import sync_paper_category_fields
 from services.vlm_service import parse_extraction_response
 
@@ -49,6 +51,25 @@ def startup():
             db.commit()
     except Exception as e:
         print(f"[paper_category] startup backfill failed: {e}")
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+    db = None
+    try:
+        db = SessionLocal()
+        cfg = load_config()
+        repaired = repair_merged_paper_nodes(
+            db,
+            similarity_threshold=cfg.get("similarity_threshold", 0.6),
+        )
+        if repaired:
+            print(f"[graph_repair] repaired {repaired} merged paper node(s)")
+    except Exception as e:
+        print(f"[graph_repair] startup repair failed: {e}")
     finally:
         try:
             if db is not None:
