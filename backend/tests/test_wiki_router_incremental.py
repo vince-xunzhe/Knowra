@@ -151,6 +151,64 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         mock_rebuild_search.assert_called_once()
         self.assertEqual(mock_freshness.call_count, 2)
 
+    @patch("routers.wiki.wiki_search_service.rebuild_index", return_value={"ok": True})
+    @patch("routers.wiki.wiki_index.refresh_index", return_value=Path("/tmp/wiki/index.md"))
+    @patch(
+        "routers.wiki.reconcile_concept_pages_dir",
+        return_value={"removed_count": 0, "duplicate_removed": 0, "orphan_removed": 0, "removed": []},
+    )
+    @patch(
+        "routers.wiki.reconcile_paper_pages_dir",
+        return_value={"removed_count": 0, "duplicate_removed": 0, "orphan_removed": 0, "removed": []},
+    )
+    @patch("routers.wiki.compile_concept_page", return_value=Path("/tmp/wiki/concepts/0009-concept.md"))
+    @patch("routers.wiki.compile_paper_page", return_value=Path("/tmp/wiki/papers/0003-paper.md"))
+    @patch(
+        "routers.wiki.compute_freshness_summary",
+        side_effect=[
+            {"papers": {"missing": [], "stale": []}, "concepts": {"missing": [], "stale": []}},
+            {"papers": {"missing": [], "stale": []}, "concepts": {"missing": [], "stale": []}},
+        ],
+    )
+    @patch("routers.wiki.task_model_id", return_value="openai/gpt-4o-mini")
+    @patch("routers.wiki.load_config", return_value={"openai_api_key": "k"})
+    def test_recompile_by_ids_targets_only_explicit_ids(
+        self,
+        mock_load_config,
+        mock_task_model_id,
+        mock_freshness,
+        mock_compile_paper,
+        mock_compile_concept,
+        mock_reconcile_papers,
+        mock_reconcile_concepts,
+        mock_refresh_index,
+        mock_rebuild_search,
+    ):
+        paper = SimpleNamespace(id=3, title="Paper C", filename="c.pdf", processed=True, raw_llm_response="{}")
+        concept = SimpleNamespace(id=9, title="Concept C")
+        db = _SeqDB([paper, concept])
+
+        resp = wiki.recompile_by_ids(
+            body=wiki.RecompileByIdsInput(paper_ids=[3], concept_ids=[9]),
+            db=db,
+        )
+
+        self.assertEqual(resp["requested"]["include_missing"], False)
+        self.assertEqual(resp["requested"]["include_stale"], False)
+        self.assertEqual(resp["requested"]["paper_ids"], [3])
+        self.assertEqual(resp["requested"]["concept_ids"], [9])
+        self.assertEqual(resp["compiled"]["papers"], 1)
+        self.assertEqual(resp["compiled"]["concepts"], 1)
+        self.assertEqual(resp["failed"]["count"], 0)
+
+        mock_compile_paper.assert_called_once_with(paper, "k", "openai/gpt-4o-mini")
+        mock_compile_concept.assert_called_once_with(concept, db, "k", "openai/gpt-4o-mini")
+        mock_reconcile_papers.assert_called_once()
+        mock_reconcile_concepts.assert_called_once()
+        mock_refresh_index.assert_called_once()
+        mock_rebuild_search.assert_called_once()
+        self.assertEqual(mock_freshness.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

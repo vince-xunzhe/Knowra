@@ -478,6 +478,11 @@ class RecompileDirtyInput(BaseModel):
     concept_ids: list[int] = Field(default_factory=list)
 
 
+class RecompileByIdsInput(BaseModel):
+    paper_ids: list[int] = Field(default_factory=list)
+    concept_ids: list[int] = Field(default_factory=list)
+
+
 def _normalize_id_list(values: Optional[list[int]]) -> list[int]:
     out: list[int] = []
     for raw in values or []:
@@ -524,6 +529,160 @@ def _dirty_ids_from_freshness(
     return sorted(paper_ids), sorted(concept_ids)
 
 
+def _run_incremental_recompile(
+    *,
+    db: Session,
+    paper_ids: list[int],
+    concept_ids: list[int],
+    include_missing: bool,
+    include_stale: bool,
+    freshness_before: Optional[dict] = None,
+) -> dict:
+    cfg = load_config()
+    model = task_model_id(cfg, "wiki_compile")
+    api_key = cfg.get("openai_api_key") or ""
+    total_targets = len(paper_ids) + len(concept_ids)
+    if not _try_acquire("dirty", total=total_targets, model=model):
+        raise HTTPException(status_code=409, detail="Wiki compile already running")
+
+    if freshness_before is None:
+        freshness_before = compute_freshness_summary(db)
+
+    compiled_papers: list[dict] = []
+    compiled_concepts: list[dict] = []
+    skipped_items: list[dict] = []
+    failed_items: list[dict] = []
+    warnings: list[str] = []
+
+    try:
+        for paper_id in paper_ids:
+            paper = db.query(Paper).filter(Paper.id == paper_id).first()
+            if not paper:
+                skipped_items.append({"kind": "paper", "id": paper_id, "reason": "paper_not_found"})
+                _tick(success=True)
+                continue
+            label = paper.title or paper.filename or f"paper-{paper_id}"
+            _set_current(
+                f"增量论文 · {label}",
+                item_id=paper_id,
+                item_kind="paper",
+            )
+            if not paper.processed or not paper.raw_llm_response:
+                skipped_items.append({"kind": "paper", "id": paper_id, "reason": "paper_not_processed"})
+                _tick(success=True)
+                continue
+            try:
+                path = compile_paper_page(paper, api_key, model)
+            except Exception as e:
+                _tick(success=False, err=e)
+                _record_failure("paper", paper_id, label, e)
+                failed_items.append({
+                    "kind": "paper",
+                    "id": paper_id,
+                    "label": label,
+                    "error": f"{type(e).__name__}: {e}",
+                })
+                continue
+            if path is None:
+                skipped_items.append({"kind": "paper", "id": paper_id, "reason": "nothing_to_compile"})
+                _tick(success=True)
+                continue
+            compiled_papers.append({
+                "paper_id": paper_id,
+                "filename": path.name,
+                "path": str(path),
+            })
+            _tick(success=True)
+
+        for concept_id in concept_ids:
+            node = db.query(KnowledgeNode).filter(KnowledgeNode.id == concept_id).first()
+            if not node:
+                skipped_items.append({"kind": "concept", "id": concept_id, "reason": "concept_not_found"})
+                _tick(success=True)
+                continue
+            label = node.title or f"concept-{concept_id}"
+            _set_current(
+                f"增量概念 · {label}",
+                item_id=concept_id,
+                item_kind="concept",
+            )
+            try:
+                path = compile_concept_page(node, db, api_key, model)
+            except Exception as e:
+                _tick(success=False, err=e)
+                _record_failure("concept", concept_id, label, e)
+                failed_items.append({
+                    "kind": "concept",
+                    "id": concept_id,
+                    "label": label,
+                    "error": f"{type(e).__name__}: {e}",
+                })
+                continue
+            if path is None:
+                skipped_items.append({"kind": "concept", "id": concept_id, "reason": "concept_not_publishable"})
+                _tick(success=True)
+                continue
+            compiled_concepts.append({
+                "concept_id": concept_id,
+                "filename": path.name,
+                "path": str(path),
+            })
+            _tick(success=True)
+
+        cleanup: dict = {}
+        try:
+            cleanup["papers"] = reconcile_paper_pages_dir(db, prune_orphans=True)
+        except Exception as e:
+            warnings.append(f"paper_reconcile_failed: {type(e).__name__}: {e}")
+        try:
+            cleanup["concepts"] = reconcile_concept_pages_dir(db, prune_orphans=True)
+        except Exception as e:
+            warnings.append(f"concept_reconcile_failed: {type(e).__name__}: {e}")
+
+        try:
+            wiki_index.refresh_index()
+        except Exception as ix_err:
+            warnings.append(f"index_refresh_failed: {ix_err}")
+        try:
+            wiki_search_service.rebuild_index()
+        except Exception as ix_err:
+            warnings.append(f"search_reindex_failed: {ix_err}")
+
+        freshness_after = compute_freshness_summary(db)
+        resp = {
+            "requested": {
+                "include_missing": include_missing,
+                "include_stale": include_stale,
+                "paper_ids": paper_ids,
+                "concept_ids": concept_ids,
+            },
+            "compiled": {
+                "papers": len(compiled_papers),
+                "concepts": len(compiled_concepts),
+            },
+            "compiled_items": {
+                "papers": compiled_papers,
+                "concepts": compiled_concepts,
+            },
+            "failed": {
+                "count": len(failed_items),
+                "items": failed_items,
+            },
+            "skipped": {
+                "count": len(skipped_items),
+                "items": skipped_items,
+            },
+            "cleanup": cleanup,
+            "freshness_before": freshness_before,
+            "freshness_after": freshness_after,
+        }
+        if warnings:
+            resp["warnings"] = warnings
+        return resp
+    finally:
+        _finish()
+
+
 @router.post("/recompile/dirty")
 def recompile_dirty_items(
     body: Optional[RecompileDirtyInput] = None,
@@ -534,15 +693,7 @@ def recompile_dirty_items(
     Targets come from `freshness.missing/stale` and optional manual IDs.
     Each item is compiled independently so one failure won't block others.
     """
-    with _state_lock:
-        if compile_state["running"]:
-            raise HTTPException(status_code=409, detail="Wiki compile already running")
-
     req = body or RecompileDirtyInput()
-    cfg = load_config()
-    model = task_model_id(cfg, "wiki_compile")
-    api_key = cfg.get("openai_api_key") or ""
-
     freshness_before = compute_freshness_summary(db)
     dirty_papers, dirty_concepts = _dirty_ids_from_freshness(
         freshness_before,
@@ -556,118 +707,33 @@ def recompile_dirty_items(
             status_code=400,
             detail="No incremental targets (freshness clean and no manual ids provided)",
         )
+    return _run_incremental_recompile(
+        db=db,
+        paper_ids=paper_ids,
+        concept_ids=concept_ids,
+        include_missing=req.include_missing,
+        include_stale=req.include_stale,
+        freshness_before=freshness_before,
+    )
 
-    compiled_papers: list[dict] = []
-    compiled_concepts: list[dict] = []
-    skipped_items: list[dict] = []
-    failed_items: list[dict] = []
-    warnings: list[str] = []
 
-    for paper_id in paper_ids:
-        paper = db.query(Paper).filter(Paper.id == paper_id).first()
-        if not paper:
-            skipped_items.append({"kind": "paper", "id": paper_id, "reason": "paper_not_found"})
-            continue
-        label = paper.title or paper.filename or f"paper-{paper_id}"
-        if not paper.processed or not paper.raw_llm_response:
-            skipped_items.append({"kind": "paper", "id": paper_id, "reason": "paper_not_processed"})
-            continue
-        try:
-            path = compile_paper_page(paper, api_key, model)
-        except Exception as e:
-            _record_failure("paper", paper_id, label, e)
-            failed_items.append({
-                "kind": "paper",
-                "id": paper_id,
-                "label": label,
-                "error": f"{type(e).__name__}: {e}",
-            })
-            continue
-        if path is None:
-            skipped_items.append({"kind": "paper", "id": paper_id, "reason": "nothing_to_compile"})
-            continue
-        compiled_papers.append({
-            "paper_id": paper_id,
-            "filename": path.name,
-            "path": str(path),
-        })
-
-    for concept_id in concept_ids:
-        node = db.query(KnowledgeNode).filter(KnowledgeNode.id == concept_id).first()
-        if not node:
-            skipped_items.append({"kind": "concept", "id": concept_id, "reason": "concept_not_found"})
-            continue
-        label = node.title or f"concept-{concept_id}"
-        try:
-            path = compile_concept_page(node, db, api_key, model)
-        except Exception as e:
-            _record_failure("concept", concept_id, label, e)
-            failed_items.append({
-                "kind": "concept",
-                "id": concept_id,
-                "label": label,
-                "error": f"{type(e).__name__}: {e}",
-            })
-            continue
-        if path is None:
-            skipped_items.append({"kind": "concept", "id": concept_id, "reason": "concept_not_publishable"})
-            continue
-        compiled_concepts.append({
-            "concept_id": concept_id,
-            "filename": path.name,
-            "path": str(path),
-        })
-
-    cleanup: dict = {}
-    try:
-        cleanup["papers"] = reconcile_paper_pages_dir(db, prune_orphans=True)
-    except Exception as e:
-        warnings.append(f"paper_reconcile_failed: {type(e).__name__}: {e}")
-    try:
-        cleanup["concepts"] = reconcile_concept_pages_dir(db, prune_orphans=True)
-    except Exception as e:
-        warnings.append(f"concept_reconcile_failed: {type(e).__name__}: {e}")
-
-    try:
-        wiki_index.refresh_index()
-    except Exception as ix_err:
-        warnings.append(f"index_refresh_failed: {ix_err}")
-    try:
-        wiki_search_service.rebuild_index()
-    except Exception as ix_err:
-        warnings.append(f"search_reindex_failed: {ix_err}")
-
-    freshness_after = compute_freshness_summary(db)
-    resp = {
-        "requested": {
-            "include_missing": req.include_missing,
-            "include_stale": req.include_stale,
-            "paper_ids": paper_ids,
-            "concept_ids": concept_ids,
-        },
-        "compiled": {
-            "papers": len(compiled_papers),
-            "concepts": len(compiled_concepts),
-        },
-        "compiled_items": {
-            "papers": compiled_papers,
-            "concepts": compiled_concepts,
-        },
-        "failed": {
-            "count": len(failed_items),
-            "items": failed_items,
-        },
-        "skipped": {
-            "count": len(skipped_items),
-            "items": skipped_items,
-        },
-        "cleanup": cleanup,
-        "freshness_before": freshness_before,
-        "freshness_after": freshness_after,
-    }
-    if warnings:
-        resp["warnings"] = warnings
-    return resp
+@router.post("/recompile/by_ids")
+def recompile_by_ids(
+    body: RecompileByIdsInput,
+    db: Session = Depends(get_db),
+):
+    """Incremental compile by explicit paper/concept ids only."""
+    paper_ids = _normalize_id_list(body.paper_ids)
+    concept_ids = _normalize_id_list(body.concept_ids)
+    if not paper_ids and not concept_ids:
+        raise HTTPException(status_code=400, detail="At least one paper_id or concept_id is required")
+    return _run_incremental_recompile(
+        db=db,
+        paper_ids=paper_ids,
+        concept_ids=concept_ids,
+        include_missing=False,
+        include_stale=False,
+    )
 
 
 @router.post("/retry_failed_item")

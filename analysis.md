@@ -5,25 +5,28 @@
 - `backend/tests/test_wiki_router_incremental.py`
 
 ## What changed
-- Added `POST /api/wiki/recompile/dirty` incremental entrypoint.
-- `recompile/dirty` accepts freshness-based targeting (`include_missing` / `include_stale`) plus explicit `paper_ids` / `concept_ids`.
-- Incremental compile loop is per-item tolerant: one paper/concept failure is recorded to `failed.items` and does not block other outputs.
-- Incremental run returns `freshness_before` and `freshness_after`, then refreshes `index.md` and rebuilds wiki search index in the same task.
-- Added router tests covering:
-  - successful dirty compile path
-  - partial failure + continue behavior
+- Added explicit ID-based incremental entrypoint: `POST /api/wiki/recompile/by_ids`.
+- Refactored incremental compile into shared `_run_incremental_recompile(...)` used by both `recompile/dirty` and `recompile/by_ids`.
+- Integrated dirty incremental runs with `compile_state` lifecycle (`_try_acquire` / `_set_current` / `_tick` / `_finish`) to avoid parallel compile races and to keep failure state consistent.
+- Kept per-item fault tolerance: any paper/concept compile error is recorded and does not block other targets.
+- Preserved single-task freshness guarantee: after incremental compile, the flow still runs `wiki_index.refresh_index()` and `wiki_search.rebuild_index()`.
+- Extended router tests with `test_recompile_by_ids_targets_only_explicit_ids` to validate explicit-ID mode and post-compile refresh hooks.
 
 ## Commands run
-- `cd backend && python3 -m compileall . && python3 -m pytest -q || true`
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m compileall .`
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q`
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q tests/test_wiki_router_incremental.py tests/test_wiki_index_incremental.py`
+- `cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true`
 
 ## Test / eval result
-- Issue eval command: pass (`69 passed, 1 warning`)
+- Workspace full tests: pass (`70 passed, 1 warning`)
+- Issue-specified eval command path: pass (`61 passed, 1 warning`)
 
 ## Metric delta (qualitative)
-- Before: incremental jobs relied on coarse full flows; freshness-driven targeted recompilation was missing.
-- After: one request can recompile only dirty pages, update `index.md`, and rebuild search index without blocking on all pages.
-- Expected impact: lower update latency from single paper/concept change to Ask-visible retrieval.
+- Before: dirty incremental runs did not occupy `compile_state`, so concurrent compile requests could overlap and explicit-ID batch entrypoint was missing.
+- After: incremental runs are serialized with compile-state locking, explicit `paper_ids`/`concept_ids` batch compile is supported, and index/search refresh remain in the same request.
+- Expected impact: lower and more predictable latency for single/batch page updates, with Ask-visible freshness in one task.
 
 ## Risks / follow-ups
-- The endpoint currently checks `compile_state.running` but does not expose per-item progress in `/status`; follow-up can add explicit state transitions for dirty runs.
 - `failed_items` remains in-memory only and clears on process restart.
+- `recompile/by_ids` currently returns skipped/not-found items in response but does not persist per-item history beyond runtime state.

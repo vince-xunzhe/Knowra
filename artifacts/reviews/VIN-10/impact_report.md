@@ -1,31 +1,31 @@
 # VIN-10 Impact Report
 
 ## User impact
-- 单篇论文/概念页可独立重编译；也可按脏标记批量增量编译，不再依赖全量任务。
-- 编译完成后同一任务内自动刷新 `data/wiki/index.md` 并重建搜索索引，Ask 更快看到最新标题与摘要。
+- 支持按显式 `paper_ids` / `concept_ids` 做增量重编译，不必触发全量任务。
+- 同一任务内自动刷新 `data/wiki/index.md` 并重建搜索索引，Ask 可更快看到最新标题与摘要。
 
 ## Implementation summary
 - 增量入口：
   - `POST /api/wiki/papers/{paper_id}/recompile`
   - `POST /api/wiki/concepts/{concept_id}/recompile`
-  - `POST /api/wiki/recompile/dirty`（按 freshness missing/stale + 手动 ID）
+  - `POST /api/wiki/recompile/dirty`
+  - `POST /api/wiki/recompile/by_ids`（新增）
 - 失败记录与重试：
   - `compile_state.failed_items`
   - `POST /api/wiki/retry_failed_item` (`kind=paper|concept`, `item_id`)
-- 失败不中断：
-  - `recompile/dirty` 中单项失败进入 `failed.items`，后续项继续执行
-- 索引增量刷新：
-  - `wiki_index.refresh_index()` 生成 deterministic `index.md`
-  - frontmatter 增加 `source_digest`，`index_summary` 可判定 stale
-- Ask freshness保障：
-  - 增量编译路径统一触发 `wiki_index.refresh_index()` + `wiki_search.rebuild_index()`
+- 并发与状态：
+  - dirty/by_ids 两条增量路径统一走 `_run_incremental_recompile`，接入 `_try_acquire` / `_tick` / `_finish` 生命周期，避免并发重编译冲突
+- Ask freshness：
+  - 增量编译结束统一调用 `wiki_index.refresh_index()` 与 `wiki_search.rebuild_index()`
 
 ## Validation
-- `cd backend && python3 -m compileall . && python3 -m pytest -q || true` ✅ (`69 passed, 1 warning`)
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m compileall .` ✅
+- `cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q` ✅ (`70 passed, 1 warning`)
+- `cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true` ✅ (`61 passed, 1 warning`)
 
 ## Risks
-- `failed_items` 仅内存持久化，服务重启后清空。
-- 增量 index 文案为模板化输出，质量可能低于 full LLM rebuild。
+- `failed_items` 仅内存持久化，服务重启后会清空。
+- index 增量渲染仍是 deterministic 模板，不追求 LLM full rebuild 的文案质量。
 
 ## Acceptance checklist
 - [x] 提供按 `paper_id` / `concept_id` 触发的增量编译入口。
