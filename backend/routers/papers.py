@@ -471,6 +471,12 @@ def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
             p.id, db, cfg["openai_api_key"], compile_model
         )
         reconcile_concept_pages_dir(db, prune_orphans=True)
+        try:
+            from services import wiki_index
+
+            wiki_index.refresh_index()
+        except Exception as idx_err:
+            print(f"[wiki_index] refresh after paper {p.id} failed: {idx_err}")
         # Refresh the FTS index so the new wiki page is searchable immediately.
         try:
             from services.wiki_search import rebuild_index

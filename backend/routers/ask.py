@@ -506,6 +506,10 @@ def create_concept_from_synthesis(
     # immediately (Ask agent could find it on the next query).
     reconcile_concept_pages_dir(db, prune_orphans=True)
     try:
+        wiki_index.refresh_index()
+    except Exception:
+        pass
+    try:
         wiki_search_service.rebuild_index()
     except Exception:
         pass

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import KnowledgeNode
 from services import promotion_service
+from services import wiki_index
 from services.graph_service import (
     PROMOTION_PENDING,
     PROMOTION_PROMOTED,
@@ -40,6 +41,10 @@ def _reconcile_curated_wiki(db: Session) -> None:
     refresh the wiki search index. Mirrors the helper in routers.graph so
     every status mutation keeps disk + index in sync."""
     reconcile_concept_pages_dir(db, prune_orphans=True)
+    try:
+        wiki_index.refresh_index()
+    except Exception:
+        pass
     try:
         wiki_search_service.rebuild_index()
     except Exception:

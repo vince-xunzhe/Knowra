@@ -1,0 +1,61 @@
+{
+  "issue": "VIN-10",
+  "title": "[knowledge-tree-v2] Wiki 编译与索引流水线增量化",
+  "original_request": "按论文/概念页做增量编译、失败重试与脏标记刷新，减少全量重编译频率并保证 Ask 可见最新内容。",
+  "user_impact": {
+    "summary": "支持按显式 paper/concept ID 增量重编译，并在一次任务内完成 index.md 刷新与搜索索引重建，Ask 能更快命中新内容。",
+    "who_benefits": [
+      "在图谱中单点修复/更新 wiki 页面的用户",
+      "依赖 Ask 立即检索最新标题与摘要的用户"
+    ]
+  },
+  "implementation_summary": {
+    "highlights": [
+      "保留单项重编译入口：/api/wiki/papers/{paper_id}/recompile 与 /api/wiki/concepts/{concept_id}/recompile。",
+      "新增按脏标记驱动的增量入口：/api/wiki/recompile/dirty（include_missing/include_stale + manual IDs）。",
+      "新增按显式 ID 批量增量入口：/api/wiki/recompile/by_ids（只处理指定 paper_ids/concept_ids）。",
+      "将 dirty/by_ids 增量任务接入 compile_state 生命周期，避免并发重编译冲突并暴露失败项。",
+      "增量编译失败写入 failed_items，且单项失败不会阻断其他页面产出。",
+      "每次增量任务结束后统一触发 wiki_index.refresh_index() 与 wiki_search.rebuild_index()。"
+    ],
+    "key_files": [
+      "backend/routers/wiki.py",
+      "backend/tests/test_wiki_router_incremental.py"
+    ]
+  },
+  "validation": {
+    "commands": [
+      "cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m compileall .",
+      "cd /Users/vince/Documents/knowledge-tree-v2-workspaces/VIN-10/backend && python3 -m pytest -q",
+      "cd /Users/vince/Documents/knowledge-tree-v2/backend && python3 -m compileall . && python3 -m pytest -q || true"
+    ],
+    "result": "pass",
+    "details": "workspace: 72 passed, 1 warning; issue eval path: 61 passed, 1 warning (SQLAlchemy deprecation warning)."
+  },
+  "acceptance_checklist": [
+    {
+      "item": "提供按 paper_id 或 concept_id 触发的增量编译入口",
+      "status": "done",
+      "evidence": "routers/wiki.py 提供 /papers/{paper_id}/recompile、/concepts/{concept_id}/recompile、/recompile/by_ids。"
+    },
+    {
+      "item": "编译失败记录错误并支持单项重试，不影响其他页面产出",
+      "status": "done",
+      "evidence": "compile_state.failed_items + /retry_failed_item；dirty/by_ids 增量循环单项失败继续执行。"
+    },
+    {
+      "item": "index 重建后 Ask 检索能命中新页面标题与摘要",
+      "status": "done",
+      "evidence": "增量编译后统一调用 wiki_index.refresh_index() 与 wiki_search.rebuild_index()；单测断言两者被触发。"
+    }
+  ],
+  "risks": [
+    "failed_items 为内存态，服务重启后不会保留历史失败记录。",
+    "index 仍采用本地 deterministic 渲染，文案质量低于 full LLM rebuild。"
+  ],
+  "visual_evidence": {
+    "applicable": false,
+    "reason": "本任务为后端流水线与索引逻辑改造，无直接 UI 视觉变更。"
+  },
+  "review_recommendation": "ready_for_human_review"
+}
