@@ -100,6 +100,10 @@ def load_config() -> dict:
         "wiki_compile_model": os.environ.get("WIKI_COMPILE_MODEL", "gpt-4o-mini"),
         "similarity_threshold": 0.6,
         "use_first_page_image": True,   # kept for backwards-compat; ignored by the Assistants pipeline
+        # Extraction chain resilience knobs.
+        "paper_process_max_retries": 3,
+        "paper_process_backoff_base_seconds": 1.5,
+        "paper_process_backoff_max_seconds": 20.0,
         "extraction_prompt": DEFAULT_PAPER_PROMPT,
         # User-editable system prompt for the concept-promotion LLM stage.
         # Default is the built-in template so first-time users get the

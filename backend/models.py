@@ -38,6 +38,13 @@ class Paper(Base):
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)
+    # Pipeline lifecycle:
+    # scanning -> extracting -> parsing -> graphing -> done/failed
+    processing_status = Column(String, default="scanning")
+    retry_count = Column(Integer, default=0)
+    last_error_stage = Column(String, nullable=True)
+    last_error_reason = Column(Text, nullable=True)
+    last_error_recoverable = Column(Boolean, nullable=True)
     # OpenAI Files API — cached file_id so we don't re-upload the same PDF
     openai_file_id = Column(String, nullable=True)
     # Cached vector store for Responses API + file_search.
