@@ -8,12 +8,14 @@ import {
   Trash2,
   Copy,
   AlertTriangle,
+  Check,
 } from 'lucide-react'
 import {
   runWikiLint,
   getWikiLintStatus,
   recompileConcept,
   updatePromotionStatus,
+  acceptLintStub,
   type LintResult,
   type LintReportStatus,
 } from '../api/client'
@@ -92,6 +94,44 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
       }
     },
     [onMutated],
+  )
+
+  const handleRejectStub = useCallback(
+    async (conceptId: number) => {
+      const key = `stub:${conceptId}`
+      setBusyId(key)
+      try {
+        await updatePromotionStatus(
+          conceptId,
+          'rejected',
+          'lint: thin single-source concept, demoted',
+        )
+        markDone(key)
+        onMutated?.()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [onMutated],
+  )
+
+  const handleAcceptStub = useCallback(
+    async (conceptId: number) => {
+      const key = `stub:${conceptId}`
+      setBusyId(key)
+      try {
+        await acceptLintStub(conceptId)
+        // No graph mutation — just stops future lint runs flagging it.
+        markDone(key)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [],
   )
 
   const handleRejectDup = useCallback(
@@ -280,18 +320,42 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
                         <p className="mt-1 text-[11px] text-slate-400">{v.reason}</p>
                       )}
                       {!isDone ? (
-                        <div className="mt-1.5">
-                          <ApplyBtn
-                            busy={busyId === key}
-                            onClick={() => handleRecompile(s.concept_id)}
-                            icon={<Sparkles size={10} />}
-                          >
-                            重编译此概念页
-                          </ApplyBtn>
+                        <div className="mt-1.5 flex flex-wrap gap-2">
+                          {s.source_paper_count >= 2 ? (
+                            // Multi-source: recompile genuinely re-synthesizes
+                            // across the extra papers.
+                            <ApplyBtn
+                              busy={busyId === key}
+                              onClick={() => handleRecompile(s.concept_id)}
+                              icon={<Sparkles size={10} />}
+                            >
+                              重编译此概念页
+                            </ApplyBtn>
+                          ) : (
+                            // Single-source: recompiling is a near no-op
+                            // (same lone snippet). Offer the honest actions
+                            // instead.
+                            <>
+                              <ApplyBtn
+                                busy={busyId === key}
+                                onClick={() => handleRejectStub(s.concept_id)}
+                                icon={<Trash2 size={10} />}
+                              >
+                                淘汰此概念
+                              </ApplyBtn>
+                              <ApplyBtn
+                                busy={busyId === key}
+                                onClick={() => handleAcceptStub(s.concept_id)}
+                                icon={<Check size={10} />}
+                              >
+                                标记可接受
+                              </ApplyBtn>
+                            </>
+                          )}
                         </div>
                       ) : (
                         <p className="mt-1.5 text-[11px] text-emerald-300">
-                          ✓ 已重编译
+                          ✓ 已处理
                         </p>
                       )}
                     </li>

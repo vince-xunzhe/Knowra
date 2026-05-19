@@ -316,6 +316,20 @@ def wiki_lint_report():
     return {"text": text, "status": wiki_lint_service.lint_report_status()}
 
 
+class LintAcceptRequest(BaseModel):
+    concept_id: int
+
+
+@router.post("/lint/accept")
+def wiki_lint_accept(body: LintAcceptRequest, db: Session = Depends(get_db)):
+    """Mark a thin single-source concept as acceptable-as-is so future
+    health-checks skip it (tags the node, no LLM)."""
+    result = wiki_lint_service.accept_stub(db, body.concept_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("error", "not found"))
+    return result
+
+
 # --- background drivers -----------------------------------------------------
 
 def _drive_concept_recompile():

@@ -696,6 +696,14 @@ export const getWikiLintReport = () =>
     .get<{ text: string; status: LintReportStatus }>('/wiki/lint/report')
     .then(r => r.data)
 
+export const acceptLintStub = (conceptId: number) =>
+  api
+    .post<{ ok: boolean; concept_id: number; tag: string }>(
+      '/wiki/lint/accept',
+      { concept_id: conceptId },
+    )
+    .then(r => r.data)
+
 // --- Concept promotion -----------------------------------------------------
 //
 // Concept-eligible nodes (technique / dataset / problem_area / concept) move

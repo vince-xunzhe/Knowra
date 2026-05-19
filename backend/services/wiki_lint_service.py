@@ -56,6 +56,11 @@ CROSSCUT_MIN_CLUSTER = 3    # papers sharing a tag with no spanning concept
 CROSSCUT_TOPK = 12
 FOLLOWUP_COUNT = 5
 
+# Node tag the user applies via "标记可接受". Future lint runs skip any
+# concept carrying it, so a deliberately-small niche page stops crying
+# wolf without us having to change the rule thresholds globally.
+LINT_ACCEPTED_TAG = "lint:accepted"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -76,6 +81,9 @@ def _scan_stubs(concept_nodes: list[KnowledgeNode]) -> list[dict]:
     fine-as-is) but the rule scopes which pages even get looked at."""
     out: list[dict] = []
     for node in concept_nodes:
+        # User explicitly accepted this thin page as fine-as-is.
+        if LINT_ACCEPTED_TAG in (node.tags or []):
+            continue
         page = None
         # Concept .md filename isn't 1:1 derivable cheaply; scan by id.
         # read_concept_page needs a filename, so resolve via the slug the
@@ -471,3 +479,21 @@ def read_lint_report() -> Optional[str]:
         return LINT_REPORT_PATH.read_text(encoding="utf-8")
     except OSError:
         return None
+
+
+def accept_stub(db: Session, concept_id: int) -> dict:
+    """Mark a thin concept as acceptable-as-is. Appends LINT_ACCEPTED_TAG
+    to the node's tags so future lint runs skip it. No LLM, idempotent."""
+    node = (
+        db.query(KnowledgeNode)
+        .filter(KnowledgeNode.id == concept_id)
+        .first()
+    )
+    if node is None:
+        return {"ok": False, "error": f"concept {concept_id} not found"}
+    tags = list(node.tags or [])
+    if LINT_ACCEPTED_TAG not in tags:
+        tags.append(LINT_ACCEPTED_TAG)
+        node.tags = tags
+        db.commit()
+    return {"ok": True, "concept_id": concept_id, "tag": LINT_ACCEPTED_TAG}
