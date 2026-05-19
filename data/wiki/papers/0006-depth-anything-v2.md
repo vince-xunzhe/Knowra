@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Depth Anything V2"
+aliases:
+  - "paper:6"
+  - "Depth Anything V2"
+  - "depth-anything-v2"
 paper_id: 6
 slug: "depth-anything-v2"
 authors:

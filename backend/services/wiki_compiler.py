@@ -152,6 +152,31 @@ def _read_frontmatter_from_path(path: Path) -> Optional[dict]:
     return meta
 
 
+def _dedup_aliases(values: List[str]) -> List[str]:
+    """Order-preserving de-dup, dropping empties. Obsidian aliases are
+    case-sensitive but duplicates just clutter the frontmatter."""
+    seen: set[str] = set()
+    out: List[str] = []
+    for v in values:
+        s = (v or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        out.append(s)
+    return out
+
+
+def _paper_aliases(paper_id: int, title: str) -> List[str]:
+    """Obsidian alias set for a paper page. `paper:{id}` makes the
+    body markup `[[paper:9]]` resolve to this note; the title makes
+    `[[N3D-VLM: …]]` resolve too."""
+    return _dedup_aliases([f"paper:{paper_id}", title])
+
+
+def _concept_aliases(concept_id: int, slug: str, title: str) -> List[str]:
+    return _dedup_aliases([f"concept:{concept_id}", slug, title])
+
+
 def _pick_preferred_page(entries: List[dict], expected_name: Optional[str] = None) -> Optional[dict]:
     if not entries:
         return None
@@ -256,16 +281,24 @@ def _call_llm(
     max_tokens: int = 1800,
     reasoning_effort: Optional[str] = None,
     task_id: Optional[str] = None,
+    timeout_s: Optional[int] = None,
 ) -> str:
     """Dispatch plain text generation through the shared model gateway.
 
     `model` is a registry id such as `openai/gpt-4o-mini` or a legacy raw
     OpenAI model name such as `gpt-4o-mini`. The first `_client` parameter is
     kept for backwards compatibility with older call sites and tests.
+
+    `timeout_s` overrides the gateway default — batch/offline tasks (e.g.
+    wiki lint on a slow local Codex CLI) need a longer ceiling than the
+    interactive 180s.
     """
     cfg = load_config()
     if task_id and not reasoning_effort:
         reasoning_effort = task_reasoning_effort(cfg, task_id)
+    extra: dict = {}
+    if timeout_s is not None:
+        extra["timeout_s"] = timeout_s
     return call_text_model(
         cfg,
         model_id=model,
@@ -274,6 +307,7 @@ def _call_llm(
         max_tokens=max_tokens,
         temperature=0.3,
         reasoning_effort=reasoning_effort,
+        **extra,
     )
 
 
@@ -495,6 +529,7 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
     meta = {
         "kind": "paper",
         "title": title,
+        "aliases": _paper_aliases(paper.id, title),
         "paper_id": paper.id,
         "slug": slug,
         "authors": list(paper.authors or []),
@@ -612,6 +647,7 @@ def compile_concept_page(
     meta = {
         "kind": "concept",
         "title": node.title,
+        "aliases": _concept_aliases(node.id, slug, node.title),
         "concept_id": node.id,
         "slug": slug,
         "node_type": node.node_type,
@@ -818,6 +854,96 @@ def read_concept_page(filename: str) -> Optional[dict]:
 
 def read_paper_page(filename: str) -> Optional[dict]:
     return _read_page(WIKI_PAPERS_DIR, "wiki/papers", filename)
+
+
+# --- Obsidian alias backfill -------------------------------------------------
+
+
+def _index_aliases() -> List[str]:
+    return _dedup_aliases(["index", "知识库索引", "Knowra Index"])
+
+
+def _aliases_for_existing(meta: dict) -> Optional[List[str]]:
+    """Compute the Obsidian-resolvable alias set for an already-compiled
+    page given its parsed frontmatter. Returns None if the page kind is
+    unrecognized (leave it untouched)."""
+    kind = meta.get("kind")
+    title = (meta.get("title") or "").strip()
+    slug = (meta.get("slug") or "").strip()
+    if kind == "paper":
+        pid = meta.get("paper_id")
+        base = _paper_aliases(int(pid), title) if isinstance(pid, int) else [title]
+        return _dedup_aliases(base + ([slug] if slug else []))
+    if kind == "concept":
+        cid = meta.get("concept_id")
+        base = (
+            _concept_aliases(int(cid), slug, title)
+            if isinstance(cid, int)
+            else _dedup_aliases([slug, title])
+        )
+        return base
+    if kind == "index":
+        return _index_aliases()
+    return None
+
+
+def backfill_obsidian_aliases() -> dict:
+    """One-shot, no-LLM pass: ensure every compiled wiki .md (papers,
+    concepts, index) carries an `aliases` frontmatter list so the custom
+    `[[paper:N]]` / `[[concept:N]]` markup resolves to real notes in
+    Obsidian. Existing aliases are merged, not replaced. Idempotent."""
+    patched = 0
+    skipped = 0
+    scanned = 0
+
+    targets: List[Path] = []
+    if WIKI_PAPERS_DIR.exists():
+        targets += sorted(WIKI_PAPERS_DIR.glob("*.md"))
+    if WIKI_CONCEPTS_DIR.exists():
+        targets += sorted(WIKI_CONCEPTS_DIR.glob("*.md"))
+    index_path = WIKI_DIR / "index.md"
+    if index_path.is_file():
+        targets.append(index_path)
+
+    for path in targets:
+        scanned += 1
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            skipped += 1
+            continue
+        meta, body = _parse_frontmatter(text)
+        if not meta:
+            skipped += 1
+            continue
+        wanted = _aliases_for_existing(meta)
+        if wanted is None:
+            skipped += 1
+            continue
+        existing = meta.get("aliases")
+        existing_list = existing if isinstance(existing, list) else []
+        merged = _dedup_aliases([*existing_list, *wanted])
+        if merged == existing_list:
+            # Already up to date — no rewrite, keeps mtime stable so the
+            # freshness banner doesn't light up spuriously.
+            continue
+        # Insert `aliases` right after `title` for readability; rebuild
+        # the dict preserving key order otherwise.
+        new_meta: dict = {}
+        inserted = False
+        for k, v in meta.items():
+            if k == "aliases":
+                continue  # we re-emit it in the canonical slot
+            new_meta[k] = v
+            if k == "title" and not inserted:
+                new_meta["aliases"] = merged
+                inserted = True
+        if not inserted:
+            new_meta["aliases"] = merged
+        path.write_text(_render_frontmatter(new_meta) + body, encoding="utf-8")
+        patched += 1
+
+    return {"scanned": scanned, "patched": patched, "skipped": skipped}
 
 
 # --- freshness ---------------------------------------------------------------

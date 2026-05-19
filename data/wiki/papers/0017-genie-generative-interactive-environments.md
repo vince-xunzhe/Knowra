@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Genie: Generative Interactive Environments"
+aliases:
+  - "paper:17"
+  - "Genie: Generative Interactive Environments"
+  - "genie-generative-interactive-environments"
 paper_id: 17
 slug: "genie-generative-interactive-environments"
 authors:

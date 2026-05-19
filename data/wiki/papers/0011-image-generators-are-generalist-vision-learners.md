@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Image Generators are Generalist Vision Learners"
+aliases:
+  - "paper:11"
+  - "Image Generators are Generalist Vision Learners"
+  - "image-generators-are-generalist-vision-learners"
 paper_id: 11
 slug: "image-generators-are-generalist-vision-learners"
 authors:

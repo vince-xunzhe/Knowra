@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Continuous 3D Perception Model with Persistent State"
+aliases:
+  - "paper:4"
+  - "Continuous 3D Perception Model with Persistent State"
+  - "continuous-3d-perception-model-with-persistent-state"
 paper_id: 4
 slug: "continuous-3d-perception-model-with-persistent-state"
 authors:

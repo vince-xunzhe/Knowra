@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "N3D-VLM: Native 3D Grounding Enables Accurate Spatial Reasoning in Vision-Language Models"
+aliases:
+  - "paper:1"
+  - "N3D-VLM: Native 3D Grounding Enables Accurate Spatial Reasoning in Vision-Language Models"
+  - "n3d-vlm-native-3d-grounding-enables-accurate-spatial-reasoning-in-vision-language-models"
 paper_id: 1
 slug: "n3d-vlm-native-3d-grounding-enables-accurate-spatial-reasoning-in-vision-language-models"
 authors:

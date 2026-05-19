@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Depth Anything 3: Recovering the Visual Space from Any Views"
+aliases:
+  - "paper:5"
+  - "Depth Anything 3: Recovering the Visual Space from Any Views"
+  - "depth-anything-3-recovering-the-visual-space-from-any-views"
 paper_id: 5
 slug: "depth-anything-3-recovering-the-visual-space-from-any-views"
 authors:

@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "SpaceDrive: Infusing Spatial Awareness into VLM-based Autonomous Driving"
+aliases:
+  - "paper:2"
+  - "SpaceDrive: Infusing Spatial Awareness into VLM-based Autonomous Driving"
+  - "spacedrive-infusing-spatial-awareness-into-vlm-based-autonomous-driving"
 paper_id: 2
 slug: "spacedrive-infusing-spatial-awareness-into-vlm-based-autonomous-driving"
 authors:

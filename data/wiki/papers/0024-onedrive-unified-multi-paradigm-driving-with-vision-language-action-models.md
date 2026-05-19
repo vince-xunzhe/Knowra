@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "OneDrive: Unified Multi-Paradigm Driving with Vision-Language-Action Models"
+aliases:
+  - "paper:24"
+  - "OneDrive: Unified Multi-Paradigm Driving with Vision-Language-Action Models"
+  - "onedrive-unified-multi-paradigm-driving-with-vision-language-action-models"
 paper_id: 24
 slug: "onedrive-unified-multi-paradigm-driving-with-vision-language-action-models"
 authors:

@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "GaussianAvatars: Photorealistic Head Avatars with Rigged 3D Gaussians"
+aliases:
+  - "paper:19"
+  - "GaussianAvatars: Photorealistic Head Avatars with Rigged 3D Gaussians"
+  - "gaussianavatars-photorealistic-head-avatars-with-rigged-3d-gaussians"
 paper_id: 19
 slug: "gaussianavatars-photorealistic-head-avatars-with-rigged-3d-gaussians"
 authors:

@@ -23,7 +23,9 @@ from models import KnowledgeNode, Paper
 from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
 from services import wiki_index
+from services import wiki_lint_service
 from services.wiki_compiler import (
+    backfill_obsidian_aliases,
     count_publishable_concepts,
     compile_all_concept_pages,
     compile_all_paper_pages,
@@ -269,6 +271,49 @@ def wiki_reindex():
     """Rebuild the FTS index from disk. Auto-runs after each compile, but
     exposed manually for diagnostics."""
     return wiki_search_service.rebuild_index()
+
+
+@router.post("/backfill_aliases")
+def wiki_backfill_aliases():
+    """One-shot, no-LLM pass that adds Obsidian-resolvable `aliases`
+    frontmatter to every already-compiled wiki .md, so the custom
+    `[[paper:N]]` / `[[concept:N]]` markup links resolve to real notes
+    in an Obsidian vault. Idempotent — safe to call repeatedly."""
+    return backfill_obsidian_aliases()
+
+
+# --- P1: content lint / health-check ----------------------------------------
+
+
+class LintRunRequest(BaseModel):
+    use_llm: bool = True
+
+
+@router.post("/lint/run")
+def wiki_lint_run(
+    body: LintRunRequest = LintRunRequest(),
+    db: Session = Depends(get_db),
+):
+    """Run the content health-check: stub detection, merge candidates,
+    missing cross-cutting concepts, and (LLM) follow-up questions.
+    Writes data/wiki/lint-report.md and returns the structured payload."""
+    try:
+        return wiki_lint_service.run_lint(db, use_llm=body.use_llm)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/lint/status")
+def wiki_lint_status():
+    return wiki_lint_service.lint_report_status()
+
+
+@router.get("/lint/report")
+def wiki_lint_report():
+    text = wiki_lint_service.read_lint_report()
+    if text is None:
+        raise HTTPException(status_code=404, detail="lint-report.md 还没生成")
+    return {"text": text, "status": wiki_lint_service.lint_report_status()}
 
 
 # --- background drivers -----------------------------------------------------

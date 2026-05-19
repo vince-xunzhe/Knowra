@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "VLM-3R: Vision-Language Models Augmented with Instruction-Aligned 3D Reconstruction"
+aliases:
+  - "paper:3"
+  - "VLM-3R: Vision-Language Models Augmented with Instruction-Aligned 3D Reconstruction"
+  - "vlm-3r-vision-language-models-augmented-with-instruction-aligned-3d-reconstruction"
 paper_id: 3
 slug: "vlm-3r-vision-language-models-augmented-with-instruction-aligned-3d-reconstruction"
 authors:

@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "3D Gaussian Blendshapes for Head Avatar Animation"
+aliases:
+  - "paper:22"
+  - "3D Gaussian Blendshapes for Head Avatar Animation"
+  - "3d-gaussian-blendshapes-for-head-avatar-animation"
 paper_id: 22
 slug: "3d-gaussian-blendshapes-for-head-avatar-animation"
 authors:

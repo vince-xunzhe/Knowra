@@ -592,6 +592,110 @@ export const createSynthesisConcept = (payload: SynthesisConceptInput) =>
     )
     .then(r => r.data)
 
+export type WikiOutputFormat = 'marp' | 'report'
+
+export interface RenderOutputResult {
+  kind: string
+  filename: string
+  path: string
+  rel_path: string
+}
+
+export const renderWikiOutput = (payload: {
+  answer: string
+  format: WikiOutputFormat
+  title: string
+  source_question?: string
+}) =>
+  api
+    .post<RenderOutputResult>('/wiki/outputs/render', payload, {
+      timeout: 300000,
+    })
+    .then(r => r.data)
+
+// --- P1: wiki content lint / health-check ------------------------------
+
+export interface LintStub {
+  concept_id: number
+  title: string
+  node_type: string
+  source_paper_count: number
+  body_word_len: number
+  filename: string | null
+  reasons: string[]
+  excerpt: string
+}
+
+export interface LintMerge {
+  a_id: number
+  a_title: string
+  b_id: number
+  b_title: string
+  cosine: number
+  paper_overlap: number
+  paper_jaccard: number
+  score: number
+}
+
+export interface LintCrosscut {
+  paper_ids: number[]
+  paper_titles: string[]
+  size: number
+}
+
+export interface LintJudgment {
+  used_model: boolean
+  model?: string | null
+  error?: string
+  stubs?: { concept_id: number; verdict: string; reason: string }[]
+  merges?: {
+    a_id: number
+    b_id: number
+    should_merge: boolean
+    keep: number | null
+    reason: string
+  }[]
+  new_concepts?: { title: string; paper_ids: number[]; rationale: string }[]
+  followups?: string[]
+}
+
+export interface LintResult {
+  generated_at: string
+  counts: {
+    concepts_scanned: number
+    stubs: number
+    merges: number
+    missing_crosscut: number
+    followups: number
+  }
+  stubs: LintStub[]
+  merges: LintMerge[]
+  missing_crosscut: LintCrosscut[]
+  judgment: LintJudgment
+  report_path: string
+  report_rel_path: string
+}
+
+export interface LintReportStatus {
+  exists: boolean
+  rel_path?: string
+  size?: number
+  modified_at?: string
+}
+
+export const runWikiLint = (useLlm = true) =>
+  api
+    .post<LintResult>('/wiki/lint/run', { use_llm: useLlm }, { timeout: 300000 })
+    .then(r => r.data)
+
+export const getWikiLintStatus = () =>
+  api.get<LintReportStatus>('/wiki/lint/status').then(r => r.data)
+
+export const getWikiLintReport = () =>
+  api
+    .get<{ text: string; status: LintReportStatus }>('/wiki/lint/report')
+    .then(r => r.data)
+
 // --- Concept promotion -----------------------------------------------------
 //
 // Concept-eligible nodes (technique / dataset / problem_area / concept) move

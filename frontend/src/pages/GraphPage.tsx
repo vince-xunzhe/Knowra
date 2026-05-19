@@ -9,6 +9,7 @@ import {
   X,
   Plus,
   Sparkles,
+  Stethoscope,
 } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
@@ -18,6 +19,7 @@ import PipelineStatusBar from '../components/PipelineStatusBar'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import ConceptListView from '../components/ConceptListView'
 import AskDrawer from '../components/AskDrawer'
+import WikiLintModal from '../components/WikiLintModal'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import {
   createManualConcept,
@@ -103,6 +105,7 @@ export default function GraphPage() {
   const [candidateMode, setCandidateMode] = useState<'off' | 'pending' | 'all'>('off')
   const [rescueOpen, setRescueOpen] = useState(false)
   const [askOpen, setAskOpen] = useState(false)
+  const [lintOpen, setLintOpen] = useState(false)
   // Three flavors of view:
   //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
   //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
@@ -687,6 +690,15 @@ export default function GraphPage() {
             </button>
 
             <button
+              onClick={() => setLintOpen(true)}
+              title="Wiki 健康检查 — 短桩 / 可合并 / 缺横切 / 追问建议"
+              className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-3.5 py-2 rounded-xl transition-colors shrink-0"
+            >
+              <Stethoscope size={14} />
+              健康检查
+            </button>
+
+            <button
               onClick={handleScan}
               disabled={scanning}
               className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-3.5 py-2 rounded-xl transition-colors disabled:opacity-50 shrink-0"
@@ -967,6 +979,15 @@ export default function GraphPage() {
             setDrawerInitialTab('detail')
             setSelectedNode(node)
           }
+        }}
+      />
+
+      <WikiLintModal
+        open={lintOpen}
+        onClose={() => setLintOpen(false)}
+        onMutated={async () => {
+          // recompile / reject from the lint modal changes graph state.
+          await loadGraph()
         }}
       />
 

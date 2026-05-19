@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Geometric Context Transformer for Streaming 3D Reconstruction"
+aliases:
+  - "paper:8"
+  - "Geometric Context Transformer for Streaming 3D Reconstruction"
+  - "geometric-context-transformer-for-streaming-3d-reconstruction"
 paper_id: 8
 slug: "geometric-context-transformer-for-streaming-3d-reconstruction"
 authors:

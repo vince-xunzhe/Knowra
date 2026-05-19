@@ -67,6 +67,15 @@ TASK_SPECS = [
         "legacy_field": "wiki_compile_model",
         "recommended_model_id": "openai/gpt-4o-mini",
     },
+    {
+        "id": "wiki_lint",
+        "label": "Wiki 健康检查",
+        "description": "扫描存量 wiki：短桩 / 可合并 / 缺横切概念 / 追问建议",
+        "category": "知识库",
+        "task_type": "llm",
+        "legacy_field": "wiki_compile_model",
+        "recommended_model_id": "openai/gpt-4o-mini",
+    },
 ]
 
 
@@ -78,6 +87,7 @@ TASK_BINDING_DEFAULTS = {
     "ask_agent": "openai/gpt-4o-mini",
     "ask_synthesis": "openai/gpt-4o-mini",
     "promotion_judge": "openai/gpt-4o-mini",
+    "wiki_lint": "openai/gpt-4o-mini",
 }
 
 
@@ -170,12 +180,14 @@ _OPENAI_CHAT_TASKS = [
     "ask_agent",
     "ask_synthesis",
     "promotion_judge",
+    "wiki_lint",
 ]
 
 _OPENAI_TEXT_TASKS = [
     "wiki_compile",
     "ask_synthesis",
     "promotion_judge",
+    "wiki_lint",
 ]
 
 _CODEX_ALL_NON_EMBED_TASKS = [
@@ -185,6 +197,7 @@ _CODEX_ALL_NON_EMBED_TASKS = [
     "ask_agent",
     "ask_synthesis",
     "promotion_judge",
+    "wiki_lint",
 ]
 
 _OPENAPI_LLM_TASKS = [
@@ -192,6 +205,7 @@ _OPENAPI_LLM_TASKS = [
     "ask_agent",
     "ask_synthesis",
     "promotion_judge",
+    "wiki_lint",
 ]
 
 

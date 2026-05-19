@@ -13,17 +13,21 @@ import {
   RefreshCw,
   Pin,
   AlertTriangle,
+  Presentation,
+  FileText,
 } from 'lucide-react'
 import {
   askWiki,
   createSynthesisConcept,
   getWikiIndexStatus,
   rebuildWikiIndex,
+  renderWikiOutput,
   type AskCitation,
   type AskResponse,
   type AskTraceStep,
   type SynthesisConceptResult,
   type WikiIndexStatus,
+  type WikiOutputFormat,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from './TaskNotice'
 
@@ -672,22 +676,60 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           {turns.length === 0 && !submitting && (
             <EmptyHint />
           )}
-          {turns.map((turn, i) => (
-            <TurnView
-              key={i}
-              turn={turn}
-              onFileBack={
-                turn.role === 'assistant'
-                  ? () =>
-                    setSynthesisDraft({
-                      sessionId: activeSession.id,
-                      sessionTitle: activeSession.title,
-                      sessionTurns: turns.slice(0, i + 1),
-                    })
-                  : undefined
-              }
-            />
-          ))}
+          {turns.map((turn, i) => {
+            // Most recent user question above this assistant turn — used
+            // as the export title / context.
+            const precedingQuestion =
+              turn.role === 'assistant'
+                ? [...turns.slice(0, i)]
+                    .reverse()
+                    .find(t => t.role === 'user')?.content || ''
+                : ''
+            return (
+              <TurnView
+                key={i}
+                turn={turn}
+                onFileBack={
+                  turn.role === 'assistant'
+                    ? () =>
+                      setSynthesisDraft({
+                        sessionId: activeSession.id,
+                        sessionTitle: activeSession.title,
+                        sessionTurns: turns.slice(0, i + 1),
+                      })
+                    : undefined
+                }
+                onExport={
+                  turn.role === 'assistant'
+                    ? async (fmt: WikiOutputFormat) => {
+                        try {
+                          const result = await renderWikiOutput({
+                            answer: turn.content,
+                            format: fmt,
+                            title:
+                              precedingQuestion.slice(0, 40) ||
+                              (fmt === 'marp' ? '幻灯导出' : '报告导出'),
+                            source_question: precedingQuestion,
+                          })
+                          setNotice({
+                            tone: 'emerald',
+                            text: `已生成${
+                              fmt === 'marp' ? ' Marp 幻灯' : '报告'
+                            }：${result.rel_path}`,
+                          })
+                        } catch (e: unknown) {
+                          const msg =
+                            (e as { response?: { data?: { detail?: string } } })
+                              ?.response?.data?.detail ||
+                            (e instanceof Error ? e.message : String(e))
+                          setNotice({ tone: 'amber', text: msg })
+                        }
+                      }
+                    : undefined
+                }
+              />
+            )
+          })}
           {submitting && <ThinkingIndicator />}
           {notice && (
             <div className={`px-3 py-2 rounded-lg border text-[12px] ${
@@ -821,9 +863,11 @@ function ThinkingIndicator() {
 function TurnView({
   turn,
   onFileBack,
+  onExport,
 }: {
   turn: Turn
   onFileBack?: () => void
+  onExport?: (fmt: WikiOutputFormat) => Promise<void>
 }) {
   if (turn.role === 'user') {
     return (
@@ -834,18 +878,34 @@ function TurnView({
       </div>
     )
   }
-  return <AssistantTurn turn={turn} onFileBack={onFileBack} />
+  return <AssistantTurn turn={turn} onFileBack={onFileBack} onExport={onExport} />
 }
 
 function AssistantTurn({
   turn,
   onFileBack,
+  onExport,
 }: {
   turn: Turn
   onFileBack?: () => void
+  onExport?: (fmt: WikiOutputFormat) => Promise<void>
 }) {
   const [traceOpen, setTraceOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [exporting, setExporting] = useState<WikiOutputFormat | null>(null)
+
+  const handleExport = useCallback(
+    async (fmt: WikiOutputFormat) => {
+      if (!onExport || exporting) return
+      setExporting(fmt)
+      try {
+        await onExport(fmt)
+      } finally {
+        setExporting(null)
+      }
+    },
+    [onExport, exporting],
+  )
   const citations = useMemo(() => {
     if (turn.citations && turn.citations.length > 0) {
       return turn.citations
@@ -931,6 +991,36 @@ function AssistantTurn({
             <Copy size={10} />
             {copied ? '已复制' : '复制'}
           </button>
+          {onExport && (
+            <>
+              <button
+                onClick={() => handleExport('marp')}
+                disabled={exporting !== null}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors"
+                title="整理成 Marp 幻灯，存入 data/wiki/decks/"
+              >
+                {exporting === 'marp' ? (
+                  <Loader2 size={10} className="animate-spin" />
+                ) : (
+                  <Presentation size={10} />
+                )}
+                幻灯
+              </button>
+              <button
+                onClick={() => handleExport('report')}
+                disabled={exporting !== null}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors"
+                title="整理成结构化报告，存入 data/wiki/reports/"
+              >
+                {exporting === 'report' ? (
+                  <Loader2 size={10} className="animate-spin" />
+                ) : (
+                  <FileText size={10} />
+                )}
+                报告
+              </button>
+            </>
+          )}
           {onFileBack && (
             <button
               onClick={onFileBack}

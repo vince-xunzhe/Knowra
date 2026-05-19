@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "DriveLM: Driving with Graph Visual Question Answering"
+aliases:
+  - "paper:14"
+  - "DriveLM: Driving with Graph Visual Question Answering"
+  - "drivelm-driving-with-graph-visual-question-answering"
 paper_id: 14
 slug: "drivelm-driving-with-graph-visual-question-answering"
 authors:

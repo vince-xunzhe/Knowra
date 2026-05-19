@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Structure-from-Motion Revisited"
+aliases:
+  - "paper:20"
+  - "Structure-from-Motion Revisited"
+  - "structure-from-motion-revisited"
 paper_id: 20
 slug: "structure-from-motion-revisited"
 authors:

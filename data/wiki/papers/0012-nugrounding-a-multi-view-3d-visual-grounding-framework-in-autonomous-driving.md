@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "NuGrounding: A Multi-View 3D Visual Grounding Framework in Autonomous Driving"
+aliases:
+  - "paper:12"
+  - "NuGrounding: A Multi-View 3D Visual Grounding Framework in Autonomous Driving"
+  - "nugrounding-a-multi-view-3d-visual-grounding-framework-in-autonomous-driving"
 paper_id: 12
 slug: "nugrounding-a-multi-view-3d-visual-grounding-framework-in-autonomous-driving"
 authors:

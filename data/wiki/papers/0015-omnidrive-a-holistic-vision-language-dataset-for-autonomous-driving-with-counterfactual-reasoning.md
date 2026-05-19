@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "OmniDrive: A Holistic Vision-Language Dataset for Autonomous Driving with Counterfactual Reasoning"
+aliases:
+  - "paper:15"
+  - "OmniDrive: A Holistic Vision-Language Dataset for Autonomous Driving with Counterfactual Reasoning"
+  - "omnidrive-a-holistic-vision-language-dataset-for-autonomous-driving-with-counterfactual-reasoning"
 paper_id: 15
 slug: "omnidrive-a-holistic-vision-language-dataset-for-autonomous-driving-with-counterfactual-reasoning"
 authors:

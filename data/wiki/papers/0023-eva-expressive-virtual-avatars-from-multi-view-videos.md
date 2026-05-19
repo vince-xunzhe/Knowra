@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "EVA: Expressive Virtual Avatars from Multi-view Videos"
+aliases:
+  - "paper:23"
+  - "EVA: Expressive Virtual Avatars from Multi-view Videos"
+  - "eva-expressive-virtual-avatars-from-multi-view-videos"
 paper_id: 23
 slug: "eva-expressive-virtual-avatars-from-multi-view-videos"
 authors:

@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Avat3r: Large Animatable Gaussian Reconstruction Model for High-fidelity 3D Head Avatars"
+aliases:
+  - "paper:16"
+  - "Avat3r: Large Animatable Gaussian Reconstruction Model for High-fidelity 3D Head Avatars"
+  - "avat3r-large-animatable-gaussian-reconstruction-model-for-high-fidelity-3d-head-avatars"
 paper_id: 16
 slug: "avat3r-large-animatable-gaussian-reconstruction-model-for-high-fidelity-3d-head-avatars"
 authors:

@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Pixelwise View Selection for Unstructured Multi-View Stereo"
+aliases:
+  - "paper:21"
+  - "Pixelwise View Selection for Unstructured Multi-View Stereo"
+  - "pixelwise-view-selection-for-unstructured-multi-view-stereo"
 paper_id: 21
 slug: "pixelwise-view-selection-for-unstructured-multi-view-stereo"
 authors:

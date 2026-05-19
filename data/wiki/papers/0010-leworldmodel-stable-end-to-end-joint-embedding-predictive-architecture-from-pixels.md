@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels"
+aliases:
+  - "paper:10"
+  - "LeWorldModel: Stable End-to-End Joint-Embedding Predictive Architecture from Pixels"
+  - "leworldmodel-stable-end-to-end-joint-embedding-predictive-architecture-from-pixels"
 paper_id: 10
 slug: "leworldmodel-stable-end-to-end-joint-embedding-predictive-architecture-from-pixels"
 authors:

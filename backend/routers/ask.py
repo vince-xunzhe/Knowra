@@ -19,7 +19,7 @@ from config import load_config, task_model_id, task_model_name, task_reasoning_e
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
 from model_gateway import call_text_model
-from services import ask_agent, wiki_index
+from services import ask_agent, wiki_index, wiki_output_service
 from services import wiki_search as wiki_search_service
 from services.graph_service import (
     MANUAL_NODE_ORIGIN,
@@ -31,7 +31,9 @@ from services.graph_service import (
 from services.synthesis_concept_service import analyze_synthesis_concept
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
+    _concept_aliases,
     _concept_page_path,
+    _dedup_aliases,
     _now_iso,
     _render_frontmatter,
     reconcile_concept_pages_dir,
@@ -203,6 +205,37 @@ def rebuild_index(db: Session = Depends(get_db)):
         "path": str(path),
         "size": path.stat().st_size,
     }
+
+
+class RenderOutputRequest(BaseModel):
+    answer: str
+    format: str  # "marp" | "report"
+    title: str
+    source_question: Optional[str] = None
+
+
+@router.post("/outputs/render")
+def render_output(body: RenderOutputRequest):
+    """P2 — turn an Ask answer into a Marp deck or a structured report,
+    filed into data/wiki/{decks,reports}/ so it's viewable in Obsidian
+    and re-queryable by the agent next time."""
+    fmt = (body.format or "").strip()
+    if fmt not in ("marp", "report"):
+        raise HTTPException(status_code=400, detail="format 必须是 marp 或 report")
+    if not (body.answer or "").strip():
+        raise HTTPException(status_code=400, detail="answer 不能为空")
+    try:
+        result = wiki_output_service.render_output(
+            answer_markdown=body.answer,
+            fmt=fmt,  # type: ignore[arg-type]
+            title=body.title,
+            source_question=body.source_question,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    return result
 
 
 @router.get("/index")
@@ -487,7 +520,13 @@ def create_concept_from_synthesis(
         "source_turn_indexes": source_turn_indexes,
         "source_turn_count": len(source_turn_indexes),
         "source_cited_files": source_cited_files,
-        "aliases": list(analysis.aliases or []),
+        # Merge the LLM's semantic aliases with the Obsidian-resolvable
+        # forms (concept:{id} / slug / title) so body markup like
+        # [[concept:42]] and the slug both navigate in the vault.
+        "aliases": _dedup_aliases(
+            list(analysis.aliases or [])
+            + _concept_aliases(node.id, path.stem.split("-", 1)[-1], title)
+        ),
         "tags": tag_set,
         "source_paper_ids": paper_ids,
         "related_concept_ids": [item["concept_id"] for item in resolved_related_concepts],

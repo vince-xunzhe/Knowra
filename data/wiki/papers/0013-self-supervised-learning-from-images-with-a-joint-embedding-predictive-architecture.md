@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture"
+aliases:
+  - "paper:13"
+  - "Self-Supervised Learning from Images with a Joint-Embedding Predictive Architecture"
+  - "self-supervised-learning-from-images-with-a-joint-embedding-predictive-architecture"
 paper_id: 13
 slug: "self-supervised-learning-from-images-with-a-joint-embedding-predictive-architecture"
 authors:

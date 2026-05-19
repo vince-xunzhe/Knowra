@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "VGGT: Visual Geometry Grounded Transformer"
+aliases:
+  - "paper:7"
+  - "VGGT: Visual Geometry Grounded Transformer"
+  - "vggt-visual-geometry-grounded-transformer"
 paper_id: 7
 slug: "vggt-visual-geometry-grounded-transformer"
 authors:

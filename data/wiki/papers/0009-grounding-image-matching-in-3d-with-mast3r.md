@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "Grounding Image Matching in 3D with MASt3R"
+aliases:
+  - "paper:9"
+  - "Grounding Image Matching in 3D with MASt3R"
+  - "grounding-image-matching-in-3d-with-mast3r"
 paper_id: 9
 slug: "grounding-image-matching-in-3d-with-mast3r"
 authors:

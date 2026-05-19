@@ -1,6 +1,10 @@
 ---
 kind: "paper"
 title: "SplattingAvatar: Realistic Real-Time Human Avatars with Mesh-Embedded Gaussian Splatting"
+aliases:
+  - "paper:18"
+  - "SplattingAvatar: Realistic Real-Time Human Avatars with Mesh-Embedded Gaussian Splatting"
+  - "splattingavatar-realistic-real-time-human-avatars-with-mesh-embedded-gaussian-splatting"
 paper_id: 18
 slug: "splattingavatar-realistic-real-time-human-avatars-with-mesh-embedded-gaussian-splatting"
 authors:
