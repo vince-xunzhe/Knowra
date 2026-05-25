@@ -41,6 +41,20 @@ data/paper_records/*
 data/papers/*
 !data/papers/.gitkeep
 
+# Stray DB files (accidental backend / root placements)
+backend/knowledge_tree.db
+/knowledge_tree.db
+
+# Per-machine editor state when data/wiki is opened as an Obsidian vault
+data/.obsidian/
+
+# Generated wiki artifacts — rebuilt on demand. Curated content under
+# data/wiki/papers and data/wiki/concepts stays tracked.
+data/wiki/index.md
+data/wiki/lint-report.md
+data/wiki/decks/
+data/wiki/reports/
+
 # Logs
 *.log
 npm-debug.log*
