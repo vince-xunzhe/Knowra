@@ -139,6 +139,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   const focusedNodeIdRef = useRef<string | null>(null)
   const selectedNodeIdRef = useRef<string | null>(selectedNodeId)
   const hoveredNodeIdRef = useRef<string | null>(null)
+  const didInitialDataSyncRef = useRef(false)
   const relayoutTimerRef = useRef<number | null>(null)
   const idleAutoplayDelayRef = useRef<number | null>(null)
   const idleAutoplayIntervalRef = useRef<number | null>(null)
@@ -173,12 +174,27 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     activeLayoutRef.current = null
   }, [])
 
+  const stopRuntimeMotion = useCallback((cy: cytoscape.Core) => {
+    stopActiveLayout()
+    try {
+      cy.stop(true, true)
+    } catch {
+      // Core may already be mid-destroy on older Cytoscape internals.
+    }
+    try {
+      cy.elements().stop(true, true)
+    } catch {
+      // Best-effort cleanup for node/edge animations spawned by layouts.
+    }
+  }, [stopActiveLayout])
+
   const startLayout = useCallback((
     cy: cytoscape.Core,
     nodeCount: number,
     options: { fit: boolean; animate: boolean; numIter: number },
   ) => {
-    stopActiveLayout()
+    if (cy.destroyed()) return
+    stopRuntimeMotion(cy)
     const layout = cy.layout(graphLayout(nodeCount, options))
     activeLayoutRef.current = layout
     layout.one('layoutstop', () => {
@@ -187,7 +203,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       }
     })
     layout.run()
-  }, [stopActiveLayout])
+  }, [stopRuntimeMotion])
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -363,7 +379,13 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           },
         },
       ],
-      layout: graphLayout(data.nodes.length, { fit: true, animate: false, numIter: 2200 }),
+      // IMPORTANT: don't auto-run cose here. The layout would own its own
+      // RAF chain that we can't reliably stop on rapid remount, leading
+      // to "Cannot read properties of null (reading 'notify')" when a
+      // queued frame fires after cy.destroy(). The tracked `startLayout`
+      // call below runs the real layout and stores it in
+      // activeLayoutRef so cleanup can stop it cleanly.
+      layout: { name: 'preset' },
     })
     const cyInternal = cy as cytoscape.Core & {
       headless?: () => boolean
@@ -501,26 +523,42 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     return () => {
       if (relayoutTimerRef.current != null) {
         window.clearTimeout(relayoutTimerRef.current)
+        relayoutTimerRef.current = null
       }
       clearIdleAutoplayTimers()
       pauseIdleAutoplayRef.current = null
       scheduleIdleAutoplayRef.current = null
-      stopActiveLayout()
-      cy.removeAllListeners()
-      cy.destroy()
+      didInitialDataSyncRef.current = false
+      stopRuntimeMotion(cy)
+      try {
+        cy.removeAllListeners()
+      } catch {
+        // already partially torn down
+      }
+      try {
+        cy.destroy()
+      } catch {
+        // Belt-and-suspenders: a queued RAF can still call into a cy
+        // mid-destroy on rapid remount; swallow rather than crash the
+        // page. The cleanup above already stopped layouts and animations.
+      }
       cyRef.current = null
     }
-  }, [data.nodes.length, handleNodeClick, startLayout, stopActiveLayout]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handleNodeClick, startLayout, stopRuntimeMotion]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || cy.destroyed()) return
+    if (!didInitialDataSyncRef.current) {
+      didInitialDataSyncRef.current = true
+      return
+    }
 
     pauseIdleAutoplayRef.current?.(true)
     hoveredNodeIdRef.current = null
     idleAutoplayNodeIdRef.current = null
     focusedNodeIdRef.current = null
-    stopActiveLayout()
+    stopRuntimeMotion(cy)
 
     cy.batch(() => {
       cy.elements().remove()
@@ -532,7 +570,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     if (!selectedNodeIdRef.current) {
       scheduleIdleAutoplayRef.current?.()
     }
-  }, [data, startLayout, stopActiveLayout])
+  }, [data, startLayout, stopRuntimeMotion])
 
   // Highlight selected node
   useEffect(() => {
