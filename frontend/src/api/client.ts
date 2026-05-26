@@ -830,3 +830,129 @@ export const bulkUpdatePromotion = (
       { node_ids: nodeIds, status, reason },
     )
     .then(r => r.data)
+
+// --- Dashboard ---------------------------------------------------------
+//
+// All widgets on the [看板] page consume a single fat payload so we can
+// be sure every chart reflects the same snapshot. See
+// backend/routers/dashboard.py for the field-by-field contract.
+
+export interface DashboardOverview {
+  papers: number
+  papers_processed: number
+  papers_unprocessed: number
+  papers_failed: number
+  nodes: number
+  concepts_promoted: number
+  edges: number
+  unique_tags: number
+}
+
+export interface DashboardRadarPoint {
+  tag: string
+  papers: number
+  concepts: number
+  edge_density: number
+}
+
+export interface DashboardGrowth {
+  weeks: string[]
+  papers: number[]
+  concepts: number[]
+  edges: number[]
+}
+
+export interface DashboardSlice {
+  label: string
+  value: number
+}
+
+export interface DashboardCurationCell {
+  status: 'pending' | 'promoted' | 'rejected'
+  by: 'human' | 'agent' | 'heuristic' | 'legacy' | 'unset' | string
+  count: number
+}
+
+export interface DashboardHub {
+  id: number
+  title: string
+  node_type: string
+  degree: number
+}
+
+export interface DashboardNetwork {
+  hubs: DashboardHub[]
+  orphan_count: number
+  avg_degree: number
+  relation_types: DashboardSlice[]
+}
+
+export interface DashboardCompileBucket {
+  ok: number
+  missing: number
+  stale: number
+  orphan: number
+  total: number
+}
+
+export interface DashboardLintCounts {
+  stubs: number
+  merges: number
+  missing_crosscut: number
+  followups: number
+}
+
+export interface DashboardLint {
+  exists: boolean
+  modified_at?: string
+  size?: number
+  counts?: DashboardLintCounts
+}
+
+export interface DashboardLLMUsageByTask {
+  task: string
+  calls: number
+  total_tokens: number
+  avg_latency_ms: number | null
+}
+
+export interface DashboardLLMUsageByModel {
+  model: string
+  provider: string
+  calls: number
+  total_tokens: number
+  avg_latency_ms: number | null
+}
+
+export interface DashboardLLMUsage {
+  window_days: number
+  total_calls: number
+  total_tokens: number
+  success_rate: number
+  by_task: DashboardLLMUsageByTask[]
+  by_model: DashboardLLMUsageByModel[]
+}
+
+export interface DashboardSummary {
+  generated_at: string
+  overview: DashboardOverview
+  radar: DashboardRadarPoint[]
+  growth: DashboardGrowth
+  distribution: {
+    paper_category: DashboardSlice[]
+    node_type: DashboardSlice[]
+  }
+  top_tags: DashboardSlice[]
+  curation: DashboardCurationCell[]
+  pending_age_days: number | null
+  network: DashboardNetwork
+  compile: {
+    papers: DashboardCompileBucket
+    concepts: DashboardCompileBucket
+  }
+  lint: DashboardLint
+  llm_usage: DashboardLLMUsage
+}
+
+export const getDashboardSummary = () =>
+  api.get<DashboardSummary>('/dashboard/summary', { timeout: 20000 }).then(r => r.data)

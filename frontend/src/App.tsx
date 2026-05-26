@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { Network, BookOpen, FileText, Settings } from 'lucide-react'
+import { Network, BookOpen, FileText, Settings, BarChart3 } from 'lucide-react'
 import GraphPage from './pages/GraphPage'
 import PapersPage from './pages/PapersPage'
 import ReviewPage from './pages/ReviewPage'
 import SettingsPage from './pages/SettingsPage'
+import DashboardPage from './pages/DashboardPage'
 import ProcessingStatus from './components/ProcessingStatus'
 import WikiCompileStatus from './components/WikiCompileStatus'
 
-type Page = 'graph' | 'papers' | 'review' | 'settings'
+type Page = 'graph' | 'papers' | 'review' | 'dashboard' | 'settings'
 type NavItem =
   | { id: Page; icon: typeof Network; label: string }
   | { divider: true }
@@ -25,6 +26,7 @@ const NAV: NavItem[] = [
   { id: 'graph', icon: Network, label: '知识' },
   { id: 'papers', icon: BookOpen, label: '论文' },
   { id: 'review', icon: FileText, label: '回顾' },
+  { id: 'dashboard', icon: BarChart3, label: '看板' },
   { divider: true },
   { id: 'settings', icon: Settings, label: '设置' },
 ]
@@ -77,6 +79,7 @@ export default function App() {
         {page === 'graph' && <GraphPage />}
         {page === 'papers' && <PapersPage />}
         {page === 'review' && <ReviewPage />}
+        {page === 'dashboard' && <DashboardPage />}
         {page === 'settings' && <SettingsPage />}
       </main>
 
