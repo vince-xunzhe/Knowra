@@ -48,12 +48,16 @@ backend/knowledge_tree.db
 # Per-machine editor state when data/wiki is opened as an Obsidian vault
 data/.obsidian/
 
-# Generated wiki artifacts — rebuilt on demand. Curated content under
-# data/wiki/papers and data/wiki/concepts stays tracked.
+# Wiki knowledge content — treated as local data, not version-controlled.
+# Rebuilt on demand from the SQLite store; per-machine state stays out of git.
 data/wiki/index.md
 data/wiki/lint-report.md
 data/wiki/decks/
 data/wiki/reports/
+data/wiki/papers/*
+!data/wiki/papers/.gitkeep
+data/wiki/concepts/*
+!data/wiki/concepts/.gitkeep
 
 # Logs
 *.log
