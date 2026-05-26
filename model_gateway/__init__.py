@@ -22,6 +22,7 @@ from .runtime import (
     create_openai_client_for_model,
     embed_text,
 )
+from .telemetry import task_context, track_call
 
 __all__ = [
     "AVAILABLE_PROVIDER_TYPES",
@@ -42,4 +43,6 @@ __all__ = [
     "mask_model_gateway_config",
     "run_provider_healthcheck",
     "sync_legacy_fields",
+    "task_context",
+    "track_call",
 ]

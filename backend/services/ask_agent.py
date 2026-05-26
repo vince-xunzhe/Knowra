@@ -37,6 +37,7 @@ ensure_project_root_on_path()
 
 from model_gateway import create_openai_client_for_model
 from model_gateway import call_text_model, get_model_entry, get_provider_entry
+from model_gateway import task_context, track_call
 from services import wiki_index, wiki_search
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
@@ -539,6 +540,29 @@ def run_ask_agent(
     model: str,
     reasoning_effort: Optional[str] = None,
 ) -> AskResult:
+    # Tag every LLM call inside this function (and the codex_cli fallback)
+    # with "ask_agent" so dashboard cost breakdowns attribute them
+    # correctly. Telemetry is best-effort — never reraises.
+    with task_context("ask_agent"):
+        return _run_ask_agent_inner(
+            db,
+            question=question,
+            history=history,
+            api_key=api_key,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+
+
+def _run_ask_agent_inner(
+    db: Session,
+    *,
+    question: str,
+    history: Optional[list[dict[str, str]]] = None,
+    api_key: str,
+    model: str,
+    reasoning_effort: Optional[str] = None,
+) -> AskResult:
     started = perf_counter()
     cfg = load_config()
     if _provider_type_for_model(cfg, model) == "codex_cli":
@@ -550,13 +574,14 @@ def run_ask_agent(
             reasoning_effort=reasoning_effort,
         )
     try:
-        client, model, _, _ = create_openai_client_for_model(
+        client, model, provider_blob, _ = create_openai_client_for_model(
             cfg,
             model,
             api_key_override=api_key,
         )
     except Exception as exc:
         raise AskAgentUnavailable(str(exc))
+    provider_id = str(provider_blob.get("id") or "openai")
     trace: list[TraceStep] = []
     final_answer: Optional[str] = None
 
@@ -568,23 +593,28 @@ def run_ask_agent(
         previous_response_id: Optional[str] = None
 
         for step in range(MAX_STEPS):
-            response = client.responses.create(
+            response = track_call(
+                lambda: client.responses.create(
+                    model=model,
+                    instructions=ASK_SYSTEM_PROMPT,
+                    input=next_input,
+                    tools=RESPONSES_TOOLS,
+                    tool_choice="auto",
+                    temperature=0.3,
+                    **(
+                        {"reasoning": {"effort": reasoning_effort}}
+                        if reasoning_effort in {"low", "medium", "high"}
+                        else {}
+                    ),
+                    **(
+                        {"previous_response_id": previous_response_id}
+                        if previous_response_id
+                        else {}
+                    ),
+                ),
+                provider=provider_id,
                 model=model,
-                instructions=ASK_SYSTEM_PROMPT,
-                input=next_input,
-                tools=RESPONSES_TOOLS,
-                tool_choice="auto",
-                temperature=0.3,
-                **(
-                    {"reasoning": {"effort": reasoning_effort}}
-                    if reasoning_effort in {"low", "medium", "high"}
-                    else {}
-                ),
-                **(
-                    {"previous_response_id": previous_response_id}
-                    if previous_response_id
-                    else {}
-                ),
+                surface="responses",
             )
             tool_calls = [
                 item
@@ -650,7 +680,12 @@ def run_ask_agent(
                         "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
                     },
                 ]
-            wrap_up = client.responses.create(**wrap_kwargs)
+            wrap_up = track_call(
+                lambda: client.responses.create(**wrap_kwargs),
+                provider=provider_id,
+                model=model,
+                surface="responses",
+            )
             final_answer = _extract_responses_text(wrap_up)
     else:
         messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM_PROMPT}]
@@ -658,12 +693,17 @@ def run_ask_agent(
         messages.append({"role": "user", "content": question})
 
         for step in range(MAX_STEPS):
-            resp = client.chat.completions.create(
+            resp = track_call(
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=TOOLS,
+                    tool_choice="auto",
+                    temperature=0.3,
+                ),
+                provider=provider_id,
                 model=model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                temperature=0.3,
+                surface="chat",
             )
             msg = resp.choices[0].message
 
@@ -719,16 +759,21 @@ def run_ask_agent(
             # Hit MAX_STEPS without terminating. Ask the model to wrap up
             # with what it has — a softer failure than silently truncating.
             log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
-            wrap_up = client.chat.completions.create(
+            wrap_up = track_call(
+                lambda: client.chat.completions.create(
+                    model=model,
+                    messages=messages
+                    + [
+                        {
+                            "role": "user",
+                            "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
+                        }
+                    ],
+                    temperature=0.3,
+                ),
+                provider=provider_id,
                 model=model,
-                messages=messages
-                + [
-                    {
-                        "role": "user",
-                        "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
-                    }
-                ],
-                temperature=0.3,
+                surface="chat",
             )
             final_answer = (wrap_up.choices[0].message.content or "").strip()
 

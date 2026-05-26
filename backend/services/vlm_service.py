@@ -32,6 +32,8 @@ from model_gateway import (
     ModelGatewayError,
     call_text_model,
     embed_text,
+    task_context,
+    track_call,
     get_model_entry,
     get_provider_entry,
 )
@@ -452,7 +454,12 @@ def _run_with_responses_file_search(
     }
     if reasoning_effort in {"low", "medium", "high"}:
         kwargs["reasoning"] = {"effort": reasoning_effort}
-    response = client.responses.create(**kwargs)
+    response = track_call(
+        lambda: client.responses.create(**kwargs),
+        provider="openai",
+        model=model,
+        surface="responses",
+    )
     raw = getattr(response, "output_text", "") or ""
     preview = (raw[:160] + "…") if len(raw) > 160 else raw or "<empty>"
     _log(f"responses id={response.id} raw_len={len(raw)} preview={preview!r}")
@@ -1046,7 +1053,12 @@ def run_chat_turn(
         if cached_thread_id:
             create_kwargs["previous_response_id"] = cached_thread_id
             try:
-                response = client.responses.create(**create_kwargs)
+                response = track_call(
+                    lambda: client.responses.create(**create_kwargs),
+                    provider="openai",
+                    model=model,
+                    surface="responses",
+                )
             except APIStatusError:
                 history = []
                 for item in chat_history or []:
@@ -1057,16 +1069,21 @@ def run_chat_turn(
                         continue
                     history.append({"role": role, "content": str(item.get("content") or "")})
                 history.append({"role": "user", "content": user_message})
-                response = client.responses.create(
-                    model=model,
-                    instructions=CHAT_INSTRUCTIONS,
-                    input=history,
-                    tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
-                    **(
-                        {"reasoning": {"effort": reasoning_effort}}
-                        if reasoning_effort in {"low", "medium", "high"}
-                        else {}
+                response = track_call(
+                    lambda: client.responses.create(
+                        model=model,
+                        instructions=CHAT_INSTRUCTIONS,
+                        input=history,
+                        tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+                        **(
+                            {"reasoning": {"effort": reasoning_effort}}
+                            if reasoning_effort in {"low", "medium", "high"}
+                            else {}
+                        ),
                     ),
+                    provider="openai",
+                    model=model,
+                    surface="responses",
                 )
                 is_new = True
         else:
@@ -1079,16 +1096,21 @@ def run_chat_turn(
                     continue
                 history.append({"role": role, "content": str(item.get("content") or "")})
             history.append({"role": "user", "content": user_message})
-            response = client.responses.create(
-                model=model,
-                instructions=CHAT_INSTRUCTIONS,
-                input=history,
-                tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
-                **(
-                    {"reasoning": {"effort": reasoning_effort}}
-                    if reasoning_effort in {"low", "medium", "high"}
-                    else {}
+            response = track_call(
+                lambda: client.responses.create(
+                    model=model,
+                    instructions=CHAT_INSTRUCTIONS,
+                    input=history,
+                    tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
+                    **(
+                        {"reasoning": {"effort": reasoning_effort}}
+                        if reasoning_effort in {"low", "medium", "high"}
+                        else {}
+                    ),
                 ),
+                provider="openai",
+                model=model,
+                surface="responses",
             )
 
         reply = _strip_citations((getattr(response, "output_text", "") or "")).strip()
@@ -1143,8 +1165,17 @@ def get_embedding(text: str, api_key: str, model: str = "text-embedding-3-small"
             api_key_override=api_key or None,
         )
     except Exception:
+        # Direct OpenAI fallback for when the gateway can't resolve the
+        # model binding (e.g. user supplied a raw API key + ad-hoc model
+        # name). track_call still records the row so the dashboard sees
+        # these calls.
         client = OpenAI(api_key=api_key)
-        response = client.embeddings.create(input=text, model=model)
+        response = track_call(
+            lambda: client.embeddings.create(input=text, model=model),
+            provider="openai",
+            model=model,
+            surface="embeddings",
+        )
         return response.data[0].embedding
 
 

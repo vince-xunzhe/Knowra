@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from config import load_config, task_model_id, task_model_name, task_reasoning_effort
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
-from model_gateway import call_text_model
+from model_gateway import call_text_model, task_context
 from services import ask_agent, wiki_index, wiki_output_service
 from services import wiki_search as wiki_search_service
 from services.graph_service import (
@@ -113,19 +113,22 @@ def _suggest_ask_session_title(
     reasoning_effort: Optional[str],
 ) -> Optional[str]:
     try:
-        raw = call_text_model(
-            cfg,
-            model_id=model,
-            system=ASK_TITLE_SYSTEM_PROMPT,
-            user=(
-                f"[用户问题]\n{question.strip()}\n\n"
-                f"[助手回答]\n{answer.strip()[:2800]}"
-            ),
-            max_tokens=48,
-            temperature=0.2,
-            reasoning_effort="low" if reasoning_effort in {"low", "medium", "high"} else None,
-            timeout_s=90,
-        )
+        # Short title-generation utility call — uses the Ask answer model
+        # but is logically a separate cost line, so tag it distinctly.
+        with task_context("ask_title"):
+            raw = call_text_model(
+                cfg,
+                model_id=model,
+                system=ASK_TITLE_SYSTEM_PROMPT,
+                user=(
+                    f"[用户问题]\n{question.strip()}\n\n"
+                    f"[助手回答]\n{answer.strip()[:2800]}"
+                ),
+                max_tokens=48,
+                temperature=0.2,
+                reasoning_effort="low" if reasoning_effort in {"low", "medium", "high"} else None,
+                timeout_s=90,
+            )
     except Exception as exc:
         log.warning("ask session title generation failed: %s", exc)
         return None

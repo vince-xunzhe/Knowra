@@ -90,3 +90,32 @@ class KnowledgeEdge(Base):
     relation_type = Column(String, default="related")
     weight = Column(Float, default=0.0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class LLMCall(Base):
+    """Per-LLM-call audit row. Written best-effort by model_gateway.telemetry
+    so cost / latency / model-mix analytics in the dashboard don't have to
+    do post-hoc accounting. Writes are async and swallow errors — telemetry
+    must never break a real LLM call."""
+
+    __tablename__ = "llm_calls"
+
+    id = Column(Integer, primary_key=True, index=True)
+    called_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    # Logical task label set via telemetry.task_context(...). "unknown" for
+    # call sites that haven't been tagged yet.
+    task = Column(String, nullable=False, index=True)
+    provider = Column(String, nullable=False)
+    model = Column(String, nullable=False, index=True)
+    # API surface used: chat / responses / embeddings / codex_cli.
+    surface = Column(String, nullable=True)
+    # Token counts from the upstream usage object. Codex CLI calls have no
+    # usage data — those rows leave the counts null.
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    latency_ms = Column(Integer, nullable=True)
+    success = Column(Boolean, default=True, index=True)
+    # Exception class name on failure (no message — message can contain
+    # tokens or PII; class is enough for grouping).
+    error_class = Column(String, nullable=True)

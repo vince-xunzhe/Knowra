@@ -10,6 +10,7 @@ from typing import Any
 from openai import OpenAI
 
 from .config import get_model_entry, get_provider_entry
+from .telemetry import log_codex_cli_call, track_call
 
 
 RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
@@ -106,6 +107,8 @@ def _run_codex_cli(
     image_paths: list[str] | None = None,
     timeout_s: int = 180,
 ) -> str:
+    import time
+
     command = str(provider.get("command") or "codex").strip() or "codex"
     _validate_codex_cli_model(upstream_model)
     with tempfile.NamedTemporaryFile(prefix="codex-last-message-", suffix=".txt", delete=False) as handle:
@@ -131,29 +134,59 @@ def _run_codex_cli(
         if path_text:
             args.extend(["--image", path_text])
     args.append("-")
+    started = time.monotonic()
     try:
-        completed = subprocess.run(
-            args,
-            input=prompt.encode("utf-8"),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=str(PROJECT_ROOT),
-            timeout=timeout_s,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise ModelGatewayError(f"Codex CLI not found: {command}") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ModelGatewayError("Codex CLI request timed out") from exc
-    try:
+        try:
+            completed = subprocess.run(
+                args,
+                input=prompt.encode("utf-8"),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(PROJECT_ROOT),
+                timeout=timeout_s,
+                check=False,
+            )
+        except FileNotFoundError as exc:
+            log_codex_cli_call(
+                provider="codex_cli",
+                model=upstream_model or command,
+                started_at=started,
+                success=False,
+                error_class="FileNotFoundError",
+            )
+            raise ModelGatewayError(f"Codex CLI not found: {command}") from exc
+        except subprocess.TimeoutExpired as exc:
+            log_codex_cli_call(
+                provider="codex_cli",
+                model=upstream_model or command,
+                started_at=started,
+                success=False,
+                error_class="TimeoutExpired",
+            )
+            raise ModelGatewayError("Codex CLI request timed out") from exc
+
         if completed.returncode != 0:
             stderr = completed.stderr.decode("utf-8", errors="ignore").strip()
             stdout = completed.stdout.decode("utf-8", errors="ignore").strip()
+            log_codex_cli_call(
+                provider="codex_cli",
+                model=upstream_model or command,
+                started_at=started,
+                success=False,
+                error_class=f"ExitCode{completed.returncode}",
+            )
             raise ModelGatewayError(
                 _summarize_codex_cli_failure("\n".join(part for part in [stderr, stdout] if part), upstream_model)
                 or f"Codex CLI exited with code {completed.returncode}"
             )
-        return output_path.read_text(encoding="utf-8").strip()
+        result_text = output_path.read_text(encoding="utf-8").strip()
+        log_codex_cli_call(
+            provider="codex_cli",
+            model=upstream_model or command,
+            started_at=started,
+            success=True,
+        )
+        return result_text
     finally:
         output_path.unlink(missing_ok=True)
 
@@ -204,7 +237,8 @@ def call_text_model(
 ) -> str:
     model_entry = get_model_entry(cfg, model_id)
     if model_entry is None:
-        client, upstream_model, _, _ = create_openai_client_for_model(cfg, model_id)
+        client, upstream_model, provider_blob, _ = create_openai_client_for_model(cfg, model_id)
+        provider_id = str(provider_blob.get("id") or "openai")
         if upstream_model in RESPONSES_ONLY_MODELS:
             kwargs: dict[str, Any] = {
                 "model": upstream_model,
@@ -214,16 +248,26 @@ def call_text_model(
             normalized_effort = _normalize_reasoning_effort(reasoning_effort)
             if normalized_effort:
                 kwargs["reasoning"] = {"effort": normalized_effort}
-            response = client.responses.create(**kwargs)
+            response = track_call(
+                lambda: client.responses.create(**kwargs),
+                provider=provider_id,
+                model=upstream_model,
+                surface="responses",
+            )
             return (getattr(response, "output_text", "") or "").strip()
-        response = client.chat.completions.create(
+        response = track_call(
+            lambda: client.chat.completions.create(
+                model=upstream_model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+            provider=provider_id,
             model=upstream_model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
+            surface="chat",
         )
         return (response.choices[0].message.content or "").strip()
 
@@ -238,7 +282,10 @@ def call_text_model(
 
     provider_type = provider.get("provider_type")
     upstream_model = model_entry["upstream_model"]
+    provider_id = str(provider.get("id") or provider_type or "unknown")
     if provider_type == "codex_cli":
+        # _run_codex_cli logs its own telemetry row internally (no usage
+        # data available from the CLI surface).
         return _run_codex_cli(
             provider,
             upstream_model,
@@ -258,17 +305,27 @@ def call_text_model(
         normalized_effort = _normalize_reasoning_effort(reasoning_effort)
         if normalized_effort:
             kwargs["reasoning"] = {"effort": normalized_effort}
-        response = client.responses.create(**kwargs)
+        response = track_call(
+            lambda: client.responses.create(**kwargs),
+            provider=provider_id,
+            model=upstream_model,
+            surface="responses",
+        )
         return (getattr(response, "output_text", "") or "").strip()
 
-    response = client.chat.completions.create(
+    response = track_call(
+        lambda: client.chat.completions.create(
+            model=upstream_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        ),
+        provider=provider_id,
         model=upstream_model,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        temperature=temperature,
-        max_tokens=max_tokens,
+        surface="chat",
     )
     return (response.choices[0].message.content or "").strip()
 
@@ -280,12 +337,18 @@ def embed_text(
     text: str,
     api_key_override: str | None = None,
 ) -> list[float]:
-    client, upstream_model, _, model_entry = create_openai_client_for_model(
+    client, upstream_model, provider_blob, model_entry = create_openai_client_for_model(
         cfg,
         model_id,
         api_key_override=api_key_override,
     )
     if model_entry.get("model_kind") != "embedding":
         raise ProviderCapabilityError(f"Model '{model_id}' is not an embedding model")
-    response = client.embeddings.create(input=text, model=upstream_model)
+    provider_id = str(provider_blob.get("id") or "openai")
+    response = track_call(
+        lambda: client.embeddings.create(input=text, model=upstream_model),
+        provider=provider_id,
+        model=upstream_model,
+        surface="embeddings",
+    )
     return response.data[0].embedding

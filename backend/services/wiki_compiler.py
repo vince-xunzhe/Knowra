@@ -299,16 +299,29 @@ def _call_llm(
     extra: dict = {}
     if timeout_s is not None:
         extra["timeout_s"] = timeout_s
-    return call_text_model(
-        cfg,
-        model_id=model,
-        system=system,
-        user=user,
-        max_tokens=max_tokens,
-        temperature=0.3,
-        reasoning_effort=reasoning_effort,
-        **extra,
-    )
+    # Tag every nested LLM call with the logical task so dashboard cost
+    # analytics attribute correctly. When task_id is unset (legacy callers
+    # like Ask title-suggestion) we fall back to the outer context — which
+    # may itself be "unknown" if no caller set it.
+    from model_gateway import task_context
+
+    if task_id:
+        ctx = task_context(task_id)
+    else:
+        from contextlib import nullcontext
+
+        ctx = nullcontext()
+    with ctx:
+        return call_text_model(
+            cfg,
+            model_id=model,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=0.3,
+            reasoning_effort=reasoning_effort,
+            **extra,
+        )
 
 
 # --- compile_paper_page -----------------------------------------------------

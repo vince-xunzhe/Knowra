@@ -10,7 +10,7 @@ from database import get_db
 from logging_utils import get_logger
 from models import Paper, KnowledgeNode
 from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
-from model_gateway import get_model_entry, get_provider_entry
+from model_gateway import get_model_entry, get_provider_entry, task_context
 from path_utils import (
     portable_data_path,
     resolve_artifact_path,
@@ -577,23 +577,27 @@ def _process_single(paper_id: int):
                 cached_file_id = p.openai_file_id
                 cached_assistant_id = cfg.get("openai_assistant_id") or None
                 cached_vector_store_id = p.openai_vector_store_id
-                extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
-                    pdf_filepath=str(pdf_path),
-                    prompt=cfg["extraction_prompt"],
-                    api_key=cfg["openai_api_key"],
-                    model=task_model_name(cfg, "paper_extract"),
-                    reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
-                    cached_file_id=cached_file_id,
-                    cached_assistant_id=cached_assistant_id,
-                    cached_vector_store_id=cached_vector_store_id,
-                    fallback_text=p.extracted_text or "",
-                    first_page_image_path=(
-                        str(resolve_artifact_path(p.first_page_image_path))
-                        if cfg.get("use_first_page_image") and p.first_page_image_path
-                        else None
-                    ),
-                    file_hash=p.file_hash,
-                )
+                # Tag every LLM call (extraction + category + any nested
+                # fallback) with the logical task so dashboard cost
+                # breakdowns attribute correctly.
+                with task_context("paper_extract"):
+                    extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
+                        pdf_filepath=str(pdf_path),
+                        prompt=cfg["extraction_prompt"],
+                        api_key=cfg["openai_api_key"],
+                        model=task_model_name(cfg, "paper_extract"),
+                        reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
+                        cached_file_id=cached_file_id,
+                        cached_assistant_id=cached_assistant_id,
+                        cached_vector_store_id=cached_vector_store_id,
+                        fallback_text=p.extracted_text or "",
+                        first_page_image_path=(
+                            str(resolve_artifact_path(p.first_page_image_path))
+                            if cfg.get("use_first_page_image") and p.first_page_image_path
+                            else None
+                        ),
+                        file_hash=p.file_hash,
+                    )
 
                 if not raw or not raw.strip():
                     raise PaperExtractionError(
@@ -1058,26 +1062,27 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
         raise HTTPException(status_code=400, detail="消息不能为空")
 
     try:
-        reply, thread_id, was_recreated, vector_store_id = run_chat_turn(
-            api_key=api_key or "",
-            model=model,
-            assistant_id=assistant_id or "",
-            file_id=p.openai_file_id or "",
-            user_message=user_text,
-            reasoning_effort=task_reasoning_effort(cfg, "paper_chat"),
-            cached_vector_store_id=p.openai_vector_store_id,
-            cached_thread_id=p.openai_thread_id,
-            chat_history=p.chat_history,
-            paper_title=p.title or p.filename,
-            paper_notes=p.notes or "",
-            paper_raw_llm_response=p.raw_llm_response or "",
-            paper_extracted_text=p.extracted_text or "",
-            first_page_image_path=(
-                str(resolve_artifact_path(p.first_page_image_path))
-                if cfg.get("use_first_page_image") and p.first_page_image_path
-                else None
-            ),
-        )
+        with task_context("paper_chat"):
+            reply, thread_id, was_recreated, vector_store_id = run_chat_turn(
+                api_key=api_key or "",
+                model=model,
+                assistant_id=assistant_id or "",
+                file_id=p.openai_file_id or "",
+                user_message=user_text,
+                reasoning_effort=task_reasoning_effort(cfg, "paper_chat"),
+                cached_vector_store_id=p.openai_vector_store_id,
+                cached_thread_id=p.openai_thread_id,
+                chat_history=p.chat_history,
+                paper_title=p.title or p.filename,
+                paper_notes=p.notes or "",
+                paper_raw_llm_response=p.raw_llm_response or "",
+                paper_extracted_text=p.extracted_text or "",
+                first_page_image_path=(
+                    str(resolve_artifact_path(p.first_page_image_path))
+                    if cfg.get("use_first_page_image") and p.first_page_image_path
+                    else None
+                ),
+            )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"对话失败: {e}")
 
