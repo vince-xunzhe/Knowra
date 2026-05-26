@@ -15,11 +15,12 @@ type NavItem =
 // Prompt is intentionally not in this sidebar — it's a per-extraction config
 // that only matters in the context of paper processing, so it lives in a
 // tab on the Papers page right column. The Wiki layer (paper / concept .md
-// pages) is folded into the Graph page: the top pipeline bar exposes the
-// compile workflow, the node drawer renders compiled .md inline, and a
-// view toggle flips to the compiled-graph swim-lane. Concept promotion
-// review also lives in the Graph page (CandidatePanel + drawer + rescue
-// modal) so curation happens in visual context instead of as flat lists.
+// pages) is folded into the Graph page: the left PipelineConsole exposes
+// the ingest / curate / compile / maintain workflow as 4 stage cards, the
+// node drawer renders compiled .md inline, and a view toggle flips to the
+// compiled-graph swim-lane. Concept promotion review also lives in the
+// Graph page (inside stage ② of the console + drawer + rescue modal) so
+// curation happens in visual context instead of as flat lists.
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, label: '知识' },
   { id: 'papers', icon: BookOpen, label: '论文' },

@@ -2,33 +2,28 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Search,
   RefreshCw,
-  Play,
-  ScanLine,
   Loader2,
   Filter,
   X,
   Plus,
-  Sparkles,
-  Stethoscope,
+  ArrowRight,
+  CheckCircle2,
 } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
 import RejectedRescueModal from '../components/RejectedRescueModal'
-import CandidatePanel from '../components/CandidatePanel'
-import PipelineStatusBar from '../components/PipelineStatusBar'
+import PipelineConsole from '../components/PipelineConsole'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import ConceptListView from '../components/ConceptListView'
 import AskDrawer from '../components/AskDrawer'
 import WikiLintModal from '../components/WikiLintModal'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
+import { usePipelineState } from '../hooks/usePipelineState'
 import {
   createManualConcept,
   getGraph,
-  getStatus,
   getWikiGraph,
   listPapers,
-  processAll,
-  scanPapers,
   searchNodes,
   searchWiki,
   updateManualConcept,
@@ -41,14 +36,6 @@ import {
   type WikiGraphNode,
   type WikiSearchHit,
 } from '../api/client'
-
-interface ProcStatus {
-  running: boolean
-  total: number
-  done: number
-  errors: number
-  current: string
-}
 
 interface ActionNotice {
   tone: TaskNoticeTone
@@ -115,15 +102,12 @@ export default function GraphPage() {
   const [wikiGraph, setWikiGraph] = useState<WikiGraphData | null>(null)
   const [wikiGraphLoading, setWikiGraphLoading] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [scanning, setScanning] = useState(false)
-  const [starting, setStarting] = useState(false)
-  const [status, setStatus] = useState<ProcStatus | null>(null)
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [paperCatalog, setPaperCatalog] = useState<PaperRecord[]>([])
   const [editorOpen, setEditorOpen] = useState(false)
   const [editingNode, setEditingNode] = useState<GraphNode | null>(null)
   const [actionBusyId, setActionBusyId] = useState<string | null>(null)
-  const wasRunningRef = useRef(false)
+  const [nextStepRunning, setNextStepRunning] = useState(false)
   const searchShellRef = useRef<HTMLDivElement>(null)
   // Mirror of graphData kept in a ref so async callbacks (rescue → focus)
   // can read the freshest version without re-binding.
@@ -167,47 +151,42 @@ export default function GraphPage() {
     return () => { cancelled = true }
   }, [candidateMode])
 
+  // Pipeline state — single owner for the four lifecycle polls. Replaces
+  // the per-component pollers that the old PipelineStatusBar +
+  // CandidatePanel each maintained. Both PipelineConsole (left rail) and
+  // the top NextStep banner consume the same snapshot.
+  const pipeline = usePipelineState({
+    onMutated: () => {
+      void loadGraph()
+    },
+    onOpenLint: () => setLintOpen(true),
+  })
+
+  // Surface "processing finished" toasts the way the old poller did, so
+  // the user still gets the success / failure banner after a long run.
+  const prevRunningRef = useRef(false)
+  const prevErrorsRef = useRef(0)
   useEffect(() => {
-    let cancelled = false
-    const poll = async () => {
-      try {
-        const s = await getStatus()
-        if (cancelled) return
-        setStatus(s)
-        if (wasRunningRef.current && !s.running) {
-          setActionNotice(
-            s.errors > 0
-              ? {
-                  tone: 'warning',
-                  title: `处理结束，${s.errors} 篇论文失败`,
-                  detail: '可切换到论文页查看失败摘要并执行重试。',
-                }
-              : {
-                  tone: 'success',
-                  title: '处理完成',
-                  detail: '图谱与论文状态已刷新。',
-                },
-          )
-          loadGraph()
-        }
-        wasRunningRef.current = s.running
-        if (s.running) setStarting(false)
-      } catch (error) {
-        console.error('Failed to poll processing status', error)
-        if (!cancelled) {
-          setActionNotice({
-            tone: 'error',
-            title: '无法获取处理状态',
-            detail: getErrorMessage(error),
-          })
-          setStarting(false)
-        }
-      }
+    const running = !!pipeline.processing?.running
+    const errors = pipeline.processing?.errors ?? 0
+    if (prevRunningRef.current && !running) {
+      setActionNotice(
+        errors > 0
+          ? {
+              tone: 'warning',
+              title: `处理结束，${errors} 篇论文失败`,
+              detail: '可切换到论文页查看失败摘要并执行重试。',
+            }
+          : {
+              tone: 'success',
+              title: '处理完成',
+              detail: '图谱与论文状态已刷新。',
+            },
+      )
     }
-    void poll()
-    const id = setInterval(poll, 1500)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [loadGraph])
+    prevRunningRef.current = running
+    prevErrorsRef.current = errors
+  }, [pipeline.processing?.running, pipeline.processing?.errors])
 
   const visibleData = useMemo(() => {
     // First strip types we never want on the node-graph canvas (e.g.
@@ -405,44 +384,30 @@ export default function GraphPage() {
     [focusNode, resolveWikiTargetNode],
   )
 
-  const handleScan = async () => {
-    setScanning(true)
+  // The "next step" CTA wraps whichever stage action the pipeline state
+  // machine currently recommends. We adapt the result into the same
+  // ActionNotice toast surface that the previous standalone handlers used.
+  const handleRunNextStep = async () => {
+    if (pipeline.nextStep.disabled || pipeline.nextStep.busy) return
+    setNextStepRunning(true)
     setActionNotice(null)
     try {
-      const result = await scanPapers()
-      setActionNotice({
-        tone: 'success',
-        title: `扫描完成：发现 ${result.new_found} 篇新论文`,
-        detail: `当前共 ${result.total} 篇，待处理 ${result.unprocessed} 篇。`,
-      })
+      await pipeline.nextStep.run()
+      if (pipeline.nextStep.stage === 'ingest') {
+        setActionNotice({
+          tone: 'info',
+          title: '已提交处理任务',
+          detail: '等待后端状态更新，左侧流水线会实时显示进度。',
+        })
+      }
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: '扫描失败',
-        detail: getErrorMessage(error),
-      })
-    }
-    setScanning(false)
-  }
-
-  const handleProcess = async () => {
-    setStarting(true)
-    setActionNotice(null)
-    try {
-      await processAll()
-      setActionNotice({
-        tone: 'info',
-        title: '已提交处理任务',
-        detail: '等待后端状态更新，进度会在页面顶部实时显示。',
-      })
-    } catch (error) {
-      setActionNotice({
-        tone: 'error',
-        title: '处理启动失败',
+        title: '操作失败',
         detail: getErrorMessage(error),
       })
     } finally {
-      setStarting(false)
+      setNextStepRunning(false)
     }
   }
 
@@ -543,15 +508,20 @@ export default function GraphPage() {
     CONCEPT_ELIGIBLE_TYPES.has(n.node_type),
   ).length
 
-  const progressPct = status?.running && status.total > 0
-    ? Math.round((status.done / status.total) * 100)
-    : 0
+  const processing = pipeline.processing
+  const compileStatus = pipeline.compileStatus
+  const progressPct = processing?.running && processing.total > 0
+    ? Math.round((processing.done / processing.total) * 100)
+    : compileStatus?.running && compileStatus.total > 0
+      ? Math.round((compileStatus.done / compileStatus.total) * 100)
+      : 0
+  const showTopProgress = !!processing?.running || !!compileStatus?.running
   const isEmpty = !loading && visibleData.nodes.length === 0
 
   return (
     <div className="flex flex-col h-full relative">
-      {/* Top progress bar (visible while processing) */}
-      {status?.running && (
+      {/* Top progress bar (visible while anything is running) */}
+      {showTopProgress && (
         <div className="absolute top-0 left-0 right-0 h-[2px] bg-slate-800/60 z-30 overflow-hidden">
           <div
             className="h-full bg-gradient-to-r from-indigo-500 via-indigo-400 to-violet-400 transition-all duration-500"
@@ -560,9 +530,16 @@ export default function GraphPage() {
         </div>
       )}
 
-      {/* Pipeline status bar — surfaces wiki-compile state above the graph
-          so the user always sees how fresh the layer below the graph is. */}
-      <PipelineStatusBar onCompileFinished={loadGraph} />
+      {/* Next-step banner — single, always-visible "do this next" surface.
+          Aggregates ingest / curate / compile / lint signals into one CTA
+          so the user never has to think about which panel to open first. */}
+      <NextStepBanner
+        nextStep={pipeline.nextStep}
+        stages={pipeline.stages}
+        running={nextStepRunning}
+        onRun={handleRunNextStep}
+      />
+
 
       {/* Toolbar */}
       <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-2.5">
@@ -671,6 +648,9 @@ export default function GraphPage() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            {/* Toast surface — actions originate from the left console / next-step
+                banner, but feedback lands here so it stays visible regardless of
+                what panel the user is looking at. */}
             {actionNotice && (
               <TaskNotice
                 tone={actionNotice.tone}
@@ -681,54 +661,9 @@ export default function GraphPage() {
             )}
 
             <button
-              onClick={() => setAskOpen(true)}
-              title="向知识库提问 — agent 会跨论文综合答复"
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 px-3.5 py-2 rounded-xl transition-colors shrink-0 shadow-lg shadow-indigo-500/20"
-            >
-              <Sparkles size={14} />
-              Ask
-            </button>
-
-            <button
-              onClick={() => setLintOpen(true)}
-              title="Wiki 健康检查 — 短桩 / 可合并 / 缺横切 / 追问建议"
-              className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-3.5 py-2 rounded-xl transition-colors shrink-0"
-            >
-              <Stethoscope size={14} />
-              健康检查
-            </button>
-
-            <button
-              onClick={handleScan}
-              disabled={scanning}
-              className="inline-flex items-center gap-1.5 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-3.5 py-2 rounded-xl transition-colors disabled:opacity-50 shrink-0"
-            >
-              {scanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-              {scanning ? '扫描中' : '扫描目录'}
-            </button>
-
-            <button
-              onClick={handleProcess}
-              disabled={starting || !!status?.running}
-              title={status?.current || ''}
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-3.5 py-2 rounded-xl transition-colors disabled:bg-slate-700 disabled:text-slate-400 disabled:cursor-not-allowed shrink-0"
-            >
-              {status?.running ? (
-                <>
-                  <Loader2 size={14} className="animate-spin" />
-                  <span>处理中 <span className="tabular-nums">{status.done}/{status.total}</span></span>
-                  {status.errors > 0 && <span className="text-red-200">· {status.errors} 失败</span>}
-                </>
-              ) : starting ? (
-                <><Loader2 size={14} className="animate-spin" /> 启动中</>
-              ) : (
-                <><Play size={14} /> 处理论文</>
-              )}
-            </button>
-
-            <button
               onClick={handleOpenCreate}
               className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-teal-500 hover:bg-teal-400 px-3.5 py-2 rounded-xl transition-colors shrink-0"
+              title="手动新增一个概念节点"
             >
               <Plus size={14} />
               新增概念
@@ -837,8 +772,21 @@ export default function GraphPage() {
         )}
       </div>
 
-      {/* Main canvas area */}
+      {/* Main canvas area — three columns:
+            ┌─ PipelineConsole (left rail, all stage CTAs)
+            ├─ KnowledgeGraph / WikiKnowledgeMap / ConceptListView (center)
+            └─ NodeDetail (right drawer)
+          Replaces the old "floating CandidatePanel + top PipelineStatusBar"
+          scatter with a single anchored surface. */}
       <div className="flex-1 flex overflow-hidden">
+        <PipelineConsole
+          state={pipeline}
+          candidateMode={candidateMode}
+          onCandidateModeChange={setCandidateMode}
+          onOpenLint={() => setLintOpen(true)}
+          onOpenRescue={() => setRescueOpen(true)}
+          onOpenAsk={() => setAskOpen(true)}
+        />
         <div className="flex-1 min-w-0 relative bg-[#0b0d12]">
           {loading ? (
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
@@ -902,21 +850,20 @@ export default function GraphPage() {
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
                 <button
-                  onClick={handleScan}
-                  disabled={scanning}
+                  onClick={handleRunNextStep}
+                  disabled={nextStepRunning || pipeline.nextStep.disabled}
                   className="inline-flex items-center gap-2 text-sm font-medium text-white bg-indigo-500 hover:bg-indigo-400 px-4 py-2.5 rounded-xl transition-colors disabled:opacity-50 shadow-lg shadow-indigo-500/20"
                 >
-                  {scanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-                  {scanning ? '扫描中…' : '扫描目录'}
+                  {nextStepRunning ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <ArrowRight size={14} />
+                  )}
+                  {pipeline.nextStep.label}
                 </button>
-                <button
-                  onClick={handleProcess}
-                  disabled={starting || !!status?.running}
-                  className="inline-flex items-center gap-2 text-sm text-slate-300 hover:text-white bg-slate-800/60 hover:bg-slate-700/80 px-4 py-2.5 rounded-xl transition-colors disabled:opacity-50"
-                >
-                  <Play size={14} />
-                  开始处理
-                </button>
+                <span className="text-xs text-slate-500 max-w-sm text-center">
+                  {pipeline.nextStep.reason}
+                </span>
               </div>
             </div>
           ) : (
@@ -941,14 +888,6 @@ export default function GraphPage() {
           initialTab={drawerInitialTab}
         />
       </div>
-
-      <CandidatePanel
-        candidateMode={candidateMode}
-        onCandidateModeChange={setCandidateMode}
-        onOpenRescue={() => setRescueOpen(true)}
-        onPromotionRunFinished={loadGraph}
-        viewKind={viewKind}
-      />
 
       <RejectedRescueModal
         open={rescueOpen}
@@ -1002,6 +941,86 @@ export default function GraphPage() {
         }}
         onSubmit={handleSaveManualConcept}
       />
+    </div>
+  )
+}
+
+// Top "下一步建议" banner — one always-visible CTA that adapts to whichever
+// stage the pipeline state machine recommends. Compact and unobtrusive:
+// 4 colored dots (stage-state indicators) + headline reason + a single CTA.
+function NextStepBanner({
+  nextStep,
+  stages,
+  running,
+  onRun,
+}: {
+  nextStep: ReturnType<typeof usePipelineState>['nextStep']
+  stages: ReturnType<typeof usePipelineState>['stages']
+  running: boolean
+  onRun: () => void
+}) {
+  const palette = nextStep.tone === 'indigo'
+    ? 'border-indigo-500/40 bg-indigo-500/[0.06]'
+    : nextStep.tone === 'amber'
+      ? 'border-amber-500/40 bg-amber-500/[0.06]'
+      : nextStep.tone === 'emerald'
+        ? 'border-emerald-500/40 bg-emerald-500/[0.05]'
+        : 'border-slate-800 bg-slate-900/40'
+  const btnPalette = nextStep.disabled
+    ? 'bg-slate-800/60 text-slate-400 border border-slate-700 cursor-not-allowed'
+    : nextStep.tone === 'indigo'
+      ? 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-lg shadow-indigo-500/20'
+      : nextStep.tone === 'amber'
+        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20'
+        : 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
+
+  return (
+    <div className={`border-b ${palette} px-6 py-2 flex items-center gap-4`}>
+      {/* Stage state pills — at-a-glance summary of all four stages. */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {stages.map(s => (
+          <span
+            key={s.id}
+            title={`${s.index} ${s.label}: ${s.headline}`}
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10.5px] tabular-nums ${
+              s.tone === 'ok'
+                ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+                : s.tone === 'warning'
+                  ? 'bg-amber-500/10 text-amber-300 border border-amber-500/30'
+                  : s.tone === 'running'
+                    ? 'bg-indigo-500/15 text-indigo-200 border border-indigo-500/40'
+                    : s.tone === 'danger'
+                      ? 'bg-rose-500/10 text-rose-300 border border-rose-500/30'
+                      : 'bg-slate-800/40 text-slate-500 border border-slate-700/60'
+            }`}
+          >
+            <span className="font-mono">{s.index}</span>
+            <span className="font-medium">{s.label}</span>
+            <span className="opacity-80">·</span>
+            <span>{s.headline}</span>
+          </span>
+        ))}
+      </div>
+
+      <div className="flex-1 min-w-0 text-[12px] text-slate-300 truncate">
+        <span className="text-slate-500 mr-2">下一步建议：</span>
+        {nextStep.reason}
+      </div>
+
+      <button
+        onClick={onRun}
+        disabled={nextStep.disabled || running || nextStep.busy}
+        className={`inline-flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-lg shrink-0 transition-colors ${btnPalette} disabled:opacity-60`}
+      >
+        {running || nextStep.busy ? (
+          <Loader2 size={13} className="animate-spin" />
+        ) : nextStep.disabled ? (
+          <CheckCircle2 size={13} />
+        ) : (
+          <ArrowRight size={13} />
+        )}
+        {nextStep.label}
+      </button>
     </div>
   )
 }

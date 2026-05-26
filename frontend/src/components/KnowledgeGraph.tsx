@@ -607,8 +607,9 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   return (
     <div className="relative w-full h-full">
       <div ref={containerRef} className="w-full h-full" />
-      {/* Legend — compact horizontal strip at bottom-right; the bottom-left
-          area is reserved for the CandidatePanel floating card. */}
+      {/* Legend — compact horizontal strip at bottom-right; the left rail
+          (PipelineConsole) handles all stage controls so this area can stay
+          minimal. */}
       <div className="absolute bottom-3 right-3 bg-slate-900/70 backdrop-blur rounded-lg px-2.5 py-1.5 border border-slate-800/80">
         <div className="flex items-center gap-3">
           {['paper', 'concept', 'technique', 'dataset'].map(type => (
