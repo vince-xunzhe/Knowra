@@ -436,30 +436,64 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
 
 function DistPie({ data }: { data: DashboardSlice[] }) {
   if (data.length === 0) return <EmptyState text="暂无数据" />
+  // Pre-compute total so the legend can show percentages. The recharts
+  // tooltip already shows raw values, so percentages here are the
+  // additive context the user actually misses.
+  const total = data.reduce((s, d) => s + d.value, 0) || 1
   return (
-    <div className="w-full h-[200px]">
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="value"
-            nameKey="label"
-            cx="50%"
-            cy="50%"
-            outerRadius="80%"
-            label={{ fill: '#cbd5e1', fontSize: 11 }}
-          >
-            {data.map((_, i) => (
-              <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
-            ))}
-          </Pie>
-          <Tooltip
-            contentStyle={TOOLTIP_CONTENT_STYLE}
-            itemStyle={TOOLTIP_ITEM_STYLE}
-            labelStyle={TOOLTIP_LABEL_STYLE}
-          />
-        </PieChart>
-      </ResponsiveContainer>
+    <div className="w-full">
+      <div className="w-full h-[200px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="value"
+              nameKey="label"
+              cx="50%"
+              cy="50%"
+              outerRadius="80%"
+              label={{ fill: '#cbd5e1', fontSize: 11 }}
+            >
+              {data.map((_, i) => (
+                <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
+              ))}
+            </Pie>
+            <Tooltip
+              contentStyle={TOOLTIP_CONTENT_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      {/* Color → category legend. Recharts' built-in <Legend> overlaps
+          the chart at small heights, so we render a flex-wrap of chips
+          beneath the pie instead. Same `i % palette.length` indexing
+          as the Cells above keeps colors in sync. */}
+      <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+        {data.map((slice, i) => {
+          const pct = Math.round((slice.value / total) * 100)
+          return (
+            <li
+              key={`${slice.label}-${i}`}
+              className="inline-flex items-baseline gap-1.5"
+            >
+              <span
+                aria-hidden
+                className="h-2 w-2 shrink-0 self-center rounded-full"
+                style={{ background: PIE_PALETTE[i % PIE_PALETTE.length] }}
+              />
+              <span className="max-w-[10rem] truncate text-slate-300" title={slice.label}>
+                {slice.label}
+              </span>
+              <span className="text-slate-500 tabular-nums">
+                {slice.value}
+                <span className="ml-0.5 text-slate-600">·{pct}%</span>
+              </span>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
