@@ -467,33 +467,35 @@ function DistPie({ data }: { data: DashboardSlice[] }) {
         </ResponsiveContainer>
       </div>
       {/* Color → category legend. Recharts' built-in <Legend> overlaps
-          the chart at small heights, so we render a flex-wrap of chips
+          the chart at small heights, so we render bordered chips
           beneath the pie instead. Same `i % palette.length` indexing
-          as the Cells above keeps colors in sync. */}
-      <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+          as the Cells above keeps colors in sync. Chip styling matches
+          the existing CompileBucketView so the dashboard's color
+          vocabulary stays consistent. */}
+      <div className="mt-3 flex flex-wrap gap-1.5">
         {data.map((slice, i) => {
           const pct = Math.round((slice.value / total) * 100)
           return (
-            <li
+            <div
               key={`${slice.label}-${i}`}
-              className="inline-flex items-baseline gap-1.5"
+              className="inline-flex items-baseline gap-1.5 rounded-md border border-slate-800 bg-slate-950/40 px-2 py-1"
+              title={`${slice.label} · ${slice.value} · ${pct}%`}
             >
               <span
                 aria-hidden
                 className="h-2 w-2 shrink-0 self-center rounded-full"
                 style={{ background: PIE_PALETTE[i % PIE_PALETTE.length] }}
               />
-              <span className="max-w-[10rem] truncate text-slate-300" title={slice.label}>
+              <span className="max-w-[10rem] truncate text-[11.5px] text-slate-200">
                 {slice.label}
               </span>
-              <span className="text-slate-500 tabular-nums">
-                {slice.value}
-                <span className="ml-0.5 text-slate-600">·{pct}%</span>
+              <span className="text-[10.5px] text-slate-500 tabular-nums">
+                {slice.value}·{pct}%
               </span>
-            </li>
+            </div>
           )
         })}
-      </ul>
+      </div>
     </div>
   )
 }
