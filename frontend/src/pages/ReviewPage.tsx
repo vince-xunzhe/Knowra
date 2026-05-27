@@ -723,11 +723,14 @@ function FirstPagePreview({
         icon={<FileText size={14} />}
         title="首页预览"
         action={
+          // Emerald tint to draw the eye — this is the primary "open
+          // the PDF for side-by-side reading" entry point and the user
+          // wanted it visually prominent.
           <button
             type="button"
             onClick={onOpenPdf}
             title="在右侧浮窗内浏览 PDF，可缩放、点击外部关闭并保留位置"
-            className="inline-flex items-center gap-1 rounded-md border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-indigo-500/40 hover:text-white"
+            className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-200 transition-colors hover:border-emerald-400/70 hover:bg-emerald-500/20 hover:text-emerald-100"
           >
             <Maximize2 size={11} /> 展开 PDF
           </button>
@@ -738,7 +741,7 @@ function FirstPagePreview({
             type="button"
             onClick={onOpenPdf}
             title="点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）"
-            className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-emerald-500/60 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
           >
             <img
               src={firstPageUrl(paper.id)}
