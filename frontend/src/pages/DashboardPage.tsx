@@ -55,6 +55,22 @@ const PIE_PALETTE = [
   '#6366f1', '#22c55e', '#f59e0b', '#ec4899',
   '#14b8a6', '#a855f7', '#ef4444', '#94a3b8',
 ]
+
+// Shared tooltip styling for every recharts <Tooltip>. Recharts' default
+// item text color is black, which is invisible on the dark dashboard
+// background — every Tooltip on the page MUST spread these so labels
+// + values are readable. See the user-reported bug where pie-slice
+// hover showed a tooltip box with no visible content.
+const TOOLTIP_CONTENT_STYLE = {
+  background: '#0f1117',
+  border: '1px solid #334155',
+  borderRadius: 6,
+  fontSize: 12,
+  color: '#cbd5e1',
+} as const
+const TOOLTIP_ITEM_STYLE = { color: '#e2e8f0' } as const
+const TOOLTIP_LABEL_STYLE = { color: '#cbd5e1', fontWeight: 500 } as const
+
 export default function DashboardPage() {
   const [data, setData] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -345,13 +361,9 @@ function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
             fillOpacity={0.15}
           />
           <Tooltip
-            contentStyle={{
-              background: '#0f1117',
-              border: '1px solid #334155',
-              borderRadius: 6,
-              fontSize: 12,
-            }}
-            labelStyle={{ color: '#cbd5e1' }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
             formatter={((value: unknown, name: unknown, item: unknown) => {
               // Recharts gives us the normalized value (0-1) per series;
               // show the raw counts/density in the tooltip instead.
@@ -387,13 +399,9 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
           <XAxis dataKey="week" tick={{ fill: '#94a3b8', fontSize: 11 }} />
           <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
           <Tooltip
-            contentStyle={{
-              background: '#0f1117',
-              border: '1px solid #334155',
-              borderRadius: 6,
-              fontSize: 12,
-            }}
-            labelStyle={{ color: '#cbd5e1' }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Line
@@ -446,12 +454,9 @@ function DistPie({ data }: { data: DashboardSlice[] }) {
             ))}
           </Pie>
           <Tooltip
-            contentStyle={{
-              background: '#0f1117',
-              border: '1px solid #334155',
-              borderRadius: 6,
-              fontSize: 12,
-            }}
+            contentStyle={TOOLTIP_CONTENT_STYLE}
+            itemStyle={TOOLTIP_ITEM_STYLE}
+            labelStyle={TOOLTIP_LABEL_STYLE}
           />
         </PieChart>
       </ResponsiveContainer>
@@ -526,12 +531,9 @@ function CurationPanel({
               }
             />
             <Tooltip
-              contentStyle={{
-                background: '#0f1117',
-                border: '1px solid #334155',
-                borderRadius: 6,
-                fontSize: 12,
-              }}
+              contentStyle={TOOLTIP_CONTENT_STYLE}
+              itemStyle={TOOLTIP_ITEM_STYLE}
+              labelStyle={TOOLTIP_LABEL_STYLE}
             />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {byKeys.map((by, i) => (
@@ -704,12 +706,9 @@ function LLMUsagePanel({ usage }: { usage: DashboardSummary['llm_usage'] }) {
               <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={formatTokens} />
               <YAxis type="category" dataKey="task" tick={{ fill: '#cbd5e1', fontSize: 11 }} width={100} />
               <Tooltip
-                contentStyle={{
-                  background: '#0f1117',
-                  border: '1px solid #334155',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_CONTENT_STYLE}
+                itemStyle={TOOLTIP_ITEM_STYLE}
+                labelStyle={TOOLTIP_LABEL_STYLE}
                 formatter={(value, name, payload) => {
                   if (name === 'tokens') {
                     const row = payload?.payload as Record<string, unknown> | undefined
