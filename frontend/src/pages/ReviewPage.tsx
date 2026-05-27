@@ -26,7 +26,7 @@ import PaperProcessBadge, {
   summarizePaperError,
   type ProcessStatusHint,
 } from '../components/PaperProcessBadge'
-import PdfLightbox from '../components/PdfLightbox'
+import PdfSidePanel, { type PdfViewState } from '../components/PdfSidePanel'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 type Technique = { name?: string; aliases?: string[]; role?: string; builds_on?: string[] }
@@ -111,6 +111,36 @@ export default function ReviewPage() {
   const [reprocessing, setReprocessing] = useState(false)
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [processStatus, setProcessStatus] = useState<ProcessStatusHint | null>(null)
+
+  // ── In-page PDF reader ─────────────────────────────────────────
+  // The right-side PDF panel is opened from the 首页预览 block in the
+  // current paper detail. When it opens we collapse the paper-list
+  // aside to free horizontal space so the structured extraction column
+  // stays readable while the PDF is on screen.
+  //
+  // `pdfSession` is a "currently-open" descriptor: it carries the
+  // paperId AND the initialState we want to restore *into the panel*,
+  // resolved at open time. Keeping initialState in React state (rather
+  // than reading a ref at render) avoids the react-hooks/refs lint and
+  // makes the panel's restored snapshot deterministic per session.
+  // Per-paper persistence lives in a ref because mutating it doesn't
+  // need to trigger a re-render.
+  const pdfViewStatesRef = useRef<Map<number, PdfViewState>>(new Map())
+  const [pdfSession, setPdfSession] = useState<{
+    paperId: number
+    initialState: PdfViewState | null
+  } | null>(null)
+  const handleOpenPdf = useCallback((paperId: number) => {
+    const restored = pdfViewStatesRef.current.get(paperId) ?? null
+    setPdfSession({ paperId, initialState: restored })
+  }, [])
+  const handleClosePdf = useCallback((finalState: PdfViewState) => {
+    setPdfSession(curr => {
+      if (curr) pdfViewStatesRef.current.set(curr.paperId, finalState)
+      return null
+    })
+  }, [])
+  const pdfOpenPaperId = pdfSession?.paperId ?? null
 
   useEffect(() => {
     listPapers().then(ps => {
@@ -300,8 +330,17 @@ export default function ReviewPage() {
   return (
     <LightboxProvider>
     <div className="flex h-full min-h-0 flex-col text-slate-200 lg:flex-row">
-      {/* Left list */}
-      <aside className="flex h-[17.5rem] w-full shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:h-auto lg:w-72 lg:border-b-0 lg:border-r xl:w-80">
+      {/* Left list — collapses to zero width when the PDF side panel is
+          open so the structured extraction column has more room. The
+          width transition is what gives the visual "向左收缩" effect the
+          user asked for. */}
+      <aside
+        className={`flex shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:border-b-0 lg:border-r transition-[width,height,border] duration-200 ease-out ${
+          pdfOpenPaperId != null
+            ? 'h-0 w-full lg:h-auto lg:w-0 lg:border-r-0'
+            : 'h-[17.5rem] w-full lg:h-auto lg:w-72 xl:w-80'
+        }`}
+      >
         <div className="p-4 border-b border-slate-800/80 space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <div>
@@ -619,6 +658,7 @@ export default function ReviewPage() {
                     <FirstPagePreview
                       paper={visibleDetail}
                       keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
+                      onOpenPdf={() => handleOpenPdf(visibleDetail.id)}
                     />
                   </div>
                 )}
@@ -643,21 +683,39 @@ export default function ReviewPage() {
         )}
       </section>
 
+      {/* Right-side PDF reader. Keyed by paperId so switching papers
+          (rare while open, since the aside is collapsed) gets a fresh
+          component instance with its own restored view state. */}
+      {pdfSession && (
+        <PdfSidePanel
+          key={pdfSession.paperId}
+          src={pdfFileUrl(pdfSession.paperId)}
+          title={
+            papers.find(p => p.id === pdfSession.paperId)?.title
+            || papers.find(p => p.id === pdfSession.paperId)?.filename
+            || ''
+          }
+          externalHref={pdfFileUrl(pdfSession.paperId)}
+          initialState={pdfSession.initialState}
+          onClose={handleClosePdf}
+        />
+      )}
+
     </div>
     </LightboxProvider>
   )
 }
 
 function FirstPagePreview({
-  paper, keywords,
+  paper, keywords, onOpenPdf,
 }: {
   paper: PaperDetail
   keywords: string[]
+  /** Opens the page-level PDF side panel for this paper. Owned by
+   *  ReviewPage so the panel can collapse the paper-list aside and
+   *  persist view state across opens. */
+  onOpenPdf: () => void
 }) {
-  // Open an in-app PDF reader (with zoom + position-preserving) rather
-  // than navigating to a new tab. Falls back to the new-tab link via
-  // the lightbox's "在新标签页打开" button if rendering fails.
-  const [pdfOpen, setPdfOpen] = useState(false)
   return (
     <div className="space-y-5">
       <PaperChatBox key={paper.id} paper={paper} />
@@ -667,19 +725,19 @@ function FirstPagePreview({
         action={
           <button
             type="button"
-            onClick={() => setPdfOpen(true)}
-            title="在应用内全屏浏览 PDF，可缩放、保留阅读位置"
+            onClick={onOpenPdf}
+            title="在右侧浮窗内浏览 PDF，可缩放、点击外部关闭并保留位置"
             className="inline-flex items-center gap-1 rounded-md border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-indigo-500/40 hover:text-white"
           >
-            <Maximize2 size={11} /> 全屏阅读
+            <Maximize2 size={11} /> 展开 PDF
           </button>
         }
       >
         <div className="space-y-4">
           <button
             type="button"
-            onClick={() => setPdfOpen(true)}
-            title="点击展开 PDF 全文（支持缩放与跨缩放保留位置）"
+            onClick={onOpenPdf}
+            title="点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）"
             className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
           >
             <img
@@ -702,14 +760,6 @@ function FirstPagePreview({
           )}
         </div>
       </ReviewBlock>
-      {pdfOpen && (
-        <PdfLightbox
-          src={pdfFileUrl(paper.id)}
-          title={paper.title || paper.filename}
-          externalHref={pdfFileUrl(paper.id)}
-          onClose={() => setPdfOpen(false)}
-        />
-      )}
     </div>
   )
 }
