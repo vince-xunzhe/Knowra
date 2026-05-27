@@ -26,6 +26,7 @@ import PaperProcessBadge, {
   summarizePaperError,
   type ProcessStatusHint,
 } from '../components/PaperProcessBadge'
+import PdfLightbox from '../components/PdfLightbox'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 type Technique = { name?: string; aliases?: string[]; role?: string; builds_on?: string[] }
@@ -653,18 +654,40 @@ function FirstPagePreview({
   paper: PaperDetail
   keywords: string[]
 }) {
+  // Open an in-app PDF reader (with zoom + position-preserving) rather
+  // than navigating to a new tab. Falls back to the new-tab link via
+  // the lightbox's "在新标签页打开" button if rendering fails.
+  const [pdfOpen, setPdfOpen] = useState(false)
   return (
     <div className="space-y-5">
       <PaperChatBox key={paper.id} paper={paper} />
-      <ReviewBlock icon={<FileText size={14} />} title="首页预览">
+      <ReviewBlock
+        icon={<FileText size={14} />}
+        title="首页预览"
+        action={
+          <button
+            type="button"
+            onClick={() => setPdfOpen(true)}
+            title="在应用内全屏浏览 PDF，可缩放、保留阅读位置"
+            className="inline-flex items-center gap-1 rounded-md border border-slate-700/60 bg-slate-900/60 px-2 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-indigo-500/40 hover:text-white"
+          >
+            <Maximize2 size={11} /> 全屏阅读
+          </button>
+        }
+      >
         <div className="space-y-4">
-          <a href={pdfFileUrl(paper.id)} target="_blank" rel="noreferrer" className="block">
+          <button
+            type="button"
+            onClick={() => setPdfOpen(true)}
+            title="点击展开 PDF 全文（支持缩放与跨缩放保留位置）"
+            className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-indigo-500/60 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+          >
             <img
               src={firstPageUrl(paper.id)}
               alt="first page"
-              className="max-h-[44vh] w-full rounded-lg border border-slate-800 object-contain shadow-xl transition-colors hover:border-indigo-500/60"
+              className="max-h-[44vh] w-full object-contain shadow-xl"
             />
-          </a>
+          </button>
           {keywords.length > 0 && (
             <div>
               <p className="section-label mb-2">关键词</p>
@@ -679,6 +702,14 @@ function FirstPagePreview({
           )}
         </div>
       </ReviewBlock>
+      {pdfOpen && (
+        <PdfLightbox
+          src={pdfFileUrl(paper.id)}
+          title={paper.title || paper.filename}
+          externalHref={pdfFileUrl(paper.id)}
+          onClose={() => setPdfOpen(false)}
+        />
+      )}
     </div>
   )
 }
@@ -1496,8 +1527,16 @@ function CodeBlock({ code }: { code: string }) {
 }
 
 function ReviewBlock({
-  icon, title, meta, children,
-}: { icon: React.ReactNode; title: string; meta?: string; children: React.ReactNode }) {
+  icon, title, meta, action, children,
+}: {
+  icon: React.ReactNode
+  title: string
+  meta?: string
+  /** Optional right-aligned slot in the header for an inline action
+   *  button (e.g. "全屏阅读"). Renders to the right of `meta`. */
+  action?: React.ReactNode
+  children: React.ReactNode
+}) {
   return (
     <section className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/35 shadow-[0_12px_28px_rgba(2,6,23,0.16)]">
       <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-3 py-2.5 sm:px-4">
@@ -1510,6 +1549,7 @@ function ReviewBlock({
             {meta}
           </span>
         )}
+        {action && <div className={meta ? 'ml-2' : 'ml-auto'}>{action}</div>}
       </div>
       <div className="px-3 py-4 text-sm sm:px-4">{children}</div>
     </section>
