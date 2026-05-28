@@ -296,7 +296,7 @@ export default function ReviewPage() {
       setActionNotice({
         tone: 'info',
         title: `已提交重新处理：${visibleDetail.title || visibleDetail.filename}`,
-        detail: '论文状态已回退为待处理，后端完成后会在论文库/回顾页更新。',
+        detail: '论文状态已回退为待处理，后端完成后会在资料库/回顾页更新。',
       })
     } catch (error) {
       setActionNotice({
@@ -621,7 +621,7 @@ export default function ReviewPage() {
                     </div>
                   ) : !visibleDetail.raw_llm_response ? (
                     <div className="text-sm text-slate-500 py-8 text-center">
-                      该论文尚未处理。回到论文库点击「立即处理」。
+                      该论文尚未处理。回到资料库点击「立即处理」。
                     </div>
                   ) : parsed ? (
                     <StructuredBody data={parsed} detail={visibleDetail} />

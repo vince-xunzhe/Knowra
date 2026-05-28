@@ -324,7 +324,7 @@ export default function PapersPage() {
         <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-4">
           <div className="flex flex-wrap items-start gap-4">
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold text-white tracking-tight">论文库</h1>
+              <h1 className="text-xl font-semibold text-white tracking-tight">资料库</h1>
               <p className="text-sm text-slate-500 mt-1">
                 浏览扫描到的论文，查看处理状态，并快速进入详情或重试失败项。
               </p>
