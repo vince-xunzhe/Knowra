@@ -1346,77 +1346,6 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
         </ReviewBlock>
       )}
 
-      {/* Techniques */}
-      {Array.isArray(data.techniques) && data.techniques.length > 0 && (
-        <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
-          <div className="responsive-card-grid">
-            {data.techniques.map((t, i) => (
-              <div
-                key={i}
-                className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3 transition-colors hover:border-slate-700"
-              >
-                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-                  <span className="text-sm font-semibold leading-6 text-emerald-200">{t.name}</span>
-                  {t.role && <span className="text-xs leading-5 text-slate-500">{t.role}</span>}
-                </div>
-                {Array.isArray(t.aliases) && t.aliases.length > 0 && (
-                  <p className="mt-1 text-xs leading-5 text-slate-500">
-                    <span className="text-slate-600">别名 </span>
-                    {t.aliases.join(' · ')}
-                  </p>
-                )}
-                {Array.isArray(t.builds_on) && t.builds_on.length > 0 && (
-                  <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-                    <span className="text-slate-600">基于</span>
-                    {t.builds_on.map((b, j) => (
-                      <span key={j} className="rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-[11px] text-emerald-200/80">
-                        {b}
-                      </span>
-                    ))}
-                  </p>
-                )}
-              </div>
-            ))}
-          </div>
-        </ReviewBlock>
-      )}
-
-      {/* Datasets + Baselines */}
-      {((Array.isArray(data.datasets) && data.datasets.length) ||
-        (Array.isArray(data.baselines) && data.baselines.length)) && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          {Array.isArray(data.datasets) && data.datasets.length > 0 && (
-            <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
-              <ul className="space-y-2.5">
-                {data.datasets.map((d, i) => {
-                  const name = typeof d === 'string' ? d : d.name
-                  const purpose = typeof d === 'object' ? d.purpose || d.usage : null
-                  return (
-                    <li key={i} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2">
-                      <span className="text-sm font-medium text-amber-200">
-                        {name}
-                      </span>
-                      {purpose && <span className="text-xs text-slate-500">{purpose}</span>}
-                    </li>
-                  )
-                })}
-              </ul>
-            </ReviewBlock>
-          )}
-          {Array.isArray(data.baselines) && data.baselines.length > 0 && (
-            <ReviewBlock icon={<Swords size={14} />} title="对比基线" meta={`${data.baselines.length}`}>
-              <div className="flex flex-wrap gap-2">
-                {data.baselines.map((b, i) => (
-                  <span key={i} className="rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-pink-200">
-                    {typeof b === 'string' ? b : b.name}
-                  </span>
-                ))}
-              </div>
-            </ReviewBlock>
-          )}
-        </div>
-      )}
-
       {/* Contributions */}
       {Array.isArray(data.contributions) && data.contributions.length > 0 && (
         <ReviewBlock icon={<Award size={14} />} title="主要贡献" meta={`${data.contributions.length}`}>
@@ -1457,6 +1386,80 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
             ))}
           </div>
         </ReviewBlock>
+      )}
+
+      {/* Implementation details (techniques + datasets + baselines).
+          Moved below contributions/findings so the narrative reads
+          "what / why / how / takeaways" first, with reference-style
+          implementation specifics deferred to the bottom for readers
+          who want to dig into reproducibility. */}
+      {Array.isArray(data.techniques) && data.techniques.length > 0 && (
+        <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
+          <div className="responsive-card-grid">
+            {data.techniques.map((t, i) => (
+              <div
+                key={i}
+                className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3 transition-colors hover:border-slate-700"
+              >
+                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                  <span className="text-sm font-semibold leading-6 text-emerald-200">{t.name}</span>
+                  {t.role && <span className="text-xs leading-5 text-slate-500">{t.role}</span>}
+                </div>
+                {Array.isArray(t.aliases) && t.aliases.length > 0 && (
+                  <p className="mt-1 text-xs leading-5 text-slate-500">
+                    <span className="text-slate-600">别名 </span>
+                    {t.aliases.join(' · ')}
+                  </p>
+                )}
+                {Array.isArray(t.builds_on) && t.builds_on.length > 0 && (
+                  <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                    <span className="text-slate-600">基于</span>
+                    {t.builds_on.map((b, j) => (
+                      <span key={j} className="rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-[11px] text-emerald-200/80">
+                        {b}
+                      </span>
+                    ))}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </ReviewBlock>
+      )}
+
+      {((Array.isArray(data.datasets) && data.datasets.length) ||
+        (Array.isArray(data.baselines) && data.baselines.length)) && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {Array.isArray(data.datasets) && data.datasets.length > 0 && (
+            <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
+              <ul className="space-y-2.5">
+                {data.datasets.map((d, i) => {
+                  const name = typeof d === 'string' ? d : d.name
+                  const purpose = typeof d === 'object' ? d.purpose || d.usage : null
+                  return (
+                    <li key={i} className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2">
+                      <span className="text-sm font-medium text-amber-200">
+                        {name}
+                      </span>
+                      {purpose && <span className="text-xs text-slate-500">{purpose}</span>}
+                    </li>
+                  )
+                })}
+              </ul>
+            </ReviewBlock>
+          )}
+          {Array.isArray(data.baselines) && data.baselines.length > 0 && (
+            <ReviewBlock icon={<Swords size={14} />} title="对比基线" meta={`${data.baselines.length}`}>
+              <div className="flex flex-wrap gap-2">
+                {data.baselines.map((b, i) => (
+                  <span key={i} className="rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-pink-200">
+                    {typeof b === 'string' ? b : b.name}
+                  </span>
+                ))}
+              </div>
+            </ReviewBlock>
+          )}
+        </div>
       )}
 
       {/* Historical position */}
