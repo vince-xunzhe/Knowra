@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
+  PanelRightOpen, PanelRightClose, Pencil,
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
@@ -40,6 +41,10 @@ export default function PapersPage() {
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [bulkProcessingPending, setBulkProcessingPending] = useState(false)
   const [bulkRetrying, setBulkRetrying] = useState(false)
+  // Global Prompt column collapses to a thin icon strip by default so
+  // the paper grid gets the whole horizontal width. Most users don't
+  // edit the extraction prompt every visit; surface it on demand.
+  const [promptOpen, setPromptOpen] = useState(false)
   const wasRunningRef = useRef(false)
 
   const load = useCallback(async () => {
@@ -490,18 +495,49 @@ export default function PapersPage() {
         </div>
       </div>
 
-      {/* Right column: dedicated to the global extraction Prompt editor.
-          Per-paper detail used to share this column, but it now lives as
-          a compact strip in the left column above the grid. */}
-      <aside className="w-[24rem] max-w-[38vw] bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden shrink-0">
-        <div className="px-5 py-4 border-b border-slate-800/80">
-          <p className="section-label mb-1">全局 Prompt</p>
-          <p className="text-sm text-slate-500 leading-relaxed">
-            论文抽取使用的指令，所有论文共享。
-          </p>
-        </div>
-        <PromptPanel />
-      </aside>
+      {/* Right column: global extraction Prompt editor. Collapses to a
+          12-wide icon rail by default so the paper grid claims the full
+          horizontal width; click the chevron to expand back to ~24rem.
+          The Prompt rarely changes between visits, so keeping it
+          hidden-but-discoverable matches actual usage frequency. */}
+      {promptOpen ? (
+        <aside className="w-[24rem] max-w-[38vw] bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out">
+          <div className="px-5 py-4 border-b border-slate-800/80 flex items-start gap-3">
+            <div className="min-w-0 flex-1">
+              <p className="section-label mb-1">全局 Prompt</p>
+              <p className="text-sm text-slate-500 leading-relaxed">
+                论文抽取使用的指令，所有论文共享。
+              </p>
+            </div>
+            <button
+              onClick={() => setPromptOpen(false)}
+              title="收起到右侧图标条"
+              className="shrink-0 p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-slate-800/60"
+            >
+              <PanelRightClose size={14} />
+            </button>
+          </div>
+          <PromptPanel />
+        </aside>
+      ) : (
+        <aside className="w-12 bg-[#0f1117] border-l border-slate-800/80 flex flex-col items-center py-4 gap-3 shrink-0 transition-[width] duration-200 ease-out">
+          <button
+            onClick={() => setPromptOpen(true)}
+            title="展开全局 Prompt 编辑器"
+            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800/60"
+          >
+            <PanelRightOpen size={16} />
+          </button>
+          <div className="w-full border-t border-slate-800/80" />
+          <button
+            onClick={() => setPromptOpen(true)}
+            title="全局 Prompt"
+            className="p-1.5 text-slate-500 hover:text-slate-200 rounded-md hover:bg-slate-800/60"
+          >
+            <Pencil size={14} />
+          </button>
+        </aside>
+      )}
     </div>
   )
 }
