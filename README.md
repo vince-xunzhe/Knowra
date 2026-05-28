@@ -22,6 +22,63 @@ For installation, environment setup, and startup commands, see [Install](INSTALL
 - **Paper review with repair + follow-up**: each paper has structured extraction, editable raw response, note-taking, first-page preview, paper record markdown, and per-paper follow-up chat.
 - **Living knowledge graph**: promoted concepts, similarity edges, search/focus, wiki-backed node details, and rebuildable embedding similarity without re-running extraction.
 
+## Pages & Screenshots
+
+The app is organized as five pages reachable from the left nav (`知识 / 论文 / 回顾 / 看板 / 设置`). Each page is a self-contained workspace; the cross-cutting state (LLM call telemetry, wiki compile progress, processing status) flows through the same backend.
+
+### 知识 · Knowledge Graph
+
+Main canvas. Builds and explores the compiled knowledge layer (papers + concepts + edges) and hosts the operations that take a corpus from "raw PDFs in a folder" to "curated, queryable wiki".
+
+![Knowra knowledge page — default view](docs/screenshots/01-graph-default.png)
+
+- **Pipeline Console (left rail)** — A guided 4-stage workflow (`① 录入 / ② 筛选 / ③ 编译 / ④ 健检`). Each stage has its own status badge (idle / running / warning / ok), the recommended next step glows, and clicking expands per-stage actions (scan + process, run promotion, recompile, run lint, etc.).
+
+  ![Pipeline Console expanded](docs/screenshots/02-graph-pipeline-console.png)
+
+- **Ask drawer** — Cross-wiki Q&A agent. The agent calls `list_wiki_index / search_wiki / read_wiki` tools against the compiled `.md` layer, returns a markdown answer with citations, exposes the tool trace, and lets you file a strong answer back as a concept page or export as a Marp deck / report.
+
+  ![Ask drawer with a session](docs/screenshots/03-graph-ask-drawer.png)
+
+- **Wiki health-check** — Rule layer + single agent call that surfaces thin pages (`待充实`), mergeable pairs (`可合并`), and missing connecting concepts (`待建概念`), plus 5 follow-up questions. Each item has an inline action (recompile / mark-accepted / merge / question → Ask).
+
+  ![Wiki health-check report](docs/screenshots/04-graph-lint-modal.png)
+
+### 论文 · Papers
+
+Paper library. Scans the configured PDF directory, displays per-paper processing state, lets you batch-process or reprocess, and surfaces failure summaries.
+
+![Papers library page](docs/screenshots/05-papers.png)
+
+### 回顾 · Review
+
+Per-paper deep-read workspace. Shows the structured extraction (problem / motivation / techniques / datasets / contributions / key findings / formulas) in cards, plus a personal-notes side column, an `Ask this paper` follow-up chat, and the first-page preview.
+
+![Review page — default view](docs/screenshots/06-review-default.png)
+
+- **In-app PDF side panel** — Click `展开 PDF` on the first-page thumbnail to open a right-anchored PDF reader. The paper-list column auto-collapses, the structured extraction stays visible on the left, and the PDF covers `个人笔记 + 首页预览` without occluding `核心贡献`. Zoom (`+ / − / 0`), wheel zoom (`Ctrl/⌘ + scroll`), and **position-preserving zoom**: the viewport stays anchored at the same paragraph across scale changes. Closing (Esc / X / click-outside) persists the per-paper scroll + scale so the next open resumes at the same place.
+
+  ![Review page — PDF side panel open](docs/screenshots/07-review-pdf-open.png)
+
+### 看板 · Dashboard
+
+Read-only data board for the whole knowledge base. Single backend aggregation endpoint feeds all widgets so every chart reflects one consistent snapshot.
+
+- **Top-6 knowledge directions** as a radar (papers / concepts / edge density per high-frequency tag, all normalized).
+- **Growth timelines** over the last 12 weeks (papers / concepts / edges), derived from existing timestamps.
+- **Distribution pies** with chip legends for `paper_category` and `node_type`, plus a tag-cloud Top-20.
+- **Curation health** (`status × promoted_by` stacked bar) and the oldest-pending age.
+- **Network structure** — top-10 hub concepts by degree, orphan count, average degree, relation-type mix.
+- **Compile & lint state** + **30-day LLM usage** (calls / tokens / latency by task and by model).
+
+![Dashboard page](docs/screenshots/08-dashboard.png)
+
+### 设置 · Settings
+
+Task-routed model gateway. Bind a model per logical task (`paper_extract / paper_chat / embedding / wiki_compile / ask_agent / ask_synthesis / promotion_judge / wiki_lint`), select among configured providers (OpenAI / OpenAI-compatible / local Codex CLI), run a provider health check, and tune the similarity threshold + maintenance actions.
+
+![Settings page](docs/screenshots/09-settings.png)
+
 ## End-to-End Flow
 
 ```mermaid
@@ -95,28 +152,6 @@ flowchart TD
 - **Output & loop**: writes `data/wiki/lint-report.md` (Obsidian-readable, links jump); the UI applies items inline and results flow back into the wiki.
 
 > Note: for a thin "single-source, already compiled, unchanged" concept, recompiling is essentially a no-op due to the content-signature cache — those are better merged or accepted; the health-check wording reflects that.
-
-## Pages At A Glance
-
-- **Knowledge Graph**: the main canvas for graph exploration, Ask, wiki health-check, wiki search, concept curation, and graph-level actions.
-- **Papers**: the paper library for scanning directories, checking processing state, and batch operations.
-- **Review**: per-paper workspace with structured extraction, raw response repair, notes, first-page preview, and paper follow-up chat.
-- **Ask drawer**: cross-wiki research assistant with saved sessions, trace inspection, and “file back as concept page”.
-- **Settings**: task-centric model routing, provider health checks, similarity threshold, and maintenance actions.
-
-## Screenshots
-
-### Knowledge Graph
-
-![Knowra graph page](docs/assets/knowledge-wiki-preview.png)
-
-### Paper Library
-
-![Knowra paper library page](docs/assets/knowledge-wiki-papers.png)
-
-### Paper Review
-
-![Knowra paper review page](docs/assets/knowledge-wiki-review.png)
 
 ## Typical Workflow
 
