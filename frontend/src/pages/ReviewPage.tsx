@@ -1346,22 +1346,62 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
         </ReviewBlock>
       )}
 
-      {/* Contributions */}
-      {Array.isArray(data.contributions) && data.contributions.length > 0 && (
-        <ReviewBlock icon={<Award size={14} />} title="主要贡献" meta={`${data.contributions.length}`}>
-          <ol className="space-y-2.5">
-            {data.contributions.map((c, i) => {
-              const text = typeof c === 'string' ? c : (c.short || c.detail || JSON.stringify(c))
-              return (
-                <li key={i} className="flex gap-3 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
-                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700/70 bg-slate-900 text-xs font-semibold text-indigo-200">
-                    {i + 1}
-                  </span>
-                  <p className="pt-0.5 leading-7 text-slate-200">{text}</p>
-                </li>
-              )
-            })}
-          </ol>
+      {/* Reading flow note: after the "what / why / how / experimental"
+          narrative, surface context (background → caveats → reference
+          impl) so the reader knows where this paper sits and what it
+          quietly assumes BEFORE they dive into takeaways. Then come
+          the takeaways (findings, contributions) and finally the
+          reproducibility-oriented inventory (techniques / datasets /
+          baselines). */}
+
+      {/* Historical position */}
+      {data.historical_position && (data.historical_position.builds_on || data.historical_position.inspired || data.historical_position.overall) && (
+        <ReviewBlock icon={<History size={14} />} title="背景地位">
+          <div className="space-y-3">
+            {data.historical_position.overall && (
+              <p className="prose-reading text-[14px] text-slate-200">{data.historical_position.overall}</p>
+            )}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {data.historical_position.builds_on && (
+                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
+                  <p className="section-label mb-1.5 text-slate-400">站在谁的肩上</p>
+                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.builds_on}</p>
+                </div>
+              )}
+              {data.historical_position.inspired && (
+                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
+                  <p className="section-label mb-1.5 text-fuchsia-300/80">启发了谁</p>
+                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.inspired}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </ReviewBlock>
+      )}
+
+      {/* Limitations */}
+      {data.limitations && (
+        <ReviewBlock icon={<AlertTriangle size={14} />} title="这里的坑（局限性）">
+          <p className="prose-reading text-[14px] text-amber-100/90">{data.limitations}</p>
+        </ReviewBlock>
+      )}
+
+      {/* PyTorch minimal implementation */}
+      {data.pytorch_snippet && data.pytorch_snippet.code && (
+        <ReviewBlock
+          icon={<Code2 size={14} />}
+          title="PyTorch 最简实现"
+          meta={data.pytorch_snippet.module_name}
+        >
+          <div className="space-y-3">
+            <CodeBlock code={data.pytorch_snippet.code} />
+            {data.pytorch_snippet.notes && (
+              <p className="text-xs leading-6 text-slate-500">
+                <span className="text-slate-400">笔记：</span>
+                {data.pytorch_snippet.notes}
+              </p>
+            )}
+          </div>
         </ReviewBlock>
       )}
 
@@ -1388,11 +1428,28 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
         </ReviewBlock>
       )}
 
-      {/* Implementation details (techniques + datasets + baselines).
-          Moved below contributions/findings so the narrative reads
-          "what / why / how / takeaways" first, with reference-style
-          implementation specifics deferred to the bottom for readers
-          who want to dig into reproducibility. */}
+      {/* Contributions */}
+      {Array.isArray(data.contributions) && data.contributions.length > 0 && (
+        <ReviewBlock icon={<Award size={14} />} title="主要贡献" meta={`${data.contributions.length}`}>
+          <ol className="space-y-2.5">
+            {data.contributions.map((c, i) => {
+              const text = typeof c === 'string' ? c : (c.short || c.detail || JSON.stringify(c))
+              return (
+                <li key={i} className="flex gap-3 rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-700/70 bg-slate-900 text-xs font-semibold text-indigo-200">
+                    {i + 1}
+                  </span>
+                  <p className="pt-0.5 leading-7 text-slate-200">{text}</p>
+                </li>
+              )
+            })}
+          </ol>
+        </ReviewBlock>
+      )}
+
+      {/* Implementation inventory — kept last so the narrative payoff
+          (findings + contributions) lands first; readers who want
+          reproducibility specifics drop down to these sections. */}
       {Array.isArray(data.techniques) && data.techniques.length > 0 && (
         <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
           <div className="responsive-card-grid">
@@ -1460,57 +1517,6 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
             </ReviewBlock>
           )}
         </div>
-      )}
-
-      {/* Historical position */}
-      {data.historical_position && (data.historical_position.builds_on || data.historical_position.inspired || data.historical_position.overall) && (
-        <ReviewBlock icon={<History size={14} />} title="背景地位">
-          <div className="space-y-3">
-            {data.historical_position.overall && (
-              <p className="prose-reading text-[14px] text-slate-200">{data.historical_position.overall}</p>
-            )}
-            <div className="grid gap-3 lg:grid-cols-2">
-              {data.historical_position.builds_on && (
-                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
-                  <p className="section-label mb-1.5 text-slate-400">站在谁的肩上</p>
-                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.builds_on}</p>
-                </div>
-              )}
-              {data.historical_position.inspired && (
-                <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
-                  <p className="section-label mb-1.5 text-fuchsia-300/80">启发了谁</p>
-                  <p className="text-sm leading-7 text-slate-300">{data.historical_position.inspired}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </ReviewBlock>
-      )}
-
-      {/* Limitations */}
-      {data.limitations && (
-        <ReviewBlock icon={<AlertTriangle size={14} />} title="这里的坑（局限性）">
-          <p className="prose-reading text-[14px] text-amber-100/90">{data.limitations}</p>
-        </ReviewBlock>
-      )}
-
-      {/* PyTorch minimal implementation */}
-      {data.pytorch_snippet && data.pytorch_snippet.code && (
-        <ReviewBlock
-          icon={<Code2 size={14} />}
-          title="PyTorch 最简实现"
-          meta={data.pytorch_snippet.module_name}
-        >
-          <div className="space-y-3">
-            <CodeBlock code={data.pytorch_snippet.code} />
-            {data.pytorch_snippet.notes && (
-              <p className="text-xs leading-6 text-slate-500">
-                <span className="text-slate-400">笔记：</span>
-                {data.pytorch_snippet.notes}
-              </p>
-            )}
-          </div>
-        </ReviewBlock>
       )}
 
       {/* Generated nodes */}
