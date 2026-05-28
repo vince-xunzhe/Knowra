@@ -11,11 +11,14 @@
 | 前缀 | 调用方 | 部署模式 |
 |---|---|---|
 | `/api/*` | 桌面端 React 前端 → 桌面端 FastAPI（localhost） | local |
-| `/api/sync/*` | 桌面端 FastAPI → 云 FastAPI | cloud（不是 local） |
+| `/api/sync/prepare` `/api/sync/commit` | 桌面端 FastAPI → 云 FastAPI | cloud（不是 local） |
 | `/api/cloud/*` | 移动端 RN → 云 FastAPI | cloud |
+| `<storage>.supabase.co/storage/...` | 桌面端 FastAPI 直传 `.md` 内容 | cloud（通过预签名 URL） |
 
 > **重要**：`/api/sync/*` 和 `/api/cloud/*` 都只在 cloud 部署模式下提供；
 > local 模式只暴露原有 `/api/*` 给桌面前端用。
+> `.md` 文件**不经过我们的 FastAPI**，桌面端用预签名 URL 直传 Storage，
+> 详见 §2。
 
 ---
 
@@ -38,50 +41,65 @@ JWT 失效 → 返回 `401 Unauthorized`：
 
 ---
 
-## 2. 桌面 → 云：`POST /api/sync/push`
+## 2. 桌面 → 云：3 步上传协议
 
-桌面端在 pipeline 跑完后自动调用；用户也能在 UI 上手动触发。
+桌面端在 pipeline 跑完后自动跑这套流程；用户也能在 UI 上手动触发。
 
-### 2.1 Request
+**为什么是 3 步而不是 1 步**：`.md` 文件通过 **Supabase Storage 预签名 URL 直传**，
+不经过我们的 FastAPI 服务器。这样云后端零带宽消耗、零内存峰值、文件级进度可见、
+增量检测靠 content_hash 跳过未变文件。
+
+```
+┌─────────────┐   1. prepare      ┌──────────────┐
+│  桌面端      │ ────────────────► │  云 FastAPI   │
+│             │   metadata only   │              │
+│             │ ◄──────────────── │              │
+│             │   signed URLs     │              │
+│             │                   └──────────────┘
+│             │   2. parallel PUT  ┌──────────────┐
+│             │ ────────────────► │  Supabase     │
+│             │   raw .md content │  Storage     │
+│             │ ◄──────────────── │              │
+│             │   200 OK          └──────────────┘
+│             │   3. commit       ┌──────────────┐
+│             │ ────────────────► │  云 FastAPI   │
+│             │   sync_session_id │              │
+│             │ ◄──────────────── │              │
+└─────────────┘   revision        └──────────────┘
+```
+
+### 2.1 Step 1：`POST /api/sync/prepare`
+
+桌面端发送增量的**全部元数据**（包括 wiki_files 的 content_hash 但不含 content）：
 
 ```http
-POST /api/sync/push
+POST /api/sync/prepare
 Authorization: Bearer <jwt>
 Content-Type: application/json
 
 {
-  "device_id": "fbb0e60e-4f3a-...",        // 桌面端首次启动时生成
+  "device_id": "fbb0e60e-4f3a-...",
   "since": "2026-05-27T10:30:00Z",         // null 表示全量
   "tables": {
-    "papers": [
-      {
-        "id": "0e8b...",
-        "user_id": "...",                  // 必须 == auth.uid()，否则被拒
-        "filepath": "/Users/.../foo.pdf",
-        "filename": "foo.pdf",
-        ...                                // 全字段
-        "updated_at": "2026-05-27T11:02:33Z"
-      }
-    ],
-    "knowledge_nodes": [ ... ],
-    "knowledge_edges": [ ... ],
-    "wiki_files": [
+    "papers":           [ {...metadata...}, ... ],
+    "knowledge_nodes":  [ {...}, ... ],
+    "knowledge_edges":  [ {...}, ... ],
+    "wiki_files":       [
       {
         "id": "...",
         "user_id": "...",
         "kind": "paper",
         "rel_path": "papers/0001-foo.md",
         "content_hash": "sha256:abc123...",
+        "size_bytes": 4321,
         "title": "Foo Bar",
         "aliases": ["paper:1"],
         "compiled_at": "2026-05-27T11:00:00Z",
-        "paper_id": "0e8b...",
-        "size_bytes": 4321
-        // ⚠️ 不包含 content；content 走 multipart 或 Storage 上传 URL
+        "paper_id": "0e8b..."
       }
     ]
   },
-  "deletions": {                            // 桌面端删除的 ID
+  "deletions": {
     "papers": ["..."],
     "knowledge_nodes": ["..."],
     "knowledge_edges": ["..."],
@@ -90,58 +108,99 @@ Content-Type: application/json
 }
 ```
 
-### 2.2 Wiki 文件内容上传
-
-每条 `wiki_files` 行只携带元数据；实际 `.md` 内容通过两步：
-
-**方案 A（v1 简化）：嵌入 base64**
-
-适合首版，简单。push payload 内额外字段：
+**Response（200）**：
 
 ```json
-"wiki_file_contents": {
-  "papers/0001-foo.md": "base64:..."
+{
+  "sync_session_id": "8c4f2a-...",         // 用于第三步 commit
+  "expires_at": "2026-05-27T11:15:00Z",    // 10 分钟有效期
+  "uploads_required": [
+    {
+      "rel_path": "papers/0001-foo.md",
+      "upload_url": "https://<project>.supabase.co/storage/v1/object/upload/sign/wiki/<user>/papers/0001-foo.md?token=...",
+      "method": "PUT",
+      "headers": { "Content-Type": "text/markdown", "x-upsert": "true" }
+    }
+  ],
+  "uploads_skipped": [
+    { "rel_path": "papers/0002-bar.md", "reason": "content_hash unchanged" }
+  ],
+  "validation_errors": []
 }
 ```
 
-云后端解码 → 写到 Storage `wiki/{user_id}/papers/0001-foo.md`。
+**关键行为**：
+- `uploads_required` 只包含**真正需要上传的文件**。对每个 `wiki_files` 入参，云端查 `(user_id, rel_path)` 的当前 `content_hash`，相同就放进 `uploads_skipped`，跳过实际上传。
+- 表格元数据（papers / nodes / edges）已经**临时写入 staging area**（不是最终表）。pending 在 `sync_session_id` 下，等 commit 才生效。
+- staging area 1 小时未 commit 自动 GC。
 
-> 缺点：payload 可能大。32 papers × 50KB = 1.6MB，可接受。100+ 篇时考虑方案 B。
+### 2.2 Step 2：并发 PUT 到 Storage
 
-**方案 B（v2）：预签名 URL**
+对 `uploads_required` 中每个文件，桌面端并发执行：
 
-云后端先返回每个文件的 Storage 预签名 PUT URL，桌面端单独并发上传，最后再 commit。
-留给 Phase 4。
+```http
+PUT <upload_url>
+Content-Type: text/markdown
+x-upsert: true
 
-### 2.3 Response（成功）
+<.md file raw bytes>
+```
+
+**关键点**：
+- 直接走 Supabase Storage 域名，**不经过我们的 FastAPI**
+- 上传 URL 内嵌一次性 token，10 分钟有效
+- 单文件失败 → 单独重试（其他文件不受影响）
+- 实际并发度建议 **6 并发**（避免压爆 Storage rate limit）
+
+### 2.3 Step 3：`POST /api/sync/commit`
+
+所有 PUT 都 200 后，桌面端通知云端"上传完成"：
+
+```http
+POST /api/sync/commit
+Authorization: Bearer <jwt>
+Content-Type: application/json
+
+{
+  "sync_session_id": "8c4f2a-...",
+  "uploaded": [
+    {
+      "rel_path": "papers/0001-foo.md",
+      "content_hash": "sha256:abc123..."     // 再次确认（防中间篡改 / 客户端 bug）
+    }
+  ]
+}
+```
+
+云端做 4 件事：
+1. 校验 sync_session_id 没过期、属于当前 user
+2. 对每个 uploaded 文件，向 Storage HEAD 一次，验真 content_hash 与传上来的一致
+3. 把 staging 元数据 commit 到正式表（papers / knowledge_nodes / knowledge_edges / wiki_files）
+4. revision++，返回新 revision
+
+**Response（成功）**：
 
 ```http
 200 OK
 Content-Type: application/json
 
 {
-  "revision": 47,                          // 服务器单调递增版本号
+  "revision": 47,
   "accepted": {
     "papers": 5,
     "knowledge_nodes": 12,
     "knowledge_edges": 18,
     "wiki_files": 3
   },
-  "rejected": [],                          // 详见下面
+  "rejected": [],
   "server_now": "2026-05-27T11:05:12Z"
 }
 ```
 
-桌面端收到后：
-- 更新本地 `sync_state.last_pushed_at = server_now`
-- 更新本地 `sync_state.last_push_revision = revision`
-
-### 2.4 Response（部分失败）
+**Response（部分失败）**：
 
 ```http
 207 Multi-Status
-Content-Type: application/json
-
 {
   "revision": 47,
   "accepted": { "papers": 4, ... },
@@ -151,32 +210,52 @@ Content-Type: application/json
       "id": "...",
       "reason": "source node user mismatch",
       "code": "FK_VIOLATION"
+    },
+    {
+      "table": "wiki_files",
+      "rel_path": "papers/0001-foo.md",
+      "reason": "Storage HEAD content_hash mismatch",
+      "code": "HASH_MISMATCH"
     }
   ],
   "server_now": "..."
 }
 ```
 
-桌面端：accepted 的更新本地 `updated_at` 不再推；rejected 的标记到 `pending_tables` 字段下次重试。
+桌面端：accepted 的更新本地 sync 水位线；rejected 的写入 `pending_tables` 下次重试。
 
-### 2.5 Response（鉴权 / 配额错误）
+### 2.4 错误码
 
-| 状态码 | 含义 | 客户端动作 |
+| 状态码 | 来源 | 客户端动作 |
 |---|---|---|
-| 401 | JWT 失效 | refresh 后重试 |
-| 403 | 用户被禁用 | 显示账户问题，停止同步 |
-| 413 | payload 太大 | 拆批；单批 papers 上限 50 |
-| 429 | 限速 | 等待 `Retry-After` 秒数 |
-| 5xx | 服务器问题 | 指数退避，最多 5 次 |
+| 401 | prepare/commit | refresh JWT 后重试 |
+| 403 | prepare/commit | 用户被禁用，停止同步 |
+| 410 | commit | sync_session 已过期，从 prepare 重来 |
+| 413 | prepare | metadata 过大；拆 batch（单批 papers 上限 200） |
+| 429 | prepare/commit/Storage | 等待 `Retry-After` |
+| Storage 4xx | PUT | 检查 upload_url 是否过期；过期重做 prepare |
 
-### 2.6 幂等性保证
+### 2.5 幂等性保证
 
-服务器看 `id` + `updated_at`：
-- 服务器已有更新（updated_at >= incoming.updated_at）→ 忽略（不算 rejected）
-- 服务器没有 / 更旧 → upsert
-- `wiki_files.content_hash` 相同 → 不重新写 Storage
+| 客户端动作 | 服务器行为 |
+|---|---|
+| 同一份 prepare 重发 | 返回同一个 sync_session_id（按 device_id + since 的 hash 去重） |
+| 同一个文件 PUT 重发 | Storage 默认 upsert，覆盖即可 |
+| 同一个 commit 重发 | 服务器按 sync_session_id 去重，第二次返回上次的 revision |
+| 失败重试整个流程 | 从 prepare 重新开始；旧 session 会被 GC |
 
-桌面端重试同一份 payload **多次都安全**。
+**关键不变量**：单个 sync_session_id 只能 commit 一次。多次提交 commit 会返回 cached response，不会重复进 revision。
+
+### 2.6 离线 / 中断恢复
+
+| 场景 | 处理 |
+|---|---|
+| prepare 后客户端崩 | sync_session 1h 自动 GC，重启从 prepare 重来 |
+| 上传到一半（10 文件，传了 5 个）网络断 | 重连后继续传剩余 5 个；已传的不重传 |
+| 上传完了 commit 前崩 | 重启后 commit；服务器 HEAD 检查 Storage 上文件齐了就接受 |
+| commit 5xx | 客户端指数退避重试同一个 sync_session_id |
+
+> **注意**：方案 B 比 A 多了 2 个 HTTP round-trip，但实际**总耗时基本一样**（Storage 直传非常快），且能干掉 base64 编解码开销和云后端的大 payload 处理。
 
 ---
 
@@ -401,13 +480,16 @@ T+1    扫描 → papers 表新增 5 行（处理状态 'scanning'）
 T+3min papers 处理完 → updated_at 翻新
 T+3min wiki_compiler 编译 → wiki_files 新增 5 行 + .md 文件落地
 T+3min sync agent 自动触发：
-       POST /api/sync/push {
+       Step 1 POST /api/sync/prepare {
          since: "T-2 hour",   // 上次成功 sync 的时间
-         tables: { papers: 5, wiki_files: 5, ... },
-         wiki_file_contents: { ... }
+         tables: { papers: 5, wiki_files: 5, ... }
        }
-T+3min1s 云返回 200 + revision=48
-T+3min1s sync_state.last_pushed_at = T+3min1s
+T+3min0s5 云返回 sync_session_id + 5 个 upload_url
+       Step 2 并发 PUT 5 个 .md 文件直传到 Supabase Storage
+T+3min1s 全部 PUT 完成
+       Step 3 POST /api/sync/commit { sync_session_id, uploaded: [...] }
+T+3min1s5 云返回 200 + revision=48
+T+3min1s5 sync_state.last_pushed_at = T+3min1s5
 T+5min   用户在移动端打开 app
 T+5min   GET /api/cloud/snapshot?since=null   (首次)
 T+5min1s 移动端拿到 47 papers + 528 nodes + 3640 edges 落到本地缓存
@@ -424,6 +506,6 @@ T+15min4s 移动端收到答案 + 引用，渲染
 | 项 | 倾向 |
 |---|---|
 | 桌面 → 云的实时推送（pipeline 跑完后立刻推） vs 定时推（每 10 min） | 立刻推 + UI 显示同步状态 |
-| Wiki 内容上传方案 A vs B | A（base64 嵌入）v1；> 100 篇时迁 B |
 | 移动端长轮询 / WebSocket 实时更新 | 不做 v1；下拉刷新足够 |
 | Snapshot 端点是否流式（NDJSON）以避免大 payload OOM | 1000+ 节点开始考虑 |
+| Storage 上传并发度（当前默认 6） | 监控 429 后调 |

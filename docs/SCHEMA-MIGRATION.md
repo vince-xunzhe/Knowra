@@ -19,6 +19,7 @@ RLS policy、以及现有数据如何映射到多租户模型。
 | `llm_calls` | ~∞ | **不同步**。仅本地遥测，云上 v1 不分析 |
 | `users` | 新增 | 仅云端有；映射 Supabase `auth.users` |
 | `sync_state` | 新增 | 桌面 ↔ 云的同步水位线 |
+| `sync_sessions` | 新增 | 3 步上传流程的 staging area，1h 自动 GC |
 | `wiki_files` | 新增 | 云端 .md 文件的元数据索引（实际内容在 Supabase Storage） |
 
 ---

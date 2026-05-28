@@ -63,22 +63,32 @@
 - [ ] 所有表的 RLS policy + edge consistency trigger
 - [ ] 写端到端隔离测试：用户 A 不能读 / 写用户 B 的数据
 
-### W5：sync push backend
+### W5：sync prepare + commit backend
 
-- [ ] `backend/routers/sync.py` 新增 `POST /api/sync/push`
+- [ ] `backend/routers/sync.py` 新增 `POST /api/sync/prepare` 和 `POST /api/sync/commit`
 - [ ] payload 验证：所有 user_id == auth.uid()
-- [ ] upsert 逻辑（按 id + updated_at watermark）
-- [ ] wiki_files content base64 → Storage 上传
-- [ ] 返回 revision + accepted/rejected 报告
-- [ ] 错误码 401/403/413/429 全覆盖
+- [ ] prepare 流程：
+  - [ ] 写 staging（pending session 表，1h TTL）
+  - [ ] 对每个 wiki_files 查 content_hash → 决定 uploads_required vs uploads_skipped
+  - [ ] 调 Supabase Storage SDK 签发 PUT URL（10 min 有效）
+  - [ ] 返回 sync_session_id + uploads_required[]
+- [ ] commit 流程：
+  - [ ] 校验 sync_session_id 有效性 + ownership
+  - [ ] 对每个 uploaded 文件 Storage HEAD 校验 content_hash
+  - [ ] staging → 正式表的 upsert（按 id + updated_at watermark）
+  - [ ] revision++ 返回 accepted/rejected 报告
+- [ ] 1h GC：未 commit 的 staging session 自动清理（含已上传到 Storage 的 orphan 文件）
+- [ ] 错误码 401/403/410/413/429 全覆盖
 
-### W6：sync push frontend (desktop)
+### W6：sync frontend (desktop)
 
 - [ ] frontend 添加 Settings 页"云同步"section（登录/注销/状态）
 - [ ] PipelineConsole 加 ⑤ 同步 stage（可见同步状态）
-- [ ] pipeline 跑完自动触发 push
-- [ ] 失败重试 + 指数退避
-- [ ] device_id 持久化（首次启动生成）
+- [ ] pipeline 跑完自动触发 prepare → 并发 PUT → commit 三步流程
+- [ ] 并发上传控制（默认 6 并发，配置可调）
+- [ ] 文件级进度反馈（"上传中 5/12"）
+- [ ] 中断恢复：commit 失败 → 重 commit；prepare 失败 → 整个重来
+- [ ] device_id 持久化（首次启动生成，存 macOS keychain / Windows credential store）
 
 ### W7：cloud snapshot 端点 + 内测
 
@@ -92,10 +102,14 @@
 ### 验收
 
 - [ ] 桌面端添加新论文 → 处理完 → 自动同步 → 云 PG 能查到
-- [ ] 重启桌面端，再次同步是 no-op（幂等）
-- [ ] 删除论文 → 推送 → 云端也删除
+- [ ] 重启桌面端，再次同步是 no-op（幂等：prepare 返回 0 uploads_required）
+- [ ] 单文件内容修改后再同步 → 只这一个文件出现在 uploads_required
+- [ ] 删除论文 → 推送 → 云端也删除（包括 Storage 上的 .md）
 - [ ] curl `/api/cloud/snapshot` 返回正确数据
 - [ ] 用 Postman 拿别人的 JWT 查询自己数据被 RLS 阻断
+- [ ] 模拟"PUT 一半网络断" → 重连后只重传剩余文件
+- [ ] 模拟"commit 5xx" → 重 commit 安全幂等
+- [ ] 1h 未 commit 的 staging 自动 GC（含 Storage 上的 orphan 文件）
 
 ---
 

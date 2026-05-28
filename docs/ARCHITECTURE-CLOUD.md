@@ -159,11 +159,15 @@ local 模式由 Tauri sidecar 启动。
 ```
 1. 用户在桌面端 data/papers/ 放新 PDF
 2. 桌面端扫描 → 处理 → 编译 → lint 全跑完
-3. Sync agent 自动触发 POST /api/sync/push
-   → 上传 delta：新 papers row + 新 nodes / edges + 新 .md 文件
-4. 云 Postgres 落地 + Storage 落地，标记 sync_revision++
-5. 移动端 30 秒后 pull or 用户下拉刷新 → GET /api/cloud/snapshot
-6. 移动端 SQLite 更新 + UI 重渲染
+3. Sync agent 自动触发 3 步上传：
+   a. POST /api/sync/prepare（仅元数据 + 每个 .md 的 content_hash）
+      → 云端按 content_hash 决定哪些需要上传，返回预签名 URL + sync_session_id
+   b. 桌面端并发 PUT 新 / 改的 .md 文件直传到 Supabase Storage
+      （未变化的文件被跳过，云后端零带宽）
+   c. POST /api/sync/commit（确认 sync_session_id）
+      → 云端 staging 写入正式表，revision++
+4. 移动端 30 秒后 pull or 用户下拉刷新 → GET /api/cloud/snapshot
+5. 移动端 SQLite 更新 + UI 重渲染
 ```
 
 ### 5.2 移动端 Ask

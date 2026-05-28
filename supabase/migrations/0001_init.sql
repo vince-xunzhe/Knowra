@@ -290,6 +290,43 @@ CREATE POLICY tenant_isolation ON wiki_files
   WITH CHECK (user_id = auth.uid());
 
 -- ============================================================================
+-- sync_sessions
+--
+-- Staging area for the 3-step sync upload flow (prepare → PUTs → commit).
+-- prepare writes metadata here; commit moves it to the canonical tables.
+-- A periodic GC job drops sessions older than 1h that never committed —
+-- and cleans up any Storage objects that were uploaded against that
+-- expired session.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS sync_sessions (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  device_id       TEXT NOT NULL,
+
+  status          TEXT NOT NULL DEFAULT 'pending',     -- pending / committed / aborted / expired
+  staging         JSONB NOT NULL,                       -- {papers:[], nodes:[], edges:[], wiki_files:[], deletions:{}}
+  uploads_pending JSONB NOT NULL DEFAULT '[]'::jsonb,   -- [{rel_path, content_hash}]
+
+  -- once committed, the response is cached here so repeated commit calls
+  -- with the same sync_session_id return the same revision (idempotency).
+  committed_response JSONB,
+
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at      TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '1 hour',
+  committed_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS sync_sessions_user_id_idx ON sync_sessions (user_id);
+CREATE INDEX IF NOT EXISTS sync_sessions_expires_idx ON sync_sessions (expires_at) WHERE status = 'pending';
+
+ALTER TABLE sync_sessions ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON sync_sessions;
+CREATE POLICY tenant_isolation ON sync_sessions
+  FOR ALL
+  USING (user_id = auth.uid())
+  WITH CHECK (user_id = auth.uid());
+
+-- ============================================================================
 -- cloud_llm_calls
 --
 -- Cloud-side mobile Ask telemetry. Only meta (no key, no prompt, no response).
