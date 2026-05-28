@@ -14,18 +14,24 @@ type NavItem =
   | { divider: true }
 
 // Prompt is intentionally not in this sidebar — it's a per-extraction config
-// that only matters in the context of paper processing, so it lives in a
-// tab on the Papers page right column. The Wiki layer (paper / concept .md
-// pages) is folded into the Graph page: the left PipelineConsole exposes
-// the ingest / curate / compile / maintain workflow as 4 stage cards, the
-// node drawer renders compiled .md inline, and a view toggle flips to the
-// compiled-graph swim-lane. Concept promotion review also lives in the
-// Graph page (inside stage ② of the console + drawer + rescue modal) so
-// curation happens in visual context instead of as flat lists.
+// that only matters in the context of materials processing, so it lives
+// behind a collapsible column on the 资料 page. The Wiki layer (paper /
+// concept .md pages) is folded into the Graph page: the left
+// PipelineConsole exposes the ingest / curate / compile / maintain workflow
+// as 4 stage cards, the node drawer renders compiled .md inline, and a
+// view toggle flips to the compiled-graph swim-lane. Concept promotion
+// review also lives in the Graph page (inside stage ② of the console +
+// drawer + rescue modal) so curation happens in visual context instead of
+// as flat lists.
+//
+// Nav order goes from "high-altitude knowledge" → "narrative reading" →
+// "raw materials" → "observability" → "config" so the user passes the
+// finished artifact (graph) and synthesis (review) before the raw
+// inventory (materials).
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, label: '知识' },
-  { id: 'papers', icon: BookOpen, label: '论文' },
   { id: 'review', icon: FileText, label: '回顾' },
+  { id: 'papers', icon: BookOpen, label: '资料' },
   { id: 'dashboard', icon: BarChart3, label: '看板' },
   { divider: true },
   { id: 'settings', icon: Settings, label: '设置' },

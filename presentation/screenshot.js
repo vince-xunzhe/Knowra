@@ -120,8 +120,8 @@ async function main() {
   await sleep(600)
 
   // ── 05 Papers ──────────────────────────────────────────────────
-  console.log('[05] 论文 · library')
-  await clickNavByLabel(page, '论文')
+  console.log('[05] 资料 · library')
+  await clickNavByLabel(page, '资料')
   await page.waitForLoadState('networkidle')
   await sleep(1200)
   await captureAt(page, '05-papers.png')
