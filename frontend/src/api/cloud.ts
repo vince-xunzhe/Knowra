@@ -55,6 +55,21 @@ export interface CloudConfig {
   baseUrl: string
 }
 
+/**
+ * Baked-in production cloud config. PUBLIC values — the Supabase project URL,
+ * its anon/publishable key, and the Fly backend URL — safe to ship: per-user
+ * isolation is enforced by Supabase RLS + each user's own login, NOT by hiding
+ * these (same model as Firebase's apiKey). Means a fresh install can sign in
+ * with no setup. Precedence: localStorage override → Vite env (.env.local for
+ * dev) → these defaults.
+ */
+export const CLOUD_DEFAULTS: CloudConfig = {
+  supabaseUrl: 'https://umflsxjvndppadtnfxke.supabase.co',
+  supabaseAnonKey:
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVtZmxzeGp2bmRwcGFkdG5meGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDkwMDEsImV4cCI6MjA5NTk4NTAwMX0.hClTx8Zt7nFCIMw62b710zx-uaFKcDHdfAkyw45pFJM',
+  baseUrl: 'https://knowra-cloud.fly.dev',
+}
+
 export function getCloudConfig(): CloudConfig {
   // Vite injects literal env vars at build time via `import.meta.env`.
   // We *read* from it, never assign — assigning trips Vite's HMR
@@ -63,9 +78,9 @@ export function getCloudConfig(): CloudConfig {
   // Hence the indirect Record cast rather than the obvious pattern.
   const env = import.meta.env as unknown as Record<string, string | undefined>
   return {
-    supabaseUrl: readLs(LS_KEYS.supabaseUrl) || env.VITE_SUPABASE_URL || '',
-    supabaseAnonKey: readLs(LS_KEYS.supabaseAnonKey) || env.VITE_SUPABASE_ANON_KEY || '',
-    baseUrl: readLs(LS_KEYS.baseUrl) || env.VITE_KNOWRA_CLOUD_BASE_URL || '',
+    supabaseUrl: readLs(LS_KEYS.supabaseUrl) || env.VITE_SUPABASE_URL || CLOUD_DEFAULTS.supabaseUrl,
+    supabaseAnonKey: readLs(LS_KEYS.supabaseAnonKey) || env.VITE_SUPABASE_ANON_KEY || CLOUD_DEFAULTS.supabaseAnonKey,
+    baseUrl: readLs(LS_KEYS.baseUrl) || env.VITE_KNOWRA_CLOUD_BASE_URL || CLOUD_DEFAULTS.baseUrl,
   }
 }
 
