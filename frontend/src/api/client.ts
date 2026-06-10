@@ -15,6 +15,7 @@ export interface PaperRecord {
   paper_category_model: string | null
   paper_category_override: string | null
   paper_category_source: 'manual' | 'model' | 'none'
+  year: number | null
   error: string | null
   created_at: string | null
 }
@@ -102,7 +103,8 @@ export interface NodeDetail extends GraphNode {
 export interface ManualConceptInput {
   title: string
   content: string
-  paper_ids: number[]
+  // ids are UUID strings at runtime (legacy INT in older data) — accept both.
+  paper_ids: (string | number)[]
   tags: string[]
 }
 
@@ -219,7 +221,26 @@ export const resetPrompt = () => api.post<PromptData>('/prompt/reset').then(r =>
 
 // Papers
 export const scanPapers = () =>
-  api.post<{ new_found: number; total: number; unprocessed: number }>('/scan').then(r => r.data)
+  api
+    .post<{ new_found: number; duplicates: number; total: number; unprocessed: number }>('/scan')
+    .then(r => r.data)
+
+export interface UploadResult {
+  saved: number
+  skipped_existing: number
+  rejected: string[]
+  new_found: number
+  duplicates: number
+  total: number
+  unprocessed: number
+}
+// Multipart upload of local PDFs → copied into ./papers, then registered.
+// Don't set Content-Type: axios derives the multipart boundary from FormData.
+export const uploadPapers = (files: File[]) => {
+  const fd = new FormData()
+  for (const f of files) fd.append('files', f)
+  return api.post<UploadResult>('/papers/upload', fd, { timeout: 180000 }).then(r => r.data)
+}
 export const processAll = () => api.post('/process').then(r => r.data)
 export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
 export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
@@ -228,10 +249,53 @@ export const retryFailedPapers = () =>
 export const reprocessPaper = (id: number) => api.post(`/papers/${id}/reprocess`).then(r => r.data)
 export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.data)
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
-export const updatePaperResponse = (id: number, raw_llm_response: string) =>
-  api.put<PaperDetail>(`/papers/${id}/response`, { raw_llm_response }).then(r => r.data)
-export const updatePaperCategory = (id: number, category: string | null) =>
+export const updatePaperResponse = (
+  id: number | string,
+  raw_llm_response: string,
+  rebuildGraph = true,
+) =>
+  api
+    .put<PaperDetail>(`/papers/${id}/response`, {
+      raw_llm_response,
+      rebuild_graph: rebuildGraph,
+    })
+    .then(r => r.data)
+export const updatePaperCategory = (id: string | number, category: string | null) =>
   api.put<PaperDetail>(`/papers/${id}/category`, { category }).then(r => r.data)
+
+// ── paper-category taxonomy management ─────────────────────────────────
+export interface PaperCategoryItem {
+  name: string
+  builtin: boolean
+  removable: boolean
+  count: number
+}
+export const listPaperCategories = () =>
+  api.get<{ categories: PaperCategoryItem[] }>('/paper-categories').then(r => r.data.categories)
+export const addPaperCategory = (name: string) =>
+  api
+    .post<{ categories: PaperCategoryItem[] }>('/paper-categories', { name })
+    .then(r => r.data.categories)
+export const renamePaperCategory = (name: string, newName: string) =>
+  api
+    .put<{ categories: PaperCategoryItem[]; migrated: number }>(
+      `/paper-categories/${encodeURIComponent(name)}`,
+      { new_name: newName },
+    )
+    .then(r => r.data)
+export const deletePaperCategory = (name: string) =>
+  api
+    .delete<{ categories: PaperCategoryItem[]; migrated: number }>(
+      `/paper-categories/${encodeURIComponent(name)}`,
+    )
+    .then(r => r.data)
+export const bulkSetPaperCategory = (paperIds: (string | number)[], category: string | null) =>
+  api
+    .post<{ updated: number; category: string | null }>('/papers/bulk-category', {
+      paper_ids: paperIds,
+      category,
+    })
+    .then(r => r.data)
 export const updatePaperNotes = (id: number, notes: string) =>
   api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
@@ -263,7 +327,7 @@ export const getGraph = (includeCandidates = false) =>
     .then(r => r.data)
 export const listHiddenGraphNodes = () =>
   api.get<{ nodes: GraphNode[] }>('/graph/hidden_nodes').then(r => r.data.nodes)
-export const getNode = (id: number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
+export const getNode = (id: string | number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
 export const searchNodes = (q: string) =>
   api.get<GraphNode[]>('/search', { params: { q } }).then(r => r.data)
 export const rebuildEdges = () =>
@@ -271,7 +335,7 @@ export const rebuildEdges = () =>
 export const resetGraph = () => api.post<{ message: string }>('/graph/reset').then(r => r.data)
 export const createManualConcept = (data: ManualConceptInput) =>
   api.post<ManualConceptSaveResult>('/graph/manual_concepts', data).then(r => r.data)
-export const updateManualConcept = (id: number, data: ManualConceptInput) =>
+export const updateManualConcept = (id: string | number, data: ManualConceptInput) =>
   api.put<ManualConceptSaveResult>(`/graph/manual_concepts/${id}`, data).then(r => r.data)
 export const suppressNode = (id: number) =>
   api.post<{ message: string; node_id: number }>(`/graph/nodes/${id}/suppress`).then(r => r.data)
@@ -331,13 +395,13 @@ export const listPaperPages = () =>
   api.get<{ items: WikiPageMeta[] }>('/wiki/papers').then(r => r.data.items)
 export const getPaperPage = (filename: string) =>
   api.get<WikiPageDetail>(`/wiki/papers/${encodeURIComponent(filename)}`).then(r => r.data)
-export const recompileConcept = (conceptId: number) =>
+export const recompileConcept = (conceptId: string | number) =>
   api.post<{ path: string; filename: string }>(
     `/wiki/concepts/${conceptId}/recompile`,
     undefined,
     { timeout: 120000 },
   ).then(r => r.data)
-export const recompilePaper = (paperId: number) =>
+export const recompilePaper = (paperId: string | number) =>
   api.post<{ path: string; filename: string }>(
     `/wiki/papers/${paperId}/recompile`,
     undefined,
@@ -413,7 +477,7 @@ export const getWikiGraph = () =>
 // the raw layer (DB). Drives the "X items need recompiling" banner so the
 // user doesn't have to track raw-layer changes manually.
 export interface FreshnessPaperItem {
-  paper_id: number
+  paper_id: string
   title: string
   filename?: string
   processed_at?: string | null
@@ -421,7 +485,7 @@ export interface FreshnessPaperItem {
 }
 
 export interface FreshnessConceptItem {
-  concept_id: number
+  concept_id: string
   title: string
   filename?: string
   node_type?: string | null
@@ -572,7 +636,7 @@ export interface SynthesisConceptInput {
 }
 
 export interface SynthesisConceptResult {
-  concept_id: number
+  concept_id: string | number
   filename: string
   path: string
   created: boolean
@@ -616,7 +680,8 @@ export const renderWikiOutput = (payload: {
 // --- P1: wiki content lint / health-check ------------------------------
 
 export interface LintStub {
-  concept_id: number
+  // IDs are UUID strings post-multitenant migration.
+  concept_id: string
   title: string
   node_type: string
   source_paper_count: number
@@ -627,9 +692,9 @@ export interface LintStub {
 }
 
 export interface LintMerge {
-  a_id: number
+  a_id: string
   a_title: string
-  b_id: number
+  b_id: string
   b_title: string
   cosine: number
   paper_overlap: number
@@ -647,15 +712,15 @@ export interface LintJudgment {
   used_model: boolean
   model?: string | null
   error?: string
-  stubs?: { concept_id: number; verdict: string; reason: string }[]
+  stubs?: { concept_id: string; verdict: string; reason: string }[]
   merges?: {
-    a_id: number
-    b_id: number
+    a_id: string
+    b_id: string
     should_merge: boolean
-    keep: number | null
+    keep: string | null
     reason: string
   }[]
-  new_concepts?: { title: string; paper_ids: number[]; rationale: string }[]
+  new_concepts?: { title: string; paper_ids: string[]; rationale: string }[]
   followups?: string[]
 }
 
@@ -696,9 +761,9 @@ export const getWikiLintReport = () =>
     .get<{ text: string; status: LintReportStatus }>('/wiki/lint/report')
     .then(r => r.data)
 
-export const acceptLintStub = (conceptId: number) =>
+export const acceptLintStub = (conceptId: string | number) =>
   api
-    .post<{ ok: boolean; concept_id: number; tag: string }>(
+    .post<{ ok: boolean; concept_id: string; tag: string }>(
       '/wiki/lint/accept',
       { concept_id: conceptId },
     )
@@ -786,7 +851,7 @@ export const listPromotionCandidates = (status?: PromotionStatus, limit = 500) =
     .then(r => r.data)
 
 export const updatePromotionStatus = (
-  nodeId: number,
+  nodeId: string | number,
   status: PromotionStatus,
   reason?: string,
 ) =>
@@ -874,7 +939,9 @@ export interface DashboardCurationCell {
 }
 
 export interface DashboardHub {
-  id: number
+  // Post-W3.2 backend returns UUID strings here. The widget only uses
+  // id as a React list key, so a string works the same.
+  id: string
   title: string
   node_type: string
   degree: number

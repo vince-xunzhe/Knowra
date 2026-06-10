@@ -99,6 +99,16 @@ def _migrate():
     with engine.begin() as conn:
         cols = conn.execute(text("PRAGMA table_info(papers)")).fetchall()
         existing = {row[1] for row in cols}
+        # W3.2 multitenant prep: add user_id / legacy_id as nullable so
+        # existing pre-multitenant DBs keep working without running the
+        # full migrator. The standalone scripts/migrate_multitenant.py
+        # is still required if you actually want to push to the cloud
+        # (it rewrites ids and backfills user_id), but the desktop app
+        # boots fine without it.
+        if "user_id" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN user_id VARCHAR"))
+        if "legacy_id" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN legacy_id INTEGER"))
         if "openai_file_id" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN openai_file_id VARCHAR"))
         if "openai_vector_store_id" not in existing:
@@ -161,6 +171,11 @@ def _migrate():
 
         node_cols = conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()
         node_existing = {row[1] for row in node_cols}
+        # W3.2 multitenant prep — same rationale as on papers above.
+        if "user_id" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN user_id VARCHAR"))
+        if "legacy_id" not in node_existing:
+            conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN legacy_id INTEGER"))
         if "node_origin" not in node_existing:
             conn.execute(text("ALTER TABLE knowledge_nodes ADD COLUMN node_origin VARCHAR"))
         if "hidden" not in node_existing:
@@ -198,6 +213,24 @@ def _migrate():
                     "SET promotion_status = COALESCE(NULLIF(promotion_status, ''), 'pending')"
                 )
             )
+
+        # W3.2 multitenant prep for the remaining tables. knowledge_edges
+        # and llm_calls don't get any other migration logic here, so we
+        # just patch the two new columns and move on.
+        for tbl in ("knowledge_edges", "llm_calls"):
+            try:
+                tbl_cols = conn.execute(text(f"PRAGMA table_info({tbl})")).fetchall()
+            except Exception:
+                continue
+            tbl_existing = {row[1] for row in tbl_cols}
+            if not tbl_existing:
+                # Table doesn't exist yet (e.g. fresh DB) — create_all()
+                # will have already provisioned the right shape, skip.
+                continue
+            if "user_id" not in tbl_existing:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN user_id VARCHAR"))
+            if "legacy_id" not in tbl_existing:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN legacy_id INTEGER"))
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")

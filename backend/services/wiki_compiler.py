@@ -166,14 +166,14 @@ def _dedup_aliases(values: List[str]) -> List[str]:
     return out
 
 
-def _paper_aliases(paper_id: int, title: str) -> List[str]:
+def _paper_aliases(paper_id: str, title: str) -> List[str]:
     """Obsidian alias set for a paper page. `paper:{id}` makes the
     body markup `[[paper:9]]` resolve to this note; the title makes
     `[[N3D-VLM: …]]` resolve too."""
     return _dedup_aliases([f"paper:{paper_id}", title])
 
 
-def _concept_aliases(concept_id: int, slug: str, title: str) -> List[str]:
+def _concept_aliases(concept_id: str, slug: str, title: str) -> List[str]:
     return _dedup_aliases([f"concept:{concept_id}", slug, title])
 
 
@@ -362,14 +362,29 @@ def _paper_page_title(paper: Paper) -> str:
     return paper.title or Path(paper.filename or f"paper-{paper.id}").stem
 
 
+def _id_prefix(row) -> str:
+    """Filename prefix from a row's id.
+
+    Pre-W3.2 used ``{id:04d}`` (e.g. ``0001``) — that's still the on-disk
+    convention for migrated rows where ``legacy_id`` is set. Post-W3.2
+    fresh rows have no ``legacy_id``; we fall back to the first 8 hex
+    chars of the UUID for a stable, collision-resistant prefix.
+    """
+    legacy = getattr(row, "legacy_id", None)
+    if isinstance(legacy, int):
+        return f"{legacy:04d}"
+    uid = str(getattr(row, "id", "") or "")
+    return uid.replace("-", "")[:8] or "unknown"
+
+
 def _paper_page_path(paper: Paper) -> Path:
     slug = _slugify(_paper_page_title(paper), fallback=f"paper-{paper.id}")
-    return WIKI_PAPERS_DIR / f"{paper.id:04d}-{slug}.md"
+    return WIKI_PAPERS_DIR / f"{_id_prefix(paper)}-{slug}.md"
 
 
 def _concept_page_path(node: KnowledgeNode) -> Path:
     slug = _slugify(node.title, fallback=f"concept-{node.id}")
-    return WIKI_CONCEPTS_DIR / f"{node.id:04d}-{slug}.md"
+    return WIKI_CONCEPTS_DIR / f"{_id_prefix(node)}-{slug}.md"
 
 
 def _cleanup_same_id_pages(
@@ -550,7 +565,7 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         "compiled_at": _now_iso(),
         "compile_model": model,
         "source_signature": signature,
-        "source_record": f"data/paper_records/{paper.id:04d}-{record_stem}.md",
+        "source_record": f"data/paper_records/{_id_prefix(paper)}-{record_stem}.md",
     }
     page = _render_frontmatter(meta) + f"\n# {title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
@@ -684,7 +699,7 @@ ConceptProgress = Any  # Callable[[int, int, KnowledgeNode, Optional[Path], Opti
 
 
 def compile_concept_pages_for_paper(
-    paper_id: int,
+    paper_id: str,
     db: Session,
     api_key: str,
     model: str,
@@ -1003,22 +1018,43 @@ def compute_freshness_summary(db: Session) -> dict:
     papers = db.query(Paper).filter(Paper.processed.is_(True)).all()
     nodes = list_publishable_concept_nodes(db)
 
-    paper_by_id = {p.id: p for p in papers}
-    node_ids = {n.id for n in nodes}
+    # IDs are opaque strings (UUID post-migration). Wiki .md frontmatter
+    # may carry the canonical UUID (compiled after migration) OR the
+    # legacy INT (compiled before). Index every row under BOTH str(id)
+    # and str(legacy_id) so a page resolves either way. The previous
+    # ``isinstance(pid, int)`` guards rejected UUID frontmatter outright
+    # → every page became missing+orphan and ok stayed 0 even right
+    # after a successful compile.
+    def _both_ids(row) -> list[str]:
+        ids = [str(row.id)]
+        legacy = getattr(row, "legacy_id", None)
+        if legacy is not None:
+            ids.append(str(legacy))
+        return ids
+
+    paper_by_id: dict[str, Paper] = {}
+    for p in papers:
+        for key in _both_ids(p):
+            paper_by_id.setdefault(key, p)
+    node_by_id: dict[str, object] = {}
+    for n in nodes:
+        for key in _both_ids(n):
+            node_by_id.setdefault(key, n)
+    node_ids = set(node_by_id.keys())
 
     paper_pages = list_paper_pages()
-    paper_pages_by_id: dict[int, List[dict]] = {}
+    paper_pages_by_id: dict[str, List[dict]] = {}
     for pp in paper_pages:
         pid = pp.get("paper_id")
-        if isinstance(pid, int):
-            paper_pages_by_id.setdefault(pid, []).append(pp)
+        if pid is not None and str(pid).strip():
+            paper_pages_by_id.setdefault(str(pid).strip(), []).append(pp)
 
     concept_pages = list_concept_pages()
-    concept_pages_by_id: dict[int, List[dict]] = {}
+    concept_pages_by_id: dict[str, List[dict]] = {}
     for cp in concept_pages:
         cid = cp.get("concept_id")
-        if isinstance(cid, int):
-            concept_pages_by_id.setdefault(cid, []).append(cp)
+        if cid is not None and str(cid).strip():
+            concept_pages_by_id.setdefault(str(cid).strip(), []).append(cp)
 
     # --- paper page freshness ---
     paper_missing: List[dict] = []
@@ -1027,7 +1063,13 @@ def compute_freshness_summary(db: Session) -> dict:
     for paper in papers:
         title = paper.title or paper.filename or f"paper-{paper.id}"
         expected_name = _paper_page_path(paper).name
-        candidates = paper_pages_by_id.get(paper.id) or []
+        # Page frontmatter may key on the UUID or the legacy int.
+        candidates = []
+        for key in _both_ids(paper):
+            candidates = paper_pages_by_id.get(key)
+            if candidates:
+                break
+        candidates = candidates or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
             paper_missing.append({
@@ -1066,7 +1108,7 @@ def compute_freshness_summary(db: Session) -> dict:
     paper_orphan: List[dict] = []
     for pp in paper_pages:
         pid = pp.get("paper_id")
-        if not isinstance(pid, int) or pid not in paper_by_id:
+        if pid is None or str(pid).strip() not in paper_by_id:
             paper_orphan.append({
                 "filename": pp["filename"],
                 "title": pp.get("title"),
@@ -1079,7 +1121,12 @@ def compute_freshness_summary(db: Session) -> dict:
     for node in nodes:
         expected_name = _concept_page_path(node).name
         source_papers = _published_concept_source_papers(node, db)
-        candidates = concept_pages_by_id.get(node.id) or []
+        candidates = []
+        for key in _both_ids(node):
+            candidates = concept_pages_by_id.get(key)
+            if candidates:
+                break
+        candidates = candidates or []
         wiki = _pick_preferred_page(candidates, expected_name=expected_name)
         if not wiki:
             concept_missing.append({
@@ -1092,25 +1139,21 @@ def compute_freshness_summary(db: Session) -> dict:
         compiled_at = _parse_iso(wiki.get("compiled_at"))
         # Newest processed_at among source papers — that's the "last time
         # the raw evidence under this concept changed".
-        source_ids_raw = node.source_paper_ids or []
-        if not isinstance(source_ids_raw, list):
-            source_ids_raw = [source_ids_raw]
         newest: Optional[datetime] = None
-        for sid in source_ids_raw:
-            try:
-                pid = int(sid)
-            except (TypeError, ValueError):
-                continue
-            paper = paper_by_id.get(pid)
+        for sid in normalize_source_paper_ids(node.source_paper_ids):
+            paper = paper_by_id.get(str(sid))
             if paper is None:
                 continue
             ts = _to_aware(paper.processed_at)
             if ts is not None and (newest is None or ts > newest):
                 newest = ts
         current_source_ids = sorted(
-            pid for pid in _normalize_int_list(node.source_paper_ids) if pid in paper_by_id
+            str(pid) for pid in normalize_source_paper_ids(node.source_paper_ids)
+            if str(pid) in paper_by_id
         )
-        wiki_source_ids = sorted(_normalize_int_list(wiki.get("source_paper_ids")))
+        wiki_source_ids = sorted(
+            str(x) for x in normalize_source_paper_ids(wiki.get("source_paper_ids"))
+        )
         reasons: List[str] = []
         if len(candidates) > 1:
             reasons.append("duplicate_files")
@@ -1141,7 +1184,7 @@ def compute_freshness_summary(db: Session) -> dict:
     concept_orphan: List[dict] = []
     for cp in concept_pages:
         cid = cp.get("concept_id")
-        if not isinstance(cid, int) or cid not in node_ids:
+        if cid is None or str(cid).strip() not in node_ids:
             concept_orphan.append({
                 "filename": cp["filename"],
                 "title": cp.get("title"),

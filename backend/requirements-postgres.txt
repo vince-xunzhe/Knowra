@@ -1,0 +1,14 @@
+# Optional deps for running the Postgres RLS test suite
+# (backend/tests/test_postgres_rls.py).
+#
+# Desktop / local mode does NOT need these — the main requirements.txt
+# is enough. Install only when you want to spin up a real Postgres and
+# run the RLS isolation tests:
+#
+#     docker run --rm -d --name knowra-rls-test -p 54322:5432 \
+#         -e POSTGRES_PASSWORD=knowra -e POSTGRES_DB=knowra_test postgres:16
+#     backend/.venv/bin/pip install -r backend/requirements-postgres.txt
+#     export KNOWRA_TEST_POSTGRES_URL=postgresql://postgres:knowra@localhost:54322/knowra_test
+#     backend/.venv/bin/python -m unittest backend.tests.test_postgres_rls
+
+psycopg2-binary==2.9.10

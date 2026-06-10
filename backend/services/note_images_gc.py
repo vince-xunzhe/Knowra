@@ -32,7 +32,7 @@ def _refs_in(text: Optional[str]) -> set:
 
 def gc_on_notes_update(
     db: Session,
-    paper_id: int,
+    paper_id: str,
     old_notes: Optional[str],
     new_notes: Optional[str],
 ) -> int:

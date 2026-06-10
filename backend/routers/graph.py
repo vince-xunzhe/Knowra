@@ -1,3 +1,5 @@
+from typing import Union
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -34,7 +36,10 @@ router = APIRouter(prefix="/api", tags=["graph"])
 class ManualConceptInput(BaseModel):
     title: str
     content: str = ""
-    paper_ids: list[int] = []
+    # Paper IDs are UUID strings post-multitenant migration (legacy INT in
+    # older data). Accept both — _validate_paper_ids/normalize_source_paper_ids
+    # coerce to strings. A bare list[int] would 422-reject UUIDs.
+    paper_ids: list[Union[int, str]] = []
     tags: list[str] = []
 
 
@@ -51,7 +56,7 @@ def _normalize_tags(tags: list[str]) -> list[str]:
     return out
 
 
-def _validate_paper_ids(db: Session, paper_ids: list[int]) -> list[int]:
+def _validate_paper_ids(db: Session, paper_ids: list) -> list[str]:
     ids = []
     seen = set()
     for pid in normalize_source_paper_ids(paper_ids):
@@ -63,10 +68,12 @@ def _validate_paper_ids(db: Session, paper_ids: list[int]) -> list[int]:
     if not ids:
         return []
 
+    # Coerce both sides to strings so legacy INT-id storage and
+    # post-multitenant UUID-id storage compare cleanly.
     existing = {
-        paper.id for paper in db.query(Paper).filter(Paper.id.in_(ids)).all()
+        str(paper.id) for paper in db.query(Paper).filter(Paper.id.in_(ids)).all()
     }
-    missing = [pid for pid in ids if pid not in existing]
+    missing = [pid for pid in ids if str(pid) not in existing]
     if missing:
         raise HTTPException(status_code=400, detail=f"未知论文 ID: {missing}")
     return ids
@@ -169,7 +176,7 @@ def get_hidden_nodes(db: Session = Depends(get_db)):
 
 
 @router.get("/nodes/{node_id}")
-def get_node(node_id: int, db: Session = Depends(get_db)):
+def get_node(node_id: str, db: Session = Depends(get_db)):
     detail = get_node_detail_data(db, node_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -236,7 +243,7 @@ def create_manual_concept(body: ManualConceptInput, db: Session = Depends(get_db
 
 @router.put("/graph/manual_concepts/{node_id}")
 def update_manual_concept(
-    node_id: int,
+    node_id: str,
     body: ManualConceptInput,
     db: Session = Depends(get_db),
 ):
@@ -286,7 +293,7 @@ def update_manual_concept(
 
 
 @router.post("/graph/nodes/{node_id}/suppress")
-def suppress_node(node_id: int, db: Session = Depends(get_db)):
+def suppress_node(node_id: str, db: Session = Depends(get_db)):
     """Legacy endpoint — kept for back-compat with any external scripts.
     Now routes through the promotion lifecycle (status=rejected,
     promoted_by=user) so the rescue UI can recall the node, and so the
@@ -303,7 +310,7 @@ def suppress_node(node_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/graph/nodes/{node_id}/restore")
-def restore_node(node_id: int, db: Session = Depends(get_db)):
+def restore_node(node_id: str, db: Session = Depends(get_db)):
     """Legacy endpoint — now resets the promotion lifecycle (status=pending,
     promoted_by=None) so the node re-enters the eval queue. The old
     `hidden` flag is also cleared in case anything still reads it."""

@@ -7,3 +7,9 @@ aiofiles==24.1.0
 pypdf==5.1.0
 pypdfium2==4.30.0
 pillow==11.0.0
+PyJWT==2.13.0
+# Needed by PyJWT to verify ES256 / RS256 tokens (asymmetric). Supabase
+# rotated new projects to ES256 in late 2025; HS256 stays as a legacy
+# fallback. Without cryptography we'd be stuck on HS256-only and lock
+# out anyone whose Supabase project was created post-rotation.
+cryptography==48.0.0

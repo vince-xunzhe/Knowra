@@ -55,16 +55,26 @@ def _paper_title_matches(node_title: str, full_title: str) -> bool:
     return bool(trimmed) and target.startswith(trimmed)
 
 
-def normalize_source_paper_ids(values) -> list[int]:
+def normalize_source_paper_ids(values) -> list[str]:
+    """Coerce ``KnowledgeNode.source_paper_ids`` into a clean list of
+    string IDs.
+
+    Post-multitenant migration paper IDs are UUID strings; this
+    function deliberately keeps them as strings and just strips/
+    drops empty entries. Pre-migration JSON data may contain INT
+    values — those are str()ed so the dict-key lookup in callers
+    (``papers_by_id[paper_id]``) stays consistent regardless of which
+    schema generation produced the data."""
     raw = values or []
     if not isinstance(raw, list):
         raw = [raw]
-    out: list[int] = []
+    out: list[str] = []
     for item in raw:
-        try:
-            out.append(int(item))
-        except (TypeError, ValueError):
+        if item is None:
             continue
+        s = str(item).strip()
+        if s:
+            out.append(s)
     return out
 
 
@@ -91,7 +101,7 @@ def is_concept_candidate_node(node: KnowledgeNode) -> bool:
 
 def is_publishable_concept_node(
     node: KnowledgeNode,
-    processed_paper_ids: Optional[set[int]] = None,
+    processed_paper_ids: Optional[set] = None,
 ) -> bool:
     """The single gate that decides whether a concept page gets compiled.
     After the concept-first redesign, this is just a thin wrapper around
@@ -107,7 +117,10 @@ def is_publishable_concept_node(
 
     source_ids = normalize_source_paper_ids(node.source_paper_ids)
     if processed_paper_ids is not None:
-        source_ids = [pid for pid in source_ids if pid in processed_paper_ids]
+        # Coerce both sides to strings so callers can pass legacy INT
+        # sets, post-migration UUID sets, or mixed sets without surprises.
+        processed_str = {str(p) for p in processed_paper_ids}
+        source_ids = [pid for pid in source_ids if pid in processed_str]
     return bool(source_ids)
 
 
@@ -138,10 +151,34 @@ def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[Knowl
     return None
 
 
+def _id_sortkey(node) -> int:
+    """Stable integer sort key from a KnowledgeNode's id, post-W3.2 UUID.
+
+    Several ranker tuples here historically used ``int(node.id)`` as a
+    final tiebreaker. After the multitenant migration, ``node.id`` is a
+    UUID string and ``int()`` blows up. ``legacy_id`` (preserved by the
+    migrator) is the original INT id when present; for rows born after
+    the migration we fall back to a deterministic, in-process-stable
+    hash of the UUID. The exact value doesn't matter — only that
+    comparing two rows yields a consistent order.
+    """
+    legacy = getattr(node, "legacy_id", None)
+    if isinstance(legacy, int):
+        return legacy
+    uid = getattr(node, "id", None)
+    if uid is None:
+        return 10**9
+    if isinstance(uid, int):
+        return uid
+    # Mask to positive int range; hash() is stable within a process which
+    # is all the sort needs.
+    return hash(str(uid)) & 0x7fffffff
+
+
 def _find_existing_paper_node(
     db: Session,
     *,
-    paper_id: int,
+    paper_id: str,
     title: str,
     exclude_node_id: Optional[int] = None,
 ) -> Optional[KnowledgeNode]:
@@ -161,7 +198,7 @@ def _find_existing_paper_node(
             0 if has_paper_id else 1,
             0 if title_match else 1,
             len(source_ids) if source_ids else 10**9,
-            int(getattr(node, "id", 10**9) or 10**9),
+            _id_sortkey(node),
         )
         if best is None or rank < best_rank:
             best = node
@@ -197,7 +234,7 @@ def _paper_node_payload_from_paper(paper: Optional[Paper]) -> tuple[str, str]:
 def _find_single_source_paper_node(
     db: Session,
     *,
-    paper_id: int,
+    paper_id: str,
     title: str,
     exclude_node_id: Optional[int] = None,
 ) -> Optional[KnowledgeNode]:
@@ -213,7 +250,7 @@ def _find_single_source_paper_node(
             continue
         rank = (
             0 if _paper_title_matches(node.title or "", title) else 1,
-            int(getattr(node, "id", 10**9) or 10**9),
+            _id_sortkey(node),
         )
         if best is None or rank < best_rank:
             best = node
@@ -224,7 +261,7 @@ def _find_single_source_paper_node(
 def _ensure_single_source_paper_node(
     db: Session,
     *,
-    paper_id: int,
+    paper_id: str,
     papers_by_id: dict[int, Paper],
     exclude_node_id: Optional[int] = None,
 ) -> KnowledgeNode:
@@ -261,9 +298,9 @@ def _ensure_single_source_paper_node(
 
 def _select_canonical_paper_id(
     node: KnowledgeNode,
-    source_ids: list[int],
-    papers_by_id: dict[int, Paper],
-) -> tuple[Optional[int], bool]:
+    source_ids: list[str],
+    papers_by_id: dict[str, Paper],
+) -> tuple[Optional[str], bool]:
     normalized_title = (node.title or "").strip()
     for paper_id in source_ids:
         paper = papers_by_id.get(paper_id)
@@ -435,7 +472,7 @@ def find_existing_concept_node(
             0 if node_origin(node) == MANUAL_NODE_ORIGIN else 1,
             0 if promotion_status(node) == PROMOTION_PROMOTED else 1,
             0 if (node.node_type or "") == "concept" else 1,
-            int(getattr(node, "id", 10**9) or 10**9),
+            _id_sortkey(node),
         )
         if best is None or rank < best_rank:
             best = node
@@ -450,7 +487,7 @@ def _upsert_node(
     node_type: str,
     aliases: list,
     tags: list,
-    paper_id: int,
+    paper_id: str,
     api_key: str,
     embedding_model: str,
 ) -> KnowledgeNode:
@@ -673,7 +710,7 @@ def rebuild_similarity_edges(db: Session, threshold: float) -> dict:
     return summary
 
 
-def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
+def remove_nodes_for_paper(db: Session, paper_id: str) -> int:
     """Detach or delete graph nodes that were created from one paper.
 
     Shared nodes stay in the graph with this paper id removed from their
@@ -715,7 +752,7 @@ def remove_nodes_for_paper(db: Session, paper_id: int) -> int:
 
 def add_nodes_from_paper_extraction(
     extraction: dict,
-    paper_id: int,
+    paper_id: str,
     api_key: str,
     embedding_model: str,
     similarity_threshold: float,
@@ -863,7 +900,17 @@ def _serialize_graph_node(node: KnowledgeNode, processed_paper_ids: set[int]) ->
     last_eval = getattr(node, "last_promotion_eval_at", None)
     source_paper_ids = normalize_source_paper_ids(node.source_paper_ids)
     paper_id = source_paper_ids[0] if (node.node_type or "") == "paper" and len(source_paper_ids) == 1 else None
-    concept_id = int(node.id) if (node.node_type or "") != "paper" else None
+    # Post-W3.2 the canonical id is a UUID string; concept_id is a
+    # legacy int the frontend still uses to key into wiki / lint
+    # payloads. We hand back the migrated `legacy_id` when present,
+    # else null. New post-migration rows have no INT id at all — the
+    # frontend already falls back to `id` (the UUID string) in that
+    # case (see NodeDetail.tsx / WikiLintModal.tsx).
+    if (node.node_type or "") == "paper":
+        concept_id = None
+    else:
+        legacy = getattr(node, "legacy_id", None)
+        concept_id = legacy if isinstance(legacy, int) else None
     return {
         "id": str(node.id),
         "title": node.title,
@@ -972,9 +1019,13 @@ def get_graph_data(db: Session, *, include_candidates: bool = False) -> dict:
         e for e in db.query(KnowledgeEdge).all()
         if e.source_id in node_ids and e.target_id in node_ids
     ]
+    # Post-W3.2: node ids are UUID strings, not ints. Coerce both sides
+    # to strings before comparison so this works whether the synthetic
+    # edge factory produces ints (legacy) or strings (current).
+    str_node_ids = {str(nid) for nid in node_ids}
     synthetic_edges = [
         edge for edge in _manual_synthetic_edges(nodes)
-        if int(edge["source"]) in node_ids and int(edge["target"]) in node_ids
+        if str(edge["source"]) in str_node_ids and str(edge["target"]) in str_node_ids
     ]
     return {
         "nodes": [_serialize_graph_node(n, processed_ids) for n in nodes],
@@ -1018,7 +1069,7 @@ def get_hidden_graph_nodes(db: Session) -> list[dict]:
     return serialized
 
 
-def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
+def get_node_detail_data(db: Session, node_id: str) -> Optional[dict]:
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == node_id).first()
     if not node:
         return None
@@ -1043,10 +1094,15 @@ def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
             connected_ids.add(edge.target_id)
         else:
             connected_ids.add(edge.source_id)
+    # _manual_synthetic_edges produces str(node.id) for both endpoints
+    # (line ~951–952). Pre-W3.2 those happened to look like ints in
+    # disguise — int() worked. After UUID migration the cast blows up;
+    # comparing as strings is the right thing.
+    node_id_str = str(node.id)
     for edge in synthetic_edges:
-        source = int(edge["source"])
-        target = int(edge["target"])
-        connected_ids.add(target if source == node.id else source)
+        source = str(edge["source"])
+        target = str(edge["target"])
+        connected_ids.add(target if source == node_id_str else source)
 
     linked_papers = []
     for paper in db.query(Paper).filter(Paper.id.in_(normalize_source_paper_ids(node.source_paper_ids))).all():
@@ -1082,8 +1138,12 @@ def get_node_detail_data(db: Session, node_id: int) -> Optional[dict]:
         ] + [
             {
                 "id": e["id"],
-                "source": int(e["source"]),
-                "target": int(e["target"]),
+                # _manual_synthetic_edges endpoints are str(node.id) (UUIDs
+                # post-migration); int() blows up on them. Keep as strings,
+                # consistent with stored_edges + the connected_ids handling
+                # above.
+                "source": str(e["source"]),
+                "target": str(e["target"]),
                 "relation_type": e["relation_type"],
                 "weight": e["weight"],
                 "created_at": e.get("created_at"),

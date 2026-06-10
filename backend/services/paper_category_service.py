@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Any, Optional
 
 
@@ -22,7 +21,69 @@ PAPER_CATEGORY_OPTIONS = [
     PAPER_CATEGORY_OTHER,
 ]
 
+# The built-in defaults stay fixed. The *active* list is user-editable and
+# persisted in config under "paper_categories"; it seeds from these defaults.
+DEFAULT_PAPER_CATEGORY_OPTIONS = list(PAPER_CATEGORY_OPTIONS)
 
+_active_cache: Optional[list] = None
+
+
+def _clean_category_list(raw: Any) -> list:
+    out: list = []
+    seen: set = set()
+    for item in raw or []:
+        s = str(item or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    # "其他" is the structural fallback — always present, always last.
+    out = [c for c in out if c != PAPER_CATEGORY_OTHER]
+    out.append(PAPER_CATEGORY_OTHER)
+    return out
+
+
+def get_active_categories() -> list:
+    """Active, user-editable category list (config-backed, cached).
+
+    Falls back to the built-in defaults when nothing custom is stored.
+    Call refresh_active_categories() after mutating config."""
+    global _active_cache
+    if _active_cache is not None:
+        return _active_cache
+    opts = None
+    try:
+        from config import load_config
+
+        raw = load_config().get("paper_categories")
+        if isinstance(raw, list) and raw:
+            opts = _clean_category_list(raw)
+    except Exception:
+        opts = None
+    if not opts:
+        opts = _clean_category_list(DEFAULT_PAPER_CATEGORY_OPTIONS)
+    _active_cache = opts
+    return opts
+
+
+def refresh_active_categories() -> None:
+    global _active_cache
+    _active_cache = None
+
+
+def set_active_categories(categories: list) -> list:
+    """Persist a new active category list to config; returns the cleaned list."""
+    cleaned = _clean_category_list(categories)
+    from config import save_config
+
+    save_config({"paper_categories": cleaned})
+    refresh_active_categories()
+    return get_active_categories()
+
+
+# Synonym table for the model's OWN category label — e.g. the LLM may write
+# "Vision-Language-Action" or "自动驾驶" where we want "VLA". This only
+# normalises the model's chosen *label*; it does NOT scan paper text for
+# keywords to guess a category.
 _CATEGORY_ALIASES = {
     "llm": PAPER_CATEGORY_LLM,
     "largelanguagemodel": PAPER_CATEGORY_LLM,
@@ -56,116 +117,10 @@ _CATEGORY_ALIASES = {
     "other": PAPER_CATEGORY_OTHER,
 }
 
-_LEGACY_RULES: list[tuple[str, tuple[str, ...]]] = [
-    (
-        PAPER_CATEGORY_WORLD_MODEL,
-        (
-            "world model",
-            "世界模型",
-            "jepa",
-            "latent world",
-            "predictive world",
-            "dynamics model",
-            "imagination",
-        ),
-    ),
-    (
-        PAPER_CATEGORY_DYNAMIC_3D,
-        (
-            "dynamic 3d",
-            "dynamic reconstruction",
-            "animatable",
-            "avatar",
-            "avatars",
-            "blendshape",
-            "head avatar",
-            "facial",
-            "human avatar",
-            "motion",
-            "video avatar",
-            "4d",
-            "dynamic scene",
-        ),
-    ),
-    (
-        PAPER_CATEGORY_STATIC_3D,
-        (
-            "3d reconstruction",
-            "三维重建",
-            "structure from motion",
-            "sfm",
-            "multi-view stereo",
-            "mvs",
-            "stereo",
-            "geometry",
-            "gaussian",
-            "depth",
-            "point cloud",
-            "view synthesis",
-            "mast3r",
-            "dust3r",
-            "vggt",
-        ),
-    ),
-    (
-        PAPER_CATEGORY_VLA,
-        (
-            "vision-language-action",
-            "vla",
-            "autonomous driving",
-            "自动驾驶",
-            "driving",
-            "trajectory",
-            "planning",
-            "closed-loop",
-            "bev planner",
-            "drive",
-        ),
-    ),
-    (
-        PAPER_CATEGORY_VLM,
-        (
-            "vision-language model",
-            "vision-language",
-            "vlm",
-            "mllm",
-            "multimodal",
-            "多模态",
-            "grounding",
-            "llava",
-            "qwen-vl",
-            "gemini",
-            "open vocabulary",
-            "video understanding",
-        ),
-    ),
-    (
-        PAPER_CATEGORY_LLM,
-        (
-            "large language model",
-            "language model",
-            "llm",
-            "instruction tuning",
-            "reasoning",
-            "agentic",
-            "nlp",
-            "text generation",
-        ),
-    ),
-]
-
-_CATEGORY_PRIORITY = {
-    PAPER_CATEGORY_WORLD_MODEL: 6,
-    PAPER_CATEGORY_DYNAMIC_3D: 5,
-    PAPER_CATEGORY_STATIC_3D: 4,
-    PAPER_CATEGORY_VLA: 3,
-    PAPER_CATEGORY_VLM: 2,
-    PAPER_CATEGORY_LLM: 1,
-    PAPER_CATEGORY_OTHER: 0,
-}
-
 
 def _category_key(value: Any) -> str:
+    import re
+
     return re.sub(r"[\s_/\-]+", "", str(value or "").strip().lower())
 
 
@@ -173,65 +128,30 @@ def normalize_paper_category(value: Any) -> Optional[str]:
     raw = str(value or "").strip()
     if not raw:
         return None
-    if raw in PAPER_CATEGORY_OPTIONS:
+    active = get_active_categories()
+    # Exact match against the active list — this is what lets user-added
+    # custom categories validate (they have no alias entry).
+    if raw in active:
         return raw
-    return _CATEGORY_ALIASES.get(_category_key(raw))
-
-
-def _technique_names(extraction: dict[str, Any]) -> list[str]:
-    names: list[str] = []
-    for item in extraction.get("techniques") or []:
-        if isinstance(item, dict):
-            name = (item.get("name") or "").strip()
-            if name:
-                names.append(name)
-        elif isinstance(item, str):
-            name = item.strip()
-            if name:
-                names.append(name)
-    return names
-
-
-def paper_category_text(paper: Any, extraction: dict[str, Any]) -> str:
-    bits: list[str] = [
-        getattr(paper, "title", None) or getattr(paper, "filename", None) or "",
-        extraction.get("paper_category") or "",
-        extraction.get("problem_area") or "",
-        extraction.get("tech_stack_position") or "",
-        " ".join(extraction.get("keywords") or []),
-        " ".join(extraction.get("baselines") or []),
-        " ".join(_technique_names(extraction)),
-        extraction.get("abstract_summary") or "",
-        extraction.get("core_contribution") or "",
-    ]
-    return "\n".join(str(bit) for bit in bits if bit).lower()
-
-
-def legacy_classify_paper_category(paper: Any, extraction: dict[str, Any]) -> str:
-    text = paper_category_text(paper, extraction)
-    if not text.strip():
-        return PAPER_CATEGORY_OTHER
-
-    best = PAPER_CATEGORY_OTHER
-    best_score = 0
-    for category, rules in _LEGACY_RULES:
-        score = sum(1 for rule in rules if rule.lower() in text)
-        if score > best_score:
-            best = category
-            best_score = score
-        elif score == best_score and score > 0:
-            if _CATEGORY_PRIORITY[category] > _CATEGORY_PRIORITY[best]:
-                best = category
-    return best
+    # Built-in alias mapping, but only resolve to a category still active
+    # (so a removed default doesn't sneak back in via an alias).
+    aliased = _CATEGORY_ALIASES.get(_category_key(raw))
+    if aliased and aliased in active:
+        return aliased
+    return None
 
 
 def derive_model_paper_category(paper: Any, extraction: Optional[dict[str, Any]]) -> Optional[str]:
+    """The model's category = the LLM's own ``paper_category`` field, normalised
+    to a currently-active category.
+
+    There are deliberately NO keyword / text-scanning heuristics: the category
+    comes from the model's semantic judgement (or the user's manual override).
+    If the model didn't provide a usable category we leave it unset, and the
+    effective category falls back to 其他."""
     if not isinstance(extraction, dict):
         return None
-    explicit = normalize_paper_category(extraction.get("paper_category"))
-    if explicit:
-        return explicit
-    return legacy_classify_paper_category(paper, extraction)
+    return normalize_paper_category(extraction.get("paper_category"))
 
 
 def effective_paper_category(paper: Any, extraction: Optional[dict[str, Any]] = None) -> str:

@@ -1,19 +1,19 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Search,
-  RefreshCw,
   Loader2,
   Filter,
   X,
   Plus,
   ArrowRight,
-  CheckCircle2,
+  Tags,
 } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
 import RejectedRescueModal from '../components/RejectedRescueModal'
 import PipelineConsole from '../components/PipelineConsole'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
+import CategoryComposer from '../components/CategoryComposer'
 import ConceptListView from '../components/ConceptListView'
 import AskDrawer from '../components/AskDrawer'
 import WikiLintModal from '../components/WikiLintModal'
@@ -93,6 +93,7 @@ export default function GraphPage() {
   const [rescueOpen, setRescueOpen] = useState(false)
   const [askOpen, setAskOpen] = useState(false)
   const [lintOpen, setLintOpen] = useState(false)
+  const [composerOpen, setComposerOpen] = useState(false)
   // Three flavors of view:
   //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
   //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
@@ -438,7 +439,7 @@ export default function GraphPage() {
     setActionBusyId(editingNode?.id || 'create')
     try {
       const response = editingNode
-        ? await updateManualConcept(Number(editingNode.id), payload)
+        ? await updateManualConcept(editingNode.id, payload)
         : await createManualConcept(payload)
       await loadGraph()
       focusNode(response.node)
@@ -474,6 +475,31 @@ export default function GraphPage() {
     } finally {
       setActionBusyId(null)
     }
+  }
+
+  // Adopt a lint-suggested cross-cut concept: create it as a manual
+  // (auto-promoted) concept seeded with the suggested title / rationale /
+  // covered papers. It then joins the graph and gets a wiki page on the
+  // next 概念页 compile. Throws on failure so the lint modal can surface
+  // the error inline next to the button the user clicked.
+  const handleAdoptConcept = async (seed: {
+    title: string
+    content: string
+    paper_ids: (string | number)[]
+  }) => {
+    const response = await createManualConcept({
+      title: seed.title,
+      content: seed.content,
+      paper_ids: seed.paper_ids,
+      tags: [],
+    })
+    await loadGraph()
+    setActionNotice({
+      tone: 'success',
+      title: '已采纳并新建概念',
+      detail: `${seed.title}（下次编译概念页时生成 wiki 条目）`,
+    })
+    return response
   }
 
   // Optimistically reflect a status change made in the drawer so the
@@ -536,8 +562,6 @@ export default function GraphPage() {
       <NextStepBanner
         nextStep={pipeline.nextStep}
         stages={pipeline.stages}
-        running={nextStepRunning}
-        onRun={handleRunNextStep}
       />
 
 
@@ -662,19 +686,11 @@ export default function GraphPage() {
 
             <button
               onClick={handleOpenCreate}
-              className="inline-flex items-center gap-1.5 text-sm font-medium text-white bg-teal-500 hover:bg-teal-400 px-3.5 py-2 rounded-xl transition-colors shrink-0"
+              className="inline-flex items-center gap-1 text-xs font-medium text-white bg-teal-500 hover:bg-teal-400 px-2.5 py-1.5 rounded-lg transition-colors shrink-0"
               title="手动新增一个概念节点"
             >
-              <Plus size={14} />
+              <Plus size={12} />
               新增概念
-            </button>
-
-            <button
-              onClick={loadGraph}
-              className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors shrink-0"
-              title="刷新图谱"
-            >
-              <RefreshCw size={14} />
             </button>
           </div>
         </div>
@@ -758,17 +774,29 @@ export default function GraphPage() {
             </div>
           </>
         ) : (
-          <span
-            className="inline-flex items-center gap-1.5 text-[11px] text-slate-600"
-            title={
-              viewKind === 'compiled'
-                ? '编译图谱按类目分泳道，无需类型筛选；切回节点图谱可展开'
-                : '概念视图已按类目分组，无需类型筛选；切回节点图谱可展开'
-            }
-          >
-            <Filter size={11} />
-            类型筛选 — 仅节点图谱
-          </span>
+          <>
+            <span
+              className="inline-flex items-center gap-1.5 text-[11px] text-slate-600"
+              title={
+                viewKind === 'compiled'
+                  ? '编译图谱按类目分泳道，无需类型筛选；切回节点图谱可展开'
+                  : '概念视图已按类目分组，无需类型筛选；切回节点图谱可展开'
+              }
+            >
+              <Filter size={11} />
+              类型筛选 — 仅节点图谱
+            </span>
+            {viewKind === 'compiled' && (
+              <button
+                onClick={() => setComposerOpen(true)}
+                title="新增/重命名/删除大类、设置关键词规则，并批量调整论文归属"
+                className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
+              >
+                <Tags size={12} />
+                编排大类
+              </button>
+            )}
+          </>
         )}
       </div>
 
@@ -928,7 +956,18 @@ export default function GraphPage() {
           // recompile / reject from the lint modal changes graph state.
           await loadGraph()
         }}
+        onAdoptConcept={handleAdoptConcept}
       />
+
+      {composerOpen && (
+        <CategoryComposer
+          onClose={() => {
+            setComposerOpen(false)
+            // category edits change lane membership → refresh the swim-lane graph.
+            void loadGraph()
+          }}
+        />
+      )}
 
       <ConceptEditorModal
         open={editorOpen}
@@ -951,13 +990,9 @@ export default function GraphPage() {
 function NextStepBanner({
   nextStep,
   stages,
-  running,
-  onRun,
 }: {
   nextStep: ReturnType<typeof usePipelineState>['nextStep']
   stages: ReturnType<typeof usePipelineState>['stages']
-  running: boolean
-  onRun: () => void
 }) {
   const palette = nextStep.tone === 'indigo'
     ? 'border-indigo-500/40 bg-indigo-500/[0.06]'
@@ -966,13 +1001,6 @@ function NextStepBanner({
       : nextStep.tone === 'emerald'
         ? 'border-emerald-500/40 bg-emerald-500/[0.05]'
         : 'border-slate-800 bg-slate-900/40'
-  const btnPalette = nextStep.disabled
-    ? 'bg-slate-800/60 text-slate-400 border border-slate-700 cursor-not-allowed'
-    : nextStep.tone === 'indigo'
-      ? 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-lg shadow-indigo-500/20'
-      : nextStep.tone === 'amber'
-        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-lg shadow-amber-500/20'
-        : 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
 
   return (
     <div className={`border-b ${palette} px-6 py-2 flex items-center gap-4`}>
@@ -1006,21 +1034,6 @@ function NextStepBanner({
         <span className="text-slate-500 mr-2">下一步建议：</span>
         {nextStep.reason}
       </div>
-
-      <button
-        onClick={onRun}
-        disabled={nextStep.disabled || running || nextStep.busy}
-        className={`inline-flex items-center gap-1.5 text-[12.5px] font-medium px-3 py-1.5 rounded-lg shrink-0 transition-colors ${btnPalette} disabled:opacity-60`}
-      >
-        {running || nextStep.busy ? (
-          <Loader2 size={13} className="animate-spin" />
-        ) : nextStep.disabled ? (
-          <CheckCircle2 size={13} />
-        ) : (
-          <ArrowRight size={13} />
-        )}
-        {nextStep.label}
-      </button>
     </div>
   )
 }

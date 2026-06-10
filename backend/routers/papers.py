@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
 import time
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -15,6 +17,7 @@ from path_utils import (
     portable_data_path,
     resolve_artifact_path,
     resolve_paper_path,
+    resolve_papers_directory,
 )
 from services.scanner_service import scan_directory
 from services.pdf_service import extract_text, render_first_page
@@ -31,8 +34,12 @@ from services.graph_service import add_nodes_from_paper_extraction, remove_nodes
 from services.note_images_gc import gc_on_notes_update
 from services.paper_category_service import (
     PAPER_CATEGORY_OPTIONS,
+    PAPER_CATEGORY_OTHER,
+    DEFAULT_PAPER_CATEGORY_OPTIONS,
     derive_model_paper_category,
     effective_paper_category,
+    get_active_categories,
+    set_active_categories,
     paper_category_source,
     sync_paper_category_fields,
     normalize_paper_category,
@@ -64,6 +71,20 @@ def _safe_parse(raw):
         return parse_extraction_response(raw)
     except Exception:
         return None
+
+
+def _paper_pub_year(p: Paper) -> Optional[int]:
+    """Publication year from the paper's extraction (or None)."""
+    ext = _safe_parse(p.raw_llm_response)
+    raw = ext.get("year") if isinstance(ext, dict) else None
+    if raw is None:
+        return None
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())[:4]
+    if len(digits) == 4:
+        year = int(digits)
+        if 1900 <= year <= 2100:
+            return year
+    return None
 
 
 def _hydrate_paper_metadata_from_raw(p: Paper) -> bool:
@@ -241,6 +262,10 @@ def _paper_failure_item(p: Paper) -> dict:
 
 class RawResponseUpdate(BaseModel):
     raw_llm_response: str
+    # When False, save the JSON but DON'T rebuild the knowledge graph /
+    # re-embed (a heavy OpenAI round-trip). Used for light edits — e.g.
+    # fixing a formula's LaTeX — that don't change the graph structure.
+    rebuild_graph: bool = True
 
 
 class NotesUpdate(BaseModel):
@@ -263,7 +288,7 @@ class ChatMessageInput(BaseModel):
 THREAD_TTL_DAYS = 60
 
 
-def _nodes_for_paper(db: Session, paper_id: int):
+def _nodes_for_paper(db: Session, paper_id: str):
     nodes = db.query(KnowledgeNode).all()
     matches = []
     for node in nodes:
@@ -363,6 +388,74 @@ def scan_papers(db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/papers/upload")
+async def upload_papers(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    """Copy user-selected PDFs into the scan directory (./papers), then
+    register them like a scan.
+
+    The browser only hands us bytes + a filename (never a path), so the
+    "don't copy ./papers into ./papers" rule is enforced as: skip any file
+    whose name OR content already lives in ./papers (no overwrite, no
+    duplicate). Newly-saved files are then run through scan_directory, which
+    applies the same path / arXiv-id / content-hash de-dup before they enter
+    the DB. PDFs never leave this machine."""
+    cfg = load_config()
+    papers_dir = resolve_papers_directory(cfg.get("scan_directory") or "data/papers")
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    existing_names = {p.name for p in papers_dir.glob("*.pdf")} | {
+        p.name for p in papers_dir.glob("*.PDF")
+    }
+    existing_hashes = {row.file_hash for row in db.query(Paper.file_hash).all()}
+
+    saved = 0
+    skipped_existing = 0
+    rejected: list[str] = []
+    for f in files:
+        name = Path(f.filename or "").name  # basename only — no path traversal
+        try:
+            if not name or not name.lower().endswith(".pdf"):
+                rejected.append(name or "(空文件名)")
+                continue
+            if name in existing_names:
+                # Already in ./papers — exactly the papers→papers no-op we refuse.
+                skipped_existing += 1
+                continue
+            data = await f.read()
+            if not data[:5].startswith(b"%PDF"):
+                rejected.append(name)  # not a real PDF
+                continue
+            digest = hashlib.md5(data).hexdigest()
+            if digest in existing_hashes:
+                skipped_existing += 1  # same content already present under another name
+                continue
+            (papers_dir / name).write_bytes(data)
+            existing_names.add(name)
+            existing_hashes.add(digest)
+            saved += 1
+        finally:
+            await f.close()
+
+    if saved:
+        scan_result = scan_directory(str(papers_dir), db)
+    else:
+        scan_result = {
+            "new_found": 0,
+            "duplicates": 0,
+            "total": db.query(Paper).count(),
+            "unprocessed": db.query(Paper).filter(Paper.processed == False).count(),
+        }
+    return {
+        "saved": saved,
+        "skipped_existing": skipped_existing,
+        "rejected": rejected,
+        **scan_result,
+    }
+
+
 @router.get("/papers")
 def list_papers(db: Session = Depends(get_db)):
     papers = db.query(Paper).order_by(Paper.created_at.desc()).all()
@@ -397,6 +490,7 @@ def list_papers(db: Session = Depends(get_db)):
             "paper_category_model": normalize_paper_category(p.paper_category_model),
             "paper_category_override": normalize_paper_category(p.paper_category_override),
             "paper_category_source": paper_category_source(p),
+            "year": _paper_pub_year(p),
             "error": p.error,
             "created_at": p.created_at.isoformat() if p.created_at else None,
         }
@@ -409,7 +503,7 @@ def _sync_bulk_record_state(p: Paper) -> bool:
 
 
 @router.get("/papers/{paper_id}")
-def get_paper(paper_id: int, db: Session = Depends(get_db)):
+def get_paper(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -422,7 +516,7 @@ def get_paper(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/papers/{paper_id}/file")
-def serve_pdf(paper_id: int, db: Session = Depends(get_db)):
+def serve_pdf(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -433,7 +527,7 @@ def serve_pdf(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/papers/{paper_id}/record")
-def serve_paper_record(paper_id: int, db: Session = Depends(get_db)):
+def serve_paper_record(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -445,7 +539,7 @@ def serve_paper_record(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/papers/{paper_id}/first_page")
-def serve_first_page(paper_id: int, db: Session = Depends(get_db)):
+def serve_first_page(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p or not p.first_page_image_path:
         raise HTTPException(status_code=404, detail="First page image not found")
@@ -488,7 +582,7 @@ def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
         print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
 
 
-def _process_single(paper_id: int):
+def _process_single(paper_id: str):
     from database import SessionLocal
 
     db = SessionLocal()
@@ -765,7 +859,7 @@ def _process_all_background():
     _process_many_background(ids)
 
 
-def _process_one_background(paper_id: int):
+def _process_one_background(paper_id: str):
     _process_many_background([paper_id])
 
 
@@ -844,7 +938,7 @@ def process_all(background_tasks: BackgroundTasks):
 
 
 @router.post("/papers/{paper_id}/process")
-def process_one(paper_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def process_one(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -855,7 +949,7 @@ def process_one(paper_id: int, background_tasks: BackgroundTasks, db: Session = 
 
 
 @router.post("/papers/{paper_id}/retry")
-def retry_paper(paper_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def retry_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Clear error and retry processing."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -899,7 +993,7 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
 
 
 @router.post("/papers/{paper_id}/reprocess")
-def reprocess_paper(paper_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def reprocess_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """Clear this paper's extracted graph and run LLM extraction again."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -913,7 +1007,7 @@ def reprocess_paper(paper_id: int, background_tasks: BackgroundTasks, db: Sessio
 
 @router.put("/papers/{paper_id}/response")
 def update_paper_response(
-    paper_id: int,
+    paper_id: str,
     body: RawResponseUpdate,
     db: Session = Depends(get_db),
 ):
@@ -939,29 +1033,35 @@ def update_paper_response(
         raise HTTPException(status_code=400, detail=f"Response 缺少关键内容：{issues}")
 
     cfg = load_config()
-    remove_nodes_for_paper(db, p.id)
+    # A light edit (e.g. fixing a formula) leaves the graph structure
+    # untouched, so skip the expensive node rebuild + re-embedding.
+    if body.rebuild_graph:
+        remove_nodes_for_paper(db, p.id)
     p.raw_llm_response = body.raw_llm_response
     p.title = (extraction.get("title") or p.filename)[:200]
     p.authors = extraction.get("authors") or []
     sync_paper_category_fields(p, extraction, overwrite_model=True)
-    p.processed = True
-    p.processed_at = datetime.now(timezone.utc)
-    p.processing_status = PIPELINE_STATUS_DONE
-    p.retry_count = 0
-    p.error = None
-    p.last_error_stage = None
-    p.last_error_reason = None
-    p.last_error_recoverable = None
+    if body.rebuild_graph:
+        # A full repair re-marks the paper as freshly processed.
+        p.processed = True
+        p.processed_at = datetime.now(timezone.utc)
+        p.processing_status = PIPELINE_STATUS_DONE
+        p.retry_count = 0
+        p.error = None
+        p.last_error_stage = None
+        p.last_error_reason = None
+        p.last_error_recoverable = None
     db.flush()
 
-    add_nodes_from_paper_extraction(
-        extraction,
-        p.id,
-        cfg.get("openai_api_key", ""),
-        task_model_id(cfg, "embedding"),
-        cfg.get("similarity_threshold", 0.6),
-        db,
-    )
+    if body.rebuild_graph:
+        add_nodes_from_paper_extraction(
+            extraction,
+            p.id,
+            cfg.get("openai_api_key", ""),
+            task_model_id(cfg, "embedding"),
+            cfg.get("similarity_threshold", 0.6),
+            db,
+        )
     db.commit()
     sync_record_from_paper(p, event="manual_response_edit")
     db.refresh(p)
@@ -970,7 +1070,7 @@ def update_paper_response(
 
 @router.put("/papers/{paper_id}/notes")
 def update_paper_notes(
-    paper_id: int,
+    paper_id: str,
     body: NotesUpdate,
     db: Session = Depends(get_db),
 ):
@@ -996,7 +1096,7 @@ def update_paper_notes(
 
 @router.put("/papers/{paper_id}/category")
 def update_paper_category(
-    paper_id: int,
+    paper_id: str,
     body: CategoryUpdate,
     db: Session = Depends(get_db),
 ):
@@ -1008,11 +1108,13 @@ def update_paper_category(
 
     raw_value = (body.category or "").strip()
     if raw_value:
+        # normalize_paper_category already validates against the ACTIVE list
+        # (incl. user-added custom categories), so a truthy result is valid.
         normalized = normalize_paper_category(raw_value)
-        if not normalized or normalized not in PAPER_CATEGORY_OPTIONS:
+        if not normalized:
             raise HTTPException(
                 status_code=400,
-                detail=f"非法分类：{raw_value}。允许值：{', '.join(PAPER_CATEGORY_OPTIONS)}",
+                detail=f"非法分类：{raw_value}。允许值：{', '.join(get_active_categories())}",
             )
         p.paper_category_override = normalized
     else:
@@ -1024,8 +1126,160 @@ def update_paper_category(
     return _serialize_paper_detail(p, db)
 
 
+# ── paper-category taxonomy management ─────────────────────────────────
+#
+# The category list is user-editable and persisted in config. Renames/deletes
+# also migrate affected papers' override + model fields so the change is
+# reflected everywhere (lanes, mobile grouping after re-sync).
+
+
+class CategoryNameInput(BaseModel):
+    name: str
+
+
+class CategoryRenameInput(BaseModel):
+    new_name: str
+
+
+class BulkCategoryInput(BaseModel):
+    # Paper IDs are UUID strings (legacy INT tolerated).
+    paper_ids: list
+    category: Optional[str] = None
+
+
+def _category_payload(db: Session) -> dict:
+    active = get_active_categories()
+    counts = {c: 0 for c in active}
+    for p in db.query(Paper).all():
+        cat = effective_paper_category(p, _safe_parse(p.raw_llm_response))
+        counts[cat] = counts.get(cat, 0) + 1
+    return {
+        "categories": [
+            {
+                "name": c,
+                "builtin": c in DEFAULT_PAPER_CATEGORY_OPTIONS,
+                "removable": c != PAPER_CATEGORY_OTHER,
+                "count": counts.get(c, 0),
+            }
+            for c in active
+        ]
+    }
+
+
+@router.get("/paper-categories")
+def list_paper_categories(db: Session = Depends(get_db)):
+    return _category_payload(db)
+
+
+@router.post("/paper-categories")
+def add_paper_category(body: CategoryNameInput, db: Session = Depends(get_db)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="分类名不能为空")
+    active = get_active_categories()
+    if name in active:
+        raise HTTPException(status_code=400, detail=f"分类已存在：{name}")
+    # Keep "其他" last.
+    set_active_categories([c for c in active if c != PAPER_CATEGORY_OTHER] + [name])
+    return _category_payload(db)
+
+
+@router.put("/paper-categories/{name}")
+def rename_paper_category(
+    name: str, body: CategoryRenameInput, db: Session = Depends(get_db)
+):
+    new_name = (body.new_name or "").strip()
+    active = get_active_categories()
+    if name == PAPER_CATEGORY_OTHER:
+        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能重命名")
+    if name not in active:
+        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
+    if not new_name:
+        raise HTTPException(status_code=400, detail="新分类名不能为空")
+    if new_name != name and new_name in active:
+        raise HTTPException(status_code=400, detail=f"目标分类已存在：{new_name}")
+    if new_name == name:
+        return {**_category_payload(db), "migrated": 0}
+
+    set_active_categories([new_name if c == name else c for c in active])
+    # Migrate both manual override and model-assigned values so the rename
+    # carries through regardless of how a paper got that category.
+    migrated = 0
+    for p in db.query(Paper).all():
+        changed = False
+        if (p.paper_category_override or "") == name:
+            p.paper_category_override = new_name
+            changed = True
+        if (p.paper_category_model or "") == name:
+            p.paper_category_model = new_name
+            changed = True
+        if changed:
+            migrated += 1
+    db.commit()
+    for p in db.query(Paper).all():
+        if (p.paper_category_override or "") == new_name or (
+            p.paper_category_model or ""
+        ) == new_name:
+            sync_record_from_paper(p, event="category_rename")
+    return {**_category_payload(db), "migrated": migrated}
+
+
+@router.delete("/paper-categories/{name}")
+def delete_paper_category(name: str, db: Session = Depends(get_db)):
+    active = get_active_categories()
+    if name == PAPER_CATEGORY_OTHER:
+        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
+    if name not in active:
+        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
+    set_active_categories([c for c in active if c != name])
+    # Affected papers fall back (override/model cleared → effective re-derives).
+    migrated = 0
+    affected: list = []
+    for p in db.query(Paper).all():
+        changed = False
+        if (p.paper_category_override or "") == name:
+            p.paper_category_override = None
+            changed = True
+        if (p.paper_category_model or "") == name:
+            p.paper_category_model = None
+            changed = True
+        if changed:
+            migrated += 1
+            affected.append(p.id)
+    db.commit()
+    for p in db.query(Paper).filter(Paper.id.in_([str(i) for i in affected])).all():
+        sync_record_from_paper(p, event="category_delete")
+    return {**_category_payload(db), "migrated": migrated}
+
+
+@router.post("/papers/bulk-category")
+def bulk_set_paper_category(body: BulkCategoryInput, db: Session = Depends(get_db)):
+    ids = [str(x) for x in (body.paper_ids or []) if str(x).strip()]
+    if not ids:
+        return {"updated": 0, "category": None}
+    raw = (body.category or "").strip()
+    normalized = None
+    if raw:
+        normalized = normalize_paper_category(raw)
+        if not normalized:
+            raise HTTPException(
+                status_code=400,
+                detail=f"非法分类：{raw}。允许值：{', '.join(get_active_categories())}",
+            )
+    updated = 0
+    touched: list = []
+    for p in db.query(Paper).filter(Paper.id.in_(ids)).all():
+        p.paper_category_override = normalized  # None ⇒ follow model
+        updated += 1
+        touched.append(p)
+    db.commit()
+    for p in touched:
+        sync_record_from_paper(p, event="bulk_category")
+    return {"updated": updated, "category": normalized}
+
+
 @router.get("/papers/{paper_id}/chat")
-def get_chat(paper_id: int, db: Session = Depends(get_db)):
+def get_chat(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -1034,7 +1288,7 @@ def get_chat(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/papers/{paper_id}/chat")
-def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_db)):
+def post_chat(paper_id: str, body: ChatMessageInput, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
@@ -1109,7 +1363,7 @@ def post_chat(paper_id: int, body: ChatMessageInput, db: Session = Depends(get_d
 
 
 @router.delete("/papers/{paper_id}/chat")
-def reset_chat(paper_id: int, db: Session = Depends(get_db)):
+def reset_chat(paper_id: str, db: Session = Depends(get_db)):
     """Drop the local history and forget the thread id. A fresh thread will
     be created on the next chat turn."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()

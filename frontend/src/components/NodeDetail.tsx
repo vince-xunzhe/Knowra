@@ -104,7 +104,14 @@ export default function NodeDetail({
   const nodeId = node?.id
   const paperWikiId =
     node?.node_type === 'paper'
-      ? (node.paper_id ?? node.source_paper_ids?.[0] ?? (node?.id ? Number(node.id) : null))
+      ? ((): string | null => {
+          // ids are UUID strings at runtime (declared number for legacy
+          // reasons); never coerce with Number() — that yields NaN.
+          const raw = node.paper_id ?? node.source_paper_ids?.[0] ?? node.id
+          if (raw == null) return null
+          const s = String(raw)
+          return s !== '' ? s : null
+        })()
       : null
 
   useEffect(() => {
@@ -113,7 +120,7 @@ export default function NodeDetail({
     let cancelled = false
     const loadDetail = async () => {
       try {
-        const result = await getNode(parseInt(nodeId))
+        const result = await getNode(nodeId)
         if (!cancelled) setDetail(result)
       } catch (error) {
         console.error('Failed to load node detail', error)
@@ -151,8 +158,8 @@ export default function NodeDetail({
   useEffect(() => {
     if (!node || tab !== 'wiki' || !wikiKind) return
     if (wiki && wiki.path && (
-      (wikiKind === 'papers' && paperWikiId != null && wiki.paper_id === paperWikiId) ||
-      (wikiKind === 'concepts' && wiki.concept_id === Number(node.id))
+      (wikiKind === 'papers' && paperWikiId != null && String(wiki.paper_id) === paperWikiId) ||
+      (wikiKind === 'concepts' && String(wiki.concept_id) === String(node.id))
     )) return
 
     let cancelled = false
@@ -163,7 +170,7 @@ export default function NodeDetail({
       try {
         const targetId = wikiKind === 'papers'
           ? paperWikiId
-          : Number(node.id)
+          : String(node.id)
         if (targetId == null) {
           setWiki(null)
           setWikiMissing(true)
@@ -171,7 +178,7 @@ export default function NodeDetail({
         }
         const items = wikiKind === 'papers' ? await listPaperPages() : await listConceptPages()
         const match = items.find(it =>
-          wikiKind === 'papers' ? it.paper_id === targetId : it.concept_id === targetId,
+          wikiKind === 'papers' ? String(it.paper_id) === targetId : String(it.concept_id) === targetId,
         )
         if (cancelled) return
         if (!match) {
@@ -209,7 +216,7 @@ export default function NodeDetail({
     try {
       const targetId = wikiKind === 'papers'
         ? paperWikiId
-        : Number(node.id)
+        : String(node.id)
       if (targetId == null) {
         setWikiMissing(true)
         return
@@ -234,7 +241,7 @@ export default function NodeDetail({
     if (!node) return
     setPromotionBusy(true)
     try {
-      const result = await updatePromotionStatus(parseInt(node.id), next)
+      const result = await updatePromotionStatus(node.id, next)
       setLocalStatus(result.node.promotion_status)
       setLocalPromotedBy(result.node.promoted_by)
       setLocalReason(result.node.promotion_reason)

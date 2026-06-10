@@ -65,5 +65,39 @@ class HeuristicTests(unittest.TestCase):
         self.assertIsNone(decision)
 
 
+class ParseDecisionsTests(unittest.TestCase):
+    """The LLM stage maps decisions back to nodes by id. After the
+    multitenant migration node ids are UUID strings; the parser used to
+    do int(id) and silently dropped every decision → all candidates
+    stuck 'still ambiguous' (the 自动剔除 no-op). These lock in
+    string-keyed parsing for both UUID and legacy-int ids."""
+
+    def test_parses_uuid_ids(self):
+        from services.promotion_llm import _parse_decisions
+        raw = (
+            '[{"id":"2d620237-3ea3-4205-ab84-7687284417d1","decision":"reject","reason":"r"},'
+            '{"id":"abc-def-uuid","decision":"promote","reason":"ok"}]'
+        )
+        d = _parse_decisions(raw)
+        self.assertIn("2d620237-3ea3-4205-ab84-7687284417d1", d)
+        self.assertEqual(d["abc-def-uuid"]["decision"], "promote")
+
+    def test_parses_legacy_int_ids_as_strings(self):
+        from services.promotion_llm import _parse_decisions
+        d = _parse_decisions('[{"id":5,"decision":"reject","reason":"x"}]')
+        self.assertIn("5", d)
+        self.assertEqual(d["5"]["decision"], "reject")
+
+    def test_strips_code_fences_and_ignores_bad_decisions(self):
+        from services.promotion_llm import _parse_decisions
+        raw = (
+            '```json\n[{"id":"u1","decision":"promote","reason":"a"},'
+            '{"id":"u2","decision":"maybe","reason":"b"}]\n```'
+        )
+        d = _parse_decisions(raw)
+        self.assertIn("u1", d)
+        self.assertNotIn("u2", d)  # "maybe" isn't promote/reject → dropped
+
+
 if __name__ == "__main__":
     unittest.main()

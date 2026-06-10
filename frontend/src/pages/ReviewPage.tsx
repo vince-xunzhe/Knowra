@@ -10,14 +10,15 @@ import {
   Zap, Layers, GitBranch, History, AlertTriangle, Code2,
   Copy, Check, ArrowRight, Plus, Trash2,
   MessageCircle, Maximize2, Send, RefreshCw, Timer,
-  ZoomIn, ZoomOut, Minimize,
+  ZoomIn, ZoomOut, Minimize, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperCategory, updatePaperNotes,
   getStatus,
   pdfFileUrl, firstPageUrl,
   sendPaperChat, resetPaperChat, uploadNoteImage,
-  type PaperRecord, type PaperDetail,
+  listPaperCategories,
+  type PaperRecord, type PaperDetail, type PaperCategoryItem,
   type ChatState, type ChatMessage,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
@@ -108,9 +109,16 @@ export default function ReviewPage() {
   const [categoryDraft, setCategoryDraft] = useState<string>(CATEGORY_INHERIT)
   const [categorySaving, setCategorySaving] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
+  // User-editable taxonomy (loaded from /paper-categories). Falls back to
+  // the built-in defaults until the first fetch resolves.
+  const [categoryItems, setCategoryItems] = useState<PaperCategoryItem[]>([])
+  const categoryOptions: string[] = categoryItems.length
+    ? categoryItems.map(c => c.name)
+    : [...PAPER_CATEGORY_OPTIONS]
   const [reprocessing, setReprocessing] = useState(false)
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [processStatus, setProcessStatus] = useState<ProcessStatusHint | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // ── In-page PDF reader ─────────────────────────────────────────
   // The right-side PDF panel is opened from the 首页预览 block in the
@@ -143,13 +151,32 @@ export default function ReviewPage() {
   const pdfOpenPaperId = pdfSession?.paperId ?? null
 
   useEffect(() => {
-    listPapers().then(ps => {
-      setPapers(ps)
-      const first = ps.find(p => p.processed)
-      if (first) setSelectedId(first.id)
-      setLoading(false)
-    })
+    listPapers()
+      .then(ps => {
+        setPapers(ps)
+        const first = ps.find(p => p.processed)
+        if (first) setSelectedId(first.id)
+      })
+      .catch(err => {
+        // Without this we'd sit at "加载中…" forever on any axios reject
+        // (CORS hiccup, backend restart, network blip). Surface the
+        // reason so the user can see what to fix.
+        setLoadError(err instanceof Error ? err.message : String(err))
+        console.error('[ReviewPage] listPapers failed:', err)
+      })
+      .finally(() => setLoading(false))
   }, [])
+
+  const reloadCategories = useCallback(
+    () =>
+      listPaperCategories()
+        .then(setCategoryItems)
+        .catch(err => console.error('[ReviewPage] listPaperCategories failed:', err)),
+    [],
+  )
+  useEffect(() => {
+    void reloadCategories()
+  }, [reloadCategories])
 
   useEffect(() => {
     let cancelled = false
@@ -203,6 +230,41 @@ export default function ReviewPage() {
     }
     return list
   }, [papers, filter, search])
+
+  // Sidebar grouped by 大类 (ordered like the active taxonomy), with
+  // per-group collapse. Only non-empty groups show.
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set())
+  const toggleCat = (c: string) =>
+    setCollapsedCats(prev => {
+      const n = new Set(prev)
+      if (n.has(c)) n.delete(c)
+      else n.add(c)
+      return n
+    })
+  const groupedFiltered = useMemo(() => {
+    const order = categoryOptions.length ? categoryOptions : [...PAPER_CATEGORY_OPTIONS]
+    const rank = (c: string) => {
+      const i = order.indexOf(c)
+      return i === -1 ? order.length : i
+    }
+    const m = new Map<string, PaperRecord[]>()
+    for (const p of filtered) {
+      const c = p.paper_category || '其他'
+      if (!m.has(c)) m.set(c, [])
+      m.get(c)!.push(p)
+    }
+    // Within a 大类, order by publication year (chronological, oldest →
+    // newest; unknown years last), matching the mobile 资料 ordering.
+    for (const [, ps] of m) {
+      ps.sort((a, b) => {
+        const ya = a.year || 9999
+        const yb = b.year || 9999
+        if (ya !== yb) return ya - yb
+        return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
+      })
+    }
+    return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]))
+  }, [filtered, categoryOptions])
 
   const visibleDetail = selectedId !== null && detail?.id === selectedId ? detail : null
   const visibleProcessMeta = useMemo(
@@ -384,49 +446,74 @@ export default function ReviewPage() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <p className="text-sm text-slate-500 p-6 text-center">加载中…</p>
+          ) : loadError ? (
+            <div className="m-4 p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-[12px] text-rose-200">
+              <p className="font-semibold mb-1">论文列表加载失败</p>
+              <p className="font-mono text-[11px] break-all">{loadError}</p>
+              <p className="text-rose-300/80 text-[11px] mt-1.5">检查后端是否在运行：<code className="font-mono">curl http://localhost:8000/api/papers</code></p>
+            </div>
           ) : filtered.length === 0 ? (
             <p className="text-sm text-slate-500 p-6 text-center">没有匹配的论文</p>
           ) : (
-            <ul className="py-1">
-              {filtered.map(p => {
-                const active = selectedId === p.id
+            <div className="py-1">
+              {groupedFiltered.map(([cat, ps]) => {
+                const collapsed = collapsedCats.has(cat)
                 return (
-                  <li key={p.id}>
+                  <div key={cat}>
                     <button
-                      onClick={() => selectPaper(p.id)}
-                      className={`w-full flex flex-col gap-1.5 px-4 py-3.5 text-left border-l-2 transition-colors ${
-                        active
-                          ? 'bg-indigo-500/10 border-l-indigo-400'
-                          : 'border-l-transparent hover:bg-slate-900/60'
-                      }`}
+                      onClick={() => toggleCat(cat)}
+                      className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-slate-300 hover:bg-slate-800/40"
                     >
-                      <p className={`text-sm leading-snug line-clamp-3 text-safe-wrap ${active ? 'text-white font-medium' : 'text-slate-300'}`}>
-                        {p.title || p.filename}
-                      </p>
-                      {p.authors.length > 0 && (
-                        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed text-safe-wrap">
-                          {p.authors.slice(0, 3).join(', ')}
-                        </p>
+                      {collapsed ? (
+                        <ChevronRight size={13} className="shrink-0 text-slate-500" />
+                      ) : (
+                        <ChevronDown size={13} className="shrink-0 text-slate-500" />
                       )}
-                      <div className="flex flex-wrap items-center gap-2 text-xs">
-                        <PaperProcessBadge paper={p} status={processStatus} />
-                        {p.paper_category && (
-                          <span className="rounded-md border border-indigo-500/20 bg-indigo-500/10 px-1.5 py-0.5 text-[10.5px] text-indigo-200">
-                            {p.paper_category}
-                          </span>
-                        )}
-                        {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
-                      </div>
-                      {p.error && (
-                        <p className="text-[11px] leading-relaxed text-rose-300 text-safe-wrap">
-                          最近错误：{summarizePaperError(p.error)}
-                        </p>
-                      )}
+                      <span className="text-[12px] font-semibold">{cat}</span>
+                      <span className="tabular-nums text-[11px] text-slate-500">{ps.length}</span>
                     </button>
-                  </li>
+                    {!collapsed && (
+                      <ul>
+                        {ps.map(p => {
+                          const active = selectedId === p.id
+                          return (
+                            <li key={p.id}>
+                              <button
+                                onClick={() => selectPaper(p.id)}
+                                className={`w-full flex flex-col gap-1.5 py-3 pl-7 pr-4 text-left border-l-2 transition-colors ${
+                                  active
+                                    ? 'bg-indigo-500/10 border-l-indigo-400'
+                                    : 'border-l-transparent hover:bg-slate-900/60'
+                                }`}
+                              >
+                                <p className={`text-sm leading-snug line-clamp-3 text-safe-wrap ${active ? 'text-white font-medium' : 'text-slate-300'}`}>
+                                  {p.title || p.filename}
+                                </p>
+                                {p.authors.length > 0 && (
+                                  <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed text-safe-wrap">
+                                    {p.authors.slice(0, 3).join(', ')}
+                                  </p>
+                                )}
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <PaperProcessBadge paper={p} status={processStatus} />
+                                  {p.year && <span className="text-slate-500">{p.year}</span>}
+                                  {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
+                                </div>
+                                {p.error && (
+                                  <p className="text-[11px] leading-relaxed text-rose-300 text-safe-wrap">
+                                    最近错误：{summarizePaperError(p.error)}
+                                  </p>
+                                )}
+                              </button>
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                  </div>
                 )
               })}
-            </ul>
+            </div>
           )}
         </div>
       </aside>
@@ -552,7 +639,7 @@ export default function ReviewPage() {
                   <option value={CATEGORY_INHERIT}>
                     跟随模型（{visibleDetail.paper_category_model || '未设置'}）
                   </option>
-                  {PAPER_CATEGORY_OPTIONS.map(option => (
+                  {categoryOptions.map(option => (
                     <option key={option} value={option}>{option}</option>
                   ))}
                 </select>
@@ -624,7 +711,7 @@ export default function ReviewPage() {
                       该论文尚未处理。回到资料库点击「立即处理」。
                     </div>
                   ) : parsed ? (
-                    <StructuredBody data={parsed} detail={visibleDetail} />
+                    <StructuredBody data={parsed} detail={visibleDetail} onSaved={setDetail} />
                   ) : (
                     <div>
                       <p className="text-sm text-amber-400 mb-2">⚠ 无法解析为 JSON，显示原文</p>
@@ -659,6 +746,11 @@ export default function ReviewPage() {
                       paper={visibleDetail}
                       keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
                       onOpenPdf={() => handleOpenPdf(visibleDetail.id)}
+                      onNoteAdded={updated => {
+                        setDetail(updated)
+                        setPapers(prev => prev.map(p => (p.id === updated.id ? updated : p)))
+                        setActionNotice({ tone: 'success', title: '已存为个人笔记' })
+                      }}
                     />
                   </div>
                 )}
@@ -707,7 +799,7 @@ export default function ReviewPage() {
 }
 
 function FirstPagePreview({
-  paper, keywords, onOpenPdf,
+  paper, keywords, onOpenPdf, onNoteAdded,
 }: {
   paper: PaperDetail
   keywords: string[]
@@ -715,10 +807,11 @@ function FirstPagePreview({
    *  ReviewPage so the panel can collapse the paper-list aside and
    *  persist view state across opens. */
   onOpenPdf: () => void
+  onNoteAdded?: (updated: PaperDetail) => void
 }) {
   return (
     <div className="space-y-5">
-      <PaperChatBox key={paper.id} paper={paper} />
+      <PaperChatBox key={paper.id} paper={paper} onNoteAdded={onNoteAdded} />
       <ReviewBlock
         icon={<FileText size={14} />}
         title="首页预览"
@@ -837,7 +930,13 @@ function latestExchange(messages: ChatMessage[]): { user: ChatMessage | null; as
   return { user, assistant }
 }
 
-function PaperChatBox({ paper }: { paper: PaperDetail }) {
+function PaperChatBox({
+  paper,
+  onNoteAdded,
+}: {
+  paper: PaperDetail
+  onNoteAdded?: (updated: PaperDetail) => void
+}) {
   const [chat, setChat] = useState<ChatState>(paper.chat)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -886,6 +985,18 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
     }
   }
 
+  // Append one Q&A pair to the paper's personal notes as a new block.
+  const saveToNote = async (question: string, answer: string) => {
+    const blocks = parseNoteBlocks(paper.notes)
+    blocks.push({
+      id: newBlockId(),
+      title: (question || '追问').trim().slice(0, 200),
+      content: (answer || '').trim(),
+    })
+    const updated = await updatePaperNotes(paper.id, serializeNoteBlocks(blocks))
+    onNoteAdded?.(updated)
+  }
+
   const tone = chatStatusTone(chat)
   const { user, assistant } = latestExchange(chat.messages)
   const canChat = chat.ready
@@ -929,7 +1040,16 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
                   )}
                   {assistant && (
                     <div className="rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2">
-                      <p className="mb-1 text-[10px] uppercase tracking-widest text-slate-400">Assistant</p>
+                      <div className="mb-1 flex items-center gap-2">
+                        <p className="text-[10px] uppercase tracking-widest text-slate-400">Assistant</p>
+                        {onNoteAdded && (
+                          <span className="ml-auto">
+                            <SaveToNoteButton
+                              onSave={() => saveToNote(user?.content || '', assistant.content)}
+                            />
+                          </span>
+                        )}
+                      </div>
                       <p className="line-clamp-4 text-xs leading-6 text-slate-300 text-safe-wrap">{assistant.content}</p>
                     </div>
                   )}
@@ -987,6 +1107,7 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
           onSend={send}
           onReset={reset}
           onClose={() => setExpanded(false)}
+          onSaveToNote={onNoteAdded ? saveToNote : undefined}
         />
       )}
     </>
@@ -994,7 +1115,7 @@ function PaperChatBox({ paper }: { paper: PaperDetail }) {
 }
 
 function ChatModal({
-  chat, sending, error, onSend, onReset, onClose,
+  chat, sending, error, onSend, onReset, onClose, onSaveToNote,
 }: {
   chat: ChatState
   sending: boolean
@@ -1002,6 +1123,7 @@ function ChatModal({
   onSend: (text: string) => void
   onReset: () => void
   onClose: () => void
+  onSaveToNote?: (question: string, answer: string) => Promise<void>
 }) {
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -1075,9 +1197,17 @@ function ChatModal({
             </div>
           ) : (
             <ul className="space-y-3">
-              {chat.messages.map((m, i) => (
-                <ChatBubble key={i} message={m} />
-              ))}
+              {chat.messages.map((m, i) => {
+                let save: (() => Promise<void>) | undefined
+                if (m.role === 'assistant' && onSaveToNote) {
+                  let q = ''
+                  for (let j = i - 1; j >= 0; j--) {
+                    if (chat.messages[j].role === 'user') { q = chat.messages[j].content; break }
+                  }
+                  save = () => onSaveToNote(q, m.content)
+                }
+                return <ChatBubble key={i} message={m} onSaveToNote={save} />
+              })}
               {sending && (
                 <li className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
@@ -1121,7 +1251,55 @@ function ChatModal({
   )
 }
 
-function ChatBubble({ message }: { message: ChatMessage }) {
+// One-click "save this Q&A as a personal note". Manages its own
+// idle / saving / saved state so each button gives independent feedback.
+function SaveToNoteButton({
+  onSave,
+  className,
+}: {
+  onSave: () => Promise<void>
+  className?: string
+}) {
+  const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const click = async () => {
+    if (state !== 'idle') return
+    setState('saving')
+    try {
+      await onSave()
+      setState('saved')
+      setTimeout(() => setState('idle'), 2200)
+    } catch {
+      setState('idle')
+    }
+  }
+  return (
+    <button
+      onClick={click}
+      disabled={state === 'saving'}
+      title="把这条问答一键存成个人笔记"
+      className={`inline-flex items-center gap-1 text-[11px] transition-colors disabled:opacity-60 ${
+        state === 'saved' ? 'text-emerald-300' : 'text-slate-500 hover:text-indigo-300'
+      } ${className || ''}`}
+    >
+      {state === 'saving' ? (
+        <Loader2 size={11} className="animate-spin" />
+      ) : state === 'saved' ? (
+        <Check size={11} />
+      ) : (
+        <NotebookPen size={11} />
+      )}
+      {state === 'saved' ? '已存为笔记' : '存为笔记'}
+    </button>
+  )
+}
+
+function ChatBubble({
+  message,
+  onSaveToNote,
+}: {
+  message: ChatMessage
+  onSaveToNote?: () => Promise<void>
+}) {
   if (message.role === 'system') {
     return (
       <li className="flex justify-center">
@@ -1144,6 +1322,11 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         }`}>
           <span>{isUser ? 'You' : 'Assistant'}</span>
           <span className="normal-case tracking-normal text-slate-600">· {formatRelativeTime(message.ts)}</span>
+          {!isUser && onSaveToNote && (
+            <span className="ml-auto normal-case tracking-normal">
+              <SaveToNoteButton onSave={onSaveToNote} />
+            </span>
+          )}
         </div>
         {isUser ? (
           <p className="whitespace-pre-wrap text-sm leading-7 text-slate-100 text-safe-wrap">{message.content}</p>
@@ -1204,10 +1387,42 @@ function RawResponseEditor({
   )
 }
 
-function StructuredBody({ data, detail }: { data: PaperExtraction; detail: PaperDetail }) {
+function StructuredBody({
+  data,
+  detail,
+  onSaved,
+}: {
+  data: PaperExtraction
+  detail: PaperDetail
+  onSaved?: (updated: PaperDetail) => void
+}) {
   const principle: PrincipleBlock | null = typeof data.principle === 'string'
     ? { analogy: data.principle }
     : data.principle || null
+
+  // Persist a single edited formula back into the paper's extraction JSON.
+  // We deep-clone the parsed extraction (which carries the full object, not
+  // just the typed subset), patch principle.key_formulas[index], and PUT the
+  // whole raw_llm_response — the same store the "编辑 Response" path uses.
+  const saveFormula = async (
+    index: number,
+    next: { name?: string; formula?: string; plain?: string },
+  ) => {
+    const clone = JSON.parse(JSON.stringify(data)) as PaperExtraction & {
+      principle?: unknown
+    }
+    const pr =
+      typeof clone.principle === 'string'
+        ? { analogy: clone.principle }
+        : ((clone.principle as PrincipleBlock | null) || {})
+    if (!Array.isArray(pr.key_formulas)) return
+    pr.key_formulas[index] = next
+    clone.principle = pr
+    // rebuildGraph=false: a formula edit doesn't change the knowledge graph,
+    // so skip the heavy node rebuild + re-embedding (which made save hang).
+    const updated = await updatePaperResponse(detail.id, JSON.stringify(clone, null, 2), false)
+    onSaved?.(updated)
+  }
 
   return (
     <div className="space-y-8">
@@ -1288,13 +1503,7 @@ function StructuredBody({ data, detail }: { data: PaperExtraction; detail: Paper
                 <p className="section-label mb-2 text-indigo-300/80">关键公式</p>
                 <ul className="space-y-2">
                   {principle.key_formulas.map((f, i) => (
-                    <li key={i} className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
-                      {f.name && <p className="text-xs font-semibold text-indigo-200">{f.name}</p>}
-                      {f.formula && (
-                        <FormulaDisplay formula={f.formula} />
-                      )}
-                      {f.plain && <p className="mt-2 text-sm leading-7 text-slate-300">{f.plain}</p>}
-                    </li>
+                    <FormulaEditor key={i} formula={f} onSave={next => saveFormula(i, next)} />
                   ))}
                 </ul>
               </div>
@@ -1627,6 +1836,119 @@ function normalizeFormula(raw: string): string {
   return text
 }
 
+function FormulaEditor({
+  formula,
+  onSave,
+}: {
+  formula: { name?: string; formula?: string; plain?: string }
+  onSave: (next: { name?: string; formula?: string; plain?: string }) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
+  const [latex, setLatex] = useState('')
+  const [plain, setPlain] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const startEdit = () => {
+    setName(formula.name || '')
+    setLatex(formula.formula || '')
+    setPlain(formula.plain || '')
+    setErr(null)
+    setEditing(true)
+  }
+  const save = async () => {
+    setSaving(true)
+    setErr(null)
+    try {
+      await onSave({
+        name: name.trim() || undefined,
+        formula: latex.trim() || undefined,
+        plain: plain.trim() || undefined,
+      })
+      setEditing(false)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <li className="group relative rounded-lg border border-slate-800/80 bg-slate-950/35 px-3 py-2.5">
+        <div className="flex items-start justify-between gap-2">
+          {formula.name ? (
+            <p className="text-xs font-semibold text-indigo-200">{formula.name}</p>
+          ) : (
+            <span />
+          )}
+          <button
+            onClick={startEdit}
+            title="编辑公式"
+            className="shrink-0 rounded p-1 text-slate-500 opacity-0 transition-opacity hover:bg-slate-800/60 hover:text-indigo-200 group-hover:opacity-100"
+          >
+            <Pencil size={12} />
+          </button>
+        </div>
+        {formula.formula && <FormulaDisplay formula={formula.formula} />}
+        {formula.plain && <p className="mt-2 text-sm leading-7 text-slate-300">{formula.plain}</p>}
+      </li>
+    )
+  }
+
+  return (
+    <li className="space-y-2.5 rounded-lg border border-indigo-500/40 bg-slate-950/50 px-3 py-3">
+      <input
+        value={name}
+        onChange={e => setName(e.target.value)}
+        placeholder="公式名称（可空）"
+        className="w-full rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-xs font-semibold text-indigo-100 focus:border-indigo-500/60 focus:outline-none"
+      />
+      <textarea
+        value={latex}
+        onChange={e => setLatex(e.target.value)}
+        rows={2}
+        placeholder="LaTeX 公式，例如 z = E(x), \hat{x} = D(z)"
+        className="w-full resize-y rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 font-mono text-[12.5px] leading-6 text-slate-100 focus:border-indigo-500/60 focus:outline-none"
+      />
+      <div>
+        <p className="mb-0.5 text-[10.5px] uppercase tracking-wider text-slate-500">实时预览</p>
+        {latex.trim() ? (
+          <FormulaDisplay formula={latex} />
+        ) : (
+          <p className="text-[11px] text-slate-600">（输入 LaTeX 后这里实时渲染；渲染失败会原样显示，方便排错）</p>
+        )}
+      </div>
+      <textarea
+        value={plain}
+        onChange={e => setPlain(e.target.value)}
+        rows={2}
+        placeholder="通俗解释（可空）"
+        className="w-full resize-y rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-[13px] leading-6 text-slate-200 focus:border-indigo-500/60 focus:outline-none"
+      />
+      {err && <p className="text-[11px] text-rose-300">保存失败：{err}</p>}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={() => setEditing(false)}
+          disabled={saving}
+          className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+        >
+          <X size={12} /> 取消
+        </button>
+        <button
+          onClick={save}
+          disabled={saving}
+          className="inline-flex items-center gap-1 rounded-md bg-indigo-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
+        >
+          {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          {saving ? '保存中…' : '保存'}
+        </button>
+      </div>
+    </li>
+  )
+}
+
 function FormulaDisplay({ formula }: { formula: string }) {
   const normalized = useMemo(() => normalizeFormula(formula), [formula])
   const rendered = useMemo(() => {
@@ -1734,6 +2056,12 @@ function NotesSection({
   const [isNewBlock, setIsNewBlock] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Re-sync from the paper when its notes change externally (e.g. a Q&A was
+  // saved from the 追问 panel) — but never while the user is mid-edit.
+  useEffect(() => {
+    if (editingId === null) setBlocks(parseNoteBlocks(paper.notes))
+  }, [paper.notes, editingId])
 
   const persist = async (nextBlocks: NoteBlockData[]) => {
     setSaving(true)

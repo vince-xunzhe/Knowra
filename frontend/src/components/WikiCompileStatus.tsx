@@ -3,8 +3,8 @@ import { Loader2, Sparkles, FileText } from 'lucide-react'
 import { getWikiStatus, type WikiCompileState } from '../api/client'
 
 // Always-mounted floating chip, mirror of <ProcessingStatus> but for the
-// wiki compile pipeline. Lives bottom-LEFT so it doesn't collide with the
-// paper-processing chip on the bottom-right when both happen to run.
+// wiki compile pipeline. Lives TOP-RIGHT (just under the toolbar) — the
+// paper-processing chip stays bottom-right, so the two never collide.
 //
 // Only renders when a compile is in progress. Polling cadence backs off
 // exponentially on transient errors (axios timeout / vite proxy 502),
@@ -58,7 +58,7 @@ export default function WikiCompileStatus() {
   const Icon = status.kind === 'papers' ? FileText : Sparkles
 
   return (
-    <div className="fixed bottom-5 left-5 bg-slate-900/95 backdrop-blur-md border border-indigo-500/30 rounded-2xl p-4 w-72 shadow-2xl shadow-indigo-500/10 z-50 fade-in">
+    <div className="fixed top-24 right-5 bg-slate-900/95 backdrop-blur-md border border-indigo-500/30 rounded-2xl p-4 w-72 shadow-2xl shadow-indigo-500/10 z-50 fade-in">
       <div className="flex items-center gap-2.5 mb-2.5">
         <Icon size={14} className="text-indigo-400" />
         <span className="text-sm text-slate-100 font-medium">编译 {kindLabel}</span>

@@ -10,7 +10,7 @@ via GET /api/wiki/status, so the user gets a live progress bar instead of
 """
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
@@ -317,7 +317,7 @@ def wiki_lint_report():
 
 
 class LintAcceptRequest(BaseModel):
-    concept_id: int
+    concept_id: str
 
 
 @router.post("/lint/accept")
@@ -477,7 +477,7 @@ def recompile_all_paper_pages():
 
 
 @router.post("/papers/{paper_id}/recompile")
-def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
+def recompile_one_paper(paper_id: str, db: Session = Depends(get_db)):
     """Single-paper wiki recompile — used by the graph drawer's "重编译此页"
     button so the user can refresh one paper without retriggering the
     full extraction pipeline."""
@@ -515,7 +515,7 @@ def recompile_one_paper(paper_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/concepts/{concept_id}/recompile")
-def recompile_one_concept(concept_id: int, db: Session = Depends(get_db)):
+def recompile_one_concept(concept_id: str, db: Session = Depends(get_db)):
     cfg = load_config()
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == concept_id).first()
     if not node:
@@ -549,30 +549,34 @@ def recompile_one_concept(concept_id: int, db: Session = Depends(get_db)):
 
 class RetryFailedItemInput(BaseModel):
     kind: str
-    item_id: int
+    # Item IDs are UUID strings post-multitenant migration (stored from
+    # node.id / paper.id). A bare int 422-rejects UUIDs.
+    item_id: Union[int, str]
 
 
 class RecompileDirtyInput(BaseModel):
     include_missing: bool = True
     include_stale: bool = True
-    paper_ids: list[int] = Field(default_factory=list)
-    concept_ids: list[int] = Field(default_factory=list)
+    # IDs are UUID strings post-migration.
+    paper_ids: list[str] = Field(default_factory=list)
+    concept_ids: list[str] = Field(default_factory=list)
 
 
 class RecompileByIdsInput(BaseModel):
-    paper_ids: list[int] = Field(default_factory=list)
-    concept_ids: list[int] = Field(default_factory=list)
+    paper_ids: list[str] = Field(default_factory=list)
+    concept_ids: list[str] = Field(default_factory=list)
 
 
-def _normalize_id_list(values: Optional[list[int]]) -> list[int]:
-    out: list[int] = []
+def _normalize_id_list(values: Optional[list[str]]) -> list[str]:
+    # IDs are opaque strings (UUID post-migration). The old int() coerce
+    # dropped every UUID → recompile-by-ids became a silent no-op.
+    out: list[str] = []
     for raw in values or []:
-        try:
-            ident = int(raw)
-        except (TypeError, ValueError):
+        if raw is None:
             continue
-        if ident > 0:
-            out.append(ident)
+        s = str(raw).strip()
+        if s:
+            out.append(s)
     return sorted(set(out))
 
 
@@ -580,9 +584,14 @@ def _dirty_ids_from_freshness(
     freshness: dict,
     include_missing: bool,
     include_stale: bool,
-) -> tuple[list[int], list[int]]:
-    paper_ids: set[int] = set()
-    concept_ids: set[int] = set()
+) -> tuple[list[str], list[str]]:
+    # IDs are opaque strings (UUID post-migration; the downstream
+    # recompile does ``Paper.id == id`` string-compares). The previous
+    # ``isinstance(..., int)`` guard silently dropped every id once they
+    # became UUIDs → incremental recompile of missing/stale wiki pages
+    # became a no-op. Accept any non-empty id, keep as string.
+    paper_ids: set[str] = set()
+    concept_ids: set[str] = set()
 
     paper_section = freshness.get("papers") if isinstance(freshness, dict) else {}
     concept_section = freshness.get("concepts") if isinstance(freshness, dict) else {}
@@ -591,21 +600,26 @@ def _dirty_ids_from_freshness(
     if not isinstance(concept_section, dict):
         concept_section = {}
 
-    if include_missing:
-        for row in paper_section.get("missing") or []:
-            if isinstance(row, dict) and isinstance(row.get("paper_id"), int):
-                paper_ids.add(int(row["paper_id"]))
-        for row in concept_section.get("missing") or []:
-            if isinstance(row, dict) and isinstance(row.get("concept_id"), int):
-                concept_ids.add(int(row["concept_id"]))
+    def _id(row, key):
+        if isinstance(row, dict) and row.get(key) is not None:
+            s = str(row[key]).strip()
+            return s or None
+        return None
 
+    buckets = []
+    if include_missing:
+        buckets.append("missing")
     if include_stale:
-        for row in paper_section.get("stale") or []:
-            if isinstance(row, dict) and isinstance(row.get("paper_id"), int):
-                paper_ids.add(int(row["paper_id"]))
-        for row in concept_section.get("stale") or []:
-            if isinstance(row, dict) and isinstance(row.get("concept_id"), int):
-                concept_ids.add(int(row["concept_id"]))
+        buckets.append("stale")
+    for bucket in buckets:
+        for row in paper_section.get(bucket) or []:
+            pid = _id(row, "paper_id")
+            if pid:
+                paper_ids.add(pid)
+        for row in concept_section.get(bucket) or []:
+            cid = _id(row, "concept_id")
+            if cid:
+                concept_ids.add(cid)
 
     return sorted(paper_ids), sorted(concept_ids)
 
@@ -613,8 +627,8 @@ def _dirty_ids_from_freshness(
 def _run_incremental_recompile(
     *,
     db: Session,
-    paper_ids: list[int],
-    concept_ids: list[int],
+    paper_ids: list[str],
+    concept_ids: list[str],
     include_missing: bool,
     include_stale: bool,
     freshness_before: Optional[dict] = None,

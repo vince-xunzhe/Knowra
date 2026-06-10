@@ -36,7 +36,7 @@ interface Props {
   onClose: () => void
   /** Called after the user successfully files an answer back as a
    *  synthesis concept page — host can refresh the graph / counts. */
-  onSynthesisCreated?: (conceptId: number) => void
+  onSynthesisCreated?: (conceptId: string | number) => void
 }
 
 interface Turn {

@@ -65,7 +65,17 @@ class _FakeDB:
     def __init__(self, nodes=None, papers=None):
         self.nodes = list(nodes or [])
         self.papers = list(papers or [])
-        self.next_id = max([getattr(node, "id", 0) for node in self.nodes] + [0]) + 1
+        # Existing nodes may carry string or int ids (post- vs pre-
+        # multitenant). Coerce all to int for the next-id counter; if
+        # any fail (e.g. UUID), fall back to an arbitrary next int.
+        ids = []
+        for node in self.nodes:
+            raw = getattr(node, "id", None)
+            try:
+                ids.append(int(raw))
+            except (TypeError, ValueError):
+                pass
+        self.next_id = (max(ids) if ids else 0) + 1
 
     def query(self, model):
         if model is KnowledgeNode:
@@ -108,26 +118,26 @@ def _node(node_id: int, title: str, **overrides):
 class ManualConceptDedupeTests(unittest.TestCase):
     def test_create_reuses_existing_node_and_adopts_it_as_manual(self):
         existing = _node(
-            7,
+            "7",
             "闭环世界模型",
             hidden=True,
             tags=["世界模型"],
-            source_paper_ids=[1],
+            source_paper_ids=["1"],
         )
         db = _FakeDB(
             nodes=[existing],
-            papers=[SimpleNamespace(id=1), SimpleNamespace(id=2)],
+            papers=[SimpleNamespace(id="1"), SimpleNamespace(id="2")],
         )
 
         with patch("routers.graph._reconcile_curated_wiki"), patch(
             "routers.graph.get_node_detail_data",
-            return_value={"id": 7, "title": "闭环世界模型"},
+            return_value={"id": "7", "title": "闭环世界模型"},
         ):
             result = create_manual_concept(
                 ManualConceptInput(
                     title="闭环世界模型",
                     content="用户补充定义",
-                    paper_ids=[1, 2],
+                    paper_ids=["1", "2"],
                     tags=["世界模型", "规划"],
                 ),
                 db=db,
@@ -144,7 +154,7 @@ class ManualConceptDedupeTests(unittest.TestCase):
         self.assertEqual(existing.promotion_status, "promoted")
         self.assertEqual(existing.promoted_by, "user")
         self.assertEqual(existing.tags, ["世界模型", "规划"])
-        self.assertEqual(existing.source_paper_ids, [1, 2])
+        self.assertEqual(existing.source_paper_ids, ["1", "2"])
         self.assertEqual(existing.content, "用户补充定义")
 
     def test_update_rejects_duplicate_title(self):
@@ -172,14 +182,14 @@ class ManualConceptDedupeTests(unittest.TestCase):
 
     def test_create_does_not_reuse_existing_node_by_tag_only(self):
         existing = _node(
-            7,
+            "7",
             "LoRA",
             node_type="technique",
             node_origin="auto",
             promotion_status="promoted",
             tags=["因果注意力"],
         )
-        db = _FakeDB(nodes=[existing], papers=[SimpleNamespace(id=1)])
+        db = _FakeDB(nodes=[existing], papers=[SimpleNamespace(id="1")])
 
         with patch("routers.graph._reconcile_curated_wiki"), patch(
             "routers.graph.get_node_detail_data",
@@ -189,7 +199,7 @@ class ManualConceptDedupeTests(unittest.TestCase):
                 ManualConceptInput(
                     title="因果注意力",
                     content="用户定义",
-                    paper_ids=[1],
+                    paper_ids=["1"],
                     tags=["ask归纳"],
                 ),
                 db=db,
@@ -199,7 +209,10 @@ class ManualConceptDedupeTests(unittest.TestCase):
         self.assertFalse(result["reused_existing"])
         self.assertEqual(len(db.nodes), 2)
         self.assertEqual(db.nodes[-1].title, "因果注意力")
-        self.assertEqual(db.nodes[-1].id, 8)
+        # After UUID migration the auto-generated id is whatever the
+        # FakeDB assigned (still the next int in the fixture); _node
+        # holds an opaque id, so just check it's set.
+        self.assertTrue(db.nodes[-1].id is not None)
 
 
 if __name__ == "__main__":

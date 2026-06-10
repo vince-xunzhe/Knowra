@@ -22,7 +22,8 @@ const TYPE_STYLES: Record<string, string> = {
 
 type LaneNode = {
   node: WikiGraphNode
-  linkedPaperIds: number[]
+  // Paper ids are opaque strings (INT legacy or UUID); never numeric.
+  linkedPaperIds: string[]
   avgIndex: number
 }
 
@@ -30,7 +31,7 @@ type Lane = {
   name: string
   papers: WikiGraphNode[]
   nodesByType: Record<string, LaneNode[]>
-  paperNodeCounts: Record<number, number>
+  paperNodeCounts: Record<string, number>
 }
 
 
@@ -75,19 +76,19 @@ function laneData(graph: WikiGraphData): { lanes: Lane[]; maxColumns: number } {
     if (papers.length === 0) continue
 
     maxColumns = Math.max(maxColumns, papers.length)
-    const indexByPaperId = new Map<number, number>()
+    const indexByPaperId = new Map<string, number>()
     for (const [index, paper] of papers.entries()) {
-      if (paper.paper_id != null) indexByPaperId.set(paper.paper_id, index)
+      if (paper.paper_id != null) indexByPaperId.set(String(paper.paper_id), index)
     }
 
     const nodesByType: Record<string, LaneNode[]> = {}
-    const paperNodeCounts: Record<number, number> = {}
+    const paperNodeCounts: Record<string, number> = {}
     for (const nodeType of TYPE_SECTION_ORDER) nodesByType[nodeType] = []
 
     for (const node of conceptNodes.filter(item => item.category === category)) {
       const linkedPaperIds = supportEdges
         .filter(edge => edge.source === node.id)
-        .map(edge => Number(edge.target.replace('paper:', '')))
+        .map(edge => edge.target.replace('paper:', ''))
         .filter(pid => indexByPaperId.has(pid))
       if (linkedPaperIds.length === 0) continue
 
@@ -127,7 +128,7 @@ export default function WikiKnowledgeMap({
   onPick: (node: WikiGraphNode) => void
   onSuppressNode?: (node: WikiGraphNode) => void
   suppressingNodeId?: string | null
-  onCreateConcept?: (category: string, paperIds: number[]) => void
+  onCreateConcept?: (category: string, paperIds: string[]) => void
 }) {
   const { lanes, maxColumns } = useMemo(() => laneData(data), [data])
   const minWidth = `${Math.max(3, maxColumns) * COLUMN_WIDTH_REM}rem`
@@ -173,10 +174,10 @@ function LaneView({
   onPick: (node: WikiGraphNode) => void
   onSuppressNode?: (node: WikiGraphNode) => void
   suppressingNodeId?: string | null
-  onCreateConcept?: (category: string, paperIds: number[]) => void
+  onCreateConcept?: (category: string, paperIds: string[]) => void
 }) {
   const gridStyle = { gridTemplateColumns: `repeat(${maxColumns}, minmax(0, 1fr))` }
-  const lanePaperIds = lane.papers.map(paper => paper.paper_id).filter((id): id is number => id != null)
+  const lanePaperIds = lane.papers.map(paper => paper.paper_id).filter((id): id is NonNullable<typeof id> => id != null).map(String)
 
   return (
     <section className="rounded-2xl border border-slate-800 bg-slate-950/35 p-4">
@@ -208,7 +209,7 @@ function LaneView({
                 first={index === 0}
                 paper={paper}
                 selected={selectedId === paper.id}
-                linkedCount={lane.paperNodeCounts[paper.paper_id || 0] || 0}
+                linkedCount={lane.paperNodeCounts[String(paper.paper_id ?? '')] || 0}
                 onPick={onPick}
               />
             ) : (

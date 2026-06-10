@@ -22,7 +22,7 @@ ALLOWED_SYNTHESIS_RELATIONS = {"related", "builds_on", "belongs_to", "contrasts_
 
 @dataclass
 class SynthesisRelatedLink:
-    concept_id: int
+    concept_id: str
     relation_type: str
 
 
@@ -35,7 +35,7 @@ class SynthesisConceptAnalysis:
     tags: list[str]
     aliases: list[str]
     related_links: list[SynthesisRelatedLink]
-    duplicate_concept_id: Optional[int]
+    duplicate_concept_id: Optional[str]
     duplicate_reason: str
 
 
@@ -56,12 +56,12 @@ SYNTHESIS_CONCEPT_SYSTEM = (
     "严格输出一个 JSON 对象，不要代码块，不要额外解释：\n"
     "{\n"
     '  "decision": "create_new" | "duplicate_existing",\n'
-    '  "duplicate_concept_id": <int|null>,\n'
+    '  "duplicate_concept_id": <已有概念的 id 字符串|null>,\n'
     '  "duplicate_reason": <string>,\n'
     '  "summary": <string>,\n'
     '  "tags": [<string>, ...],\n'
     '  "aliases": [<string>, ...],\n'
-    '  "related_links": [{"concept_id": <int>, "relation_type": "related" | "builds_on" | "belongs_to" | "contrasts_with"}],\n'
+    '  "related_links": [{"concept_id": <已有概念的 id 字符串>, "relation_type": "related" | "builds_on" | "belongs_to" | "contrasts_with"}],\n'
     '  "body_markdown": <string>\n'
     "}"
 )
@@ -134,12 +134,15 @@ def _source_paper_context(db: Session, paper_ids: list[int]) -> list[dict]:
     return out
 
 
-def _candidate_rank(node: KnowledgeNode) -> tuple[int, int, int, int]:
+def _candidate_rank(node: KnowledgeNode) -> tuple[int, int, int, str]:
+    # Final tiebreaker is the id as a STRING — node ids are UUIDs now;
+    # int() blew up the whole synthesis flow. String ordering is a fine,
+    # stable tiebreaker.
     return (
         0 if node_origin(node) == "manual" else 1,
         0 if promotion_status(node) == "promoted" else 1,
         0 if (node.node_type or "") == "concept" else 1,
-        int(getattr(node, "id", 10**9) or 10**9),
+        str(getattr(node, "id", "") or ""),
     )
 
 
@@ -214,7 +217,7 @@ def _candidate_nodes_for_model(
     payload: list[dict] = []
     for node in nodes:
         payload.append({
-            "id": int(getattr(node, "id", 0) or 0),
+            "id": str(getattr(node, "id", "") or ""),
             "title": node.title or "",
             "node_type": node.node_type or "",
             "origin": node_origin(node),
@@ -250,17 +253,16 @@ def _analysis_prompt(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _parse_related_links(raw: object, *, allowed_ids: set[int]) -> list[SynthesisRelatedLink]:
+def _parse_related_links(raw: object, *, allowed_ids: set[str]) -> list[SynthesisRelatedLink]:
     if not isinstance(raw, list):
         return []
     out: list[SynthesisRelatedLink] = []
-    seen: set[tuple[int, str]] = set()
+    seen: set[tuple[str, str]] = set()
     for item in raw:
         if not isinstance(item, dict):
             continue
-        try:
-            concept_id = int(item.get("concept_id"))
-        except (TypeError, ValueError):
+        concept_id = str(item.get("concept_id") or "").strip()
+        if not concept_id:
             continue
         relation_type = (item.get("relation_type") or "").strip().lower()
         if concept_id not in allowed_ids or relation_type not in ALLOWED_SYNTHESIS_RELATIONS:
@@ -424,10 +426,8 @@ def analyze_synthesis_concept(
     decision = (parsed.get("decision") or "").strip().lower()
     duplicate_concept_id = None
     if decision == "duplicate_existing":
-        try:
-            duplicate_concept_id = int(parsed.get("duplicate_concept_id"))
-        except (TypeError, ValueError):
-            duplicate_concept_id = None
+        dup = str(parsed.get("duplicate_concept_id") or "").strip()
+        duplicate_concept_id = dup or None
     duplicate_reason = (parsed.get("duplicate_reason") or "").strip()[:500]
     summary = (parsed.get("summary") or "").strip()[:400] or fallback_summary
     body = _append_context_sections(
@@ -437,9 +437,9 @@ def analyze_synthesis_concept(
         synthesis_scope=synthesis_scope,
     )
     allowed_ids = {
-        int(item.get("id"))
+        str(item.get("id") or "").strip()
         for item in candidate_nodes
-        if isinstance(item, dict) and str(item.get("id") or "").isdigit()
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
     }
     return SynthesisConceptAnalysis(
         used_model=True,

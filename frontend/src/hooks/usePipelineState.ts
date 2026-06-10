@@ -75,7 +75,7 @@ export interface NextStep {
 }
 
 export interface PipelineActions {
-  scan: () => Promise<{ new_found: number; total: number; unprocessed: number }>
+  scan: () => Promise<{ new_found: number; duplicates: number; total: number; unprocessed: number }>
   process: () => Promise<void>
   runPromotionRun: (params: { use_llm: boolean; force_all: boolean }) => Promise<PromotionRunResponse>
   acceptPromotion: () => Promise<void>
@@ -461,17 +461,40 @@ export function usePipelineState({
     })
   }, [wrap])
 
+  // Optimistically flip compileStatus to "running" the instant the user
+  // clicks, instead of waiting up to SLOW_POLL (5s) for the next
+  // /wiki/status poll. Without this, the compile buttons stay clickable
+  // for several seconds after a click (looked like nothing happened).
+  // The real poll then takes over with live progress and eventually
+  // reports running:false when done.
+  const optimisticCompiling = useCallback((kind: 'papers' | 'concepts') => {
+    setCompileStatus(prev => ({
+      running: true,
+      kind,
+      total: prev?.total ?? 0,
+      done: 0,
+      errors: 0,
+      current: '',
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      last_error: null,
+      model: prev?.model ?? null,
+    }))
+  }, [])
+
   const recompilePapers = useCallback(async () => {
+    optimisticCompiling('papers')
     await wrap(async () => {
       await recompileAllPaperPages()
     })
-  }, [wrap])
+  }, [wrap, optimisticCompiling])
 
   const recompileConcepts = useCallback(async () => {
+    optimisticCompiling('concepts')
     await wrap(async () => {
       await recompileAllConcepts()
     })
-  }, [wrap])
+  }, [wrap, optimisticCompiling])
 
   const openLint = useCallback(() => {
     onOpenLintRef.current?.()
