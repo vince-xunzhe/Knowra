@@ -38,9 +38,30 @@ def _parse_dt(text: Optional[str]) -> Optional[datetime]:
     return dt
 
 
+def _id_prefix(row) -> str:
+    """Filename prefix derived from a row's id.
+
+    Pre-W3.2: id was INT → ``f"{id:04d}"`` (e.g. ``0001``). All
+    existing wiki / record files on disk follow this convention, and
+    the multitenant migrator preserved the original int in
+    ``legacy_id``. So when ``legacy_id`` is present we keep using it
+    to stay byte-compatible with existing files on disk.
+
+    Post-W3.2 rows (new papers scanned after migration) have no
+    ``legacy_id`` — we fall back to the first 8 chars of the UUID,
+    which is unique enough in a single-user library to avoid
+    collisions and short enough to keep filenames readable.
+    """
+    legacy = getattr(row, "legacy_id", None)
+    if isinstance(legacy, int):
+        return f"{legacy:04d}"
+    uid = str(getattr(row, "id", "") or "")
+    return uid.replace("-", "")[:8] or "unknown"
+
+
 def record_path_for_paper(paper: Paper) -> Path:
     stem = Path(paper.filename or f"paper-{paper.id}").stem
-    name = f"{paper.id:04d}-{_slugify(stem)}.md"
+    name = f"{_id_prefix(paper)}-{_slugify(stem)}.md"
     return RECORDS_DIR / name
 
 

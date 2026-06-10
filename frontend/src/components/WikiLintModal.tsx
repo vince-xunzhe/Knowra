@@ -9,6 +9,7 @@ import {
   Copy,
   AlertTriangle,
   Check,
+  Plus,
 } from 'lucide-react'
 import {
   runWikiLint,
@@ -26,6 +27,14 @@ interface Props {
   /** Called after an apply action mutates the graph (reject/recompile)
    *  so the host can reload. */
   onMutated?: () => void
+  /** Adopt a suggested cross-cut concept: create it as a manual concept
+   *  seeded with the title / rationale / covered papers. Should throw on
+   *  failure so the error surfaces inline. */
+  onAdoptConcept?: (seed: {
+    title: string
+    content: string
+    paper_ids: string[]
+  }) => Promise<unknown>
 }
 
 /**
@@ -37,7 +46,7 @@ interface Props {
  *   - followups → 复制问题到剪贴板，丢进 Ask
  * The durable artifact is data/wiki/lint-report.md (viewable in Obsidian).
  */
-export default function WikiLintModal({ open, onClose, onMutated }: Props) {
+export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept }: Props) {
   const [status, setStatus] = useState<LintReportStatus | null>(null)
   const [result, setResult] = useState<LintResult | null>(null)
   const [running, setRunning] = useState(false)
@@ -45,6 +54,21 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [done, setDone] = useState<Set<string>>(new Set())
+  // Per-action error keyed by the same key as `done`/`busyId`, so a
+  // failed apply shows its reason INLINE under the item the user
+  // clicked — instead of a single error banner at the top of the modal
+  // that's scrolled out of view (which made failures look like the
+  // button "did nothing").
+  const [actionErrors, setActionErrors] = useState<Record<string, string>>({})
+  const failAction = (key: string, e: unknown) =>
+    setActionErrors(prev => ({ ...prev, [key]: e instanceof Error ? e.message : String(e) }))
+  const clearAction = (key: string) =>
+    setActionErrors(prev => {
+      if (!(key in prev)) return prev
+      const n = { ...prev }
+      delete n[key]
+      return n
+    })
 
   useEffect(() => {
     if (!open) return
@@ -80,15 +104,16 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
     })
 
   const handleRecompile = useCallback(
-    async (conceptId: number) => {
+    async (conceptId: string) => {
       const key = `stub:${conceptId}`
       setBusyId(key)
+      clearAction(key)
       try {
         await recompileConcept(conceptId)
         markDone(key)
         onMutated?.()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        failAction(key, e)
       } finally {
         setBusyId(null)
       }
@@ -97,9 +122,10 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
   )
 
   const handleRejectStub = useCallback(
-    async (conceptId: number) => {
+    async (conceptId: string) => {
       const key = `stub:${conceptId}`
       setBusyId(key)
+      clearAction(key)
       try {
         await updatePromotionStatus(
           conceptId,
@@ -109,7 +135,7 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
         markDone(key)
         onMutated?.()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        failAction(key, e)
       } finally {
         setBusyId(null)
       }
@@ -118,15 +144,16 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
   )
 
   const handleAcceptStub = useCallback(
-    async (conceptId: number) => {
+    async (conceptId: string) => {
       const key = `stub:${conceptId}`
       setBusyId(key)
+      clearAction(key)
       try {
         await acceptLintStub(conceptId)
         // No graph mutation — just stops future lint runs flagging it.
         markDone(key)
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        failAction(key, e)
       } finally {
         setBusyId(null)
       }
@@ -135,24 +162,44 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
   )
 
   const handleRejectDup = useCallback(
-    async (keepId: number, dropId: number) => {
-      const key = `merge:${keepId}:${dropId}`
-      setBusyId(key)
+    async (keepId: string, dropId: string, pairKey: string) => {
+      setBusyId(pairKey)
+      clearAction(pairKey)
       try {
         await updatePromotionStatus(
           dropId,
           'rejected',
           `lint: merged into concept #${keepId}`,
         )
-        markDone(key)
+        markDone(pairKey)
         onMutated?.()
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e))
+        failAction(pairKey, e)
       } finally {
         setBusyId(null)
       }
     },
     [onMutated],
+  )
+
+  const handleAdopt = useCallback(
+    async (
+      key: string,
+      seed: { title: string; content: string; paper_ids: string[] },
+    ) => {
+      if (!onAdoptConcept) return
+      setBusyId(key)
+      clearAction(key)
+      try {
+        await onAdoptConcept(seed)
+        markDone(key)
+      } catch (e) {
+        failAction(key, e)
+      } finally {
+        setBusyId(null)
+      }
+    },
+    [onAdoptConcept],
   )
 
   if (!open) return null
@@ -264,22 +311,29 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
                         </p>
                       )}
                       {!isDone ? (
-                        <div className="mt-1.5 flex gap-2">
-                          <ApplyBtn
-                            busy={busyId === key}
-                            onClick={() => handleRejectDup(m.a_id, m.b_id)}
-                            icon={<Trash2 size={10} />}
-                          >
-                            保留「{m.a_title}」· 淘汰「{m.b_title}」
-                          </ApplyBtn>
-                          <ApplyBtn
-                            busy={busyId === key}
-                            onClick={() => handleRejectDup(m.b_id, m.a_id)}
-                            icon={<Trash2 size={10} />}
-                          >
-                            保留「{m.b_title}」· 淘汰「{m.a_title}」
-                          </ApplyBtn>
-                        </div>
+                        <>
+                          <div className="mt-1.5 flex gap-2">
+                            <ApplyBtn
+                              busy={busyId === key}
+                              onClick={() => handleRejectDup(m.a_id, m.b_id, key)}
+                              icon={<Trash2 size={10} />}
+                            >
+                              保留「{m.a_title}」· 淘汰「{m.b_title}」
+                            </ApplyBtn>
+                            <ApplyBtn
+                              busy={busyId === key}
+                              onClick={() => handleRejectDup(m.b_id, m.a_id, key)}
+                              icon={<Trash2 size={10} />}
+                            >
+                              保留「{m.b_title}」· 淘汰「{m.a_title}」
+                            </ApplyBtn>
+                          </div>
+                          {actionErrors[key] && (
+                            <p className="mt-1.5 text-[11px] text-rose-300">
+                              操作失败：{actionErrors[key]}
+                            </p>
+                          )}
+                        </>
                       ) : (
                         <p className="mt-1.5 text-[11px] text-emerald-300">
                           ✓ 已处理
@@ -352,6 +406,11 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
                               </ApplyBtn>
                             </>
                           )}
+                          {actionErrors[key] && (
+                            <p className="basis-full text-[11px] text-rose-300">
+                              操作失败：{actionErrors[key]}
+                            </p>
+                          )}
                         </div>
                       ) : (
                         <p className="mt-1.5 text-[11px] text-emerald-300">
@@ -373,20 +432,52 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
                 empty="没有发现孤立的论文簇"
               >
                 {(j?.new_concepts && j.new_concepts.length > 0
-                  ? j.new_concepts.map((n, i) => (
-                      <li
-                        key={`nc-${i}`}
-                        className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2"
-                      >
-                        <p className="text-slate-200 font-medium">{n.title}</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          {n.rationale}
-                        </p>
-                        <p className="text-[10.5px] text-slate-600 mt-1">
-                          覆盖 paper: {n.paper_ids.join(', ')}
-                        </p>
-                      </li>
-                    ))
+                  ? j.new_concepts.map((n, i) => {
+                      const key = `crosscut:${i}`
+                      const isDone = done.has(key)
+                      return (
+                        <li
+                          key={`nc-${i}`}
+                          className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2"
+                        >
+                          <p className="text-slate-200 font-medium">{n.title}</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {n.rationale}
+                          </p>
+                          <p className="text-[10.5px] text-slate-600 mt-1">
+                            覆盖 {n.paper_ids.length} 篇论文
+                          </p>
+                          {!isDone ? (
+                            <div className="mt-1.5">
+                              {onAdoptConcept && (
+                                <ApplyBtn
+                                  busy={busyId === key}
+                                  onClick={() =>
+                                    handleAdopt(key, {
+                                      title: n.title,
+                                      content: n.rationale,
+                                      paper_ids: n.paper_ids,
+                                    })
+                                  }
+                                  icon={<Plus size={10} />}
+                                >
+                                  采纳并新建概念
+                                </ApplyBtn>
+                              )}
+                              {actionErrors[key] && (
+                                <p className="mt-1.5 text-[11px] text-rose-300">
+                                  操作失败：{actionErrors[key]}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="mt-1.5 text-[11px] text-emerald-300">
+                              ✓ 已新建概念，将在下次编译概念页时生成 wiki
+                            </p>
+                          )}
+                        </li>
+                      )
+                    })
                   : result.missing_crosscut.map((c, i) => (
                       <li
                         key={`cc-${i}`}
@@ -436,6 +527,23 @@ export default function WikiLintModal({ open, onClose, onMutated }: Props) {
             </>
           )}
         </div>
+
+        <footer className="px-5 py-3 border-t border-slate-800/80 flex items-center gap-3">
+          {result && (
+            <span className="text-[11px] text-slate-500">
+              {done.size > 0
+                ? `已处理 ${done.size} 项 · 剩余建议可逐项处理或留待下次`
+                : '逐项处理上面的建议，或直接完成关闭'}
+            </span>
+          )}
+          <button
+            onClick={onClose}
+            className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[12px] font-medium transition-colors"
+          >
+            <Check size={12} />
+            完成
+          </button>
+        </footer>
       </div>
     </div>
   )

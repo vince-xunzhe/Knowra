@@ -1,6 +1,8 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from config import load_config
+from config import load_config, is_cloud_mode
 from database import init_db, SessionLocal
 from logging_utils import configure_app_logging
 from models import Paper
@@ -40,6 +42,45 @@ app.include_router(wiki.router)
 app.include_router(promotion.router)
 app.include_router(ask.router)
 app.include_router(dashboard.router)
+
+# Local-only: snapshot exporter that the desktop sync agent calls before
+# pushing to the cloud. The router itself short-circuits in cloud mode
+# as defense-in-depth, but we also avoid the import there to keep cold
+# start tidy.
+if not is_cloud_mode():
+    from routers import sync_local
+    app.include_router(sync_local.router)
+
+# Cloud-mode-only routers + DB wiring. Mounting these unconditionally would require
+# Supabase env vars even on desktop where they make no sense, so we
+# gate the import + mount behind the deploy mode flag.
+if is_cloud_mode():
+    from routers import sync as sync_router
+    from routers import cloud as cloud_router
+    import cloud_db
+
+    # Boot the cloud DB engine and override the tests-only stub so
+    # production requests get a real Session. Without this override,
+    # every /api/sync/* and /api/cloud/* call would raise the stub's
+    # RuntimeError. Schema is ensured on the SQLite fallback path; on
+    # Supabase Postgres the SQL migrations are the source of truth and
+    # this is a no-op (CREATE TABLE IF NOT EXISTS).
+    cloud_db.init_cloud_engine()
+    cloud_db.ensure_cloud_schema()
+    app.dependency_overrides[sync_router.get_cloud_db] = cloud_db.get_cloud_db
+
+    app.include_router(sync_router.router)
+    app.include_router(cloud_router.router)
+
+    # E2E test backdoor: real HTTP wrapper around InMemoryStorage so
+    # out-of-process smoke harnesses (curl, the mobile dev client) can
+    # actually PUT bytes to the "signed URLs" InMemoryStorage hands
+    # out. Only mounted when the storage backend is the in-memory one
+    # (i.e. KNOWRA_STORAGE_BACKEND=memory) — production never sets
+    # that and uses SupabaseStorage instead.
+    if os.environ.get("KNOWRA_STORAGE_BACKEND", "").lower() == "memory":
+        from routers import test_storage as test_storage_router
+        app.include_router(test_storage_router.router)
 
 
 @app.on_event("startup")

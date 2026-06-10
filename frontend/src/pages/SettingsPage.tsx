@@ -17,6 +17,7 @@ import {
   type ModelGatewayTaskSpec,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
+import CloudSyncSection from '../components/CloudSyncSection'
 
 type ProviderRoute = 'open_api' | 'codex'
 
@@ -322,6 +323,14 @@ export default function SettingsPage() {
               placeholder="/path/to/your/papers"
             />
           </Field>
+        </SettingGroup>
+
+        <SettingGroup
+          title="云同步"
+          description="登录云端账号后，桌面端的论文 / 概念 / wiki 会增量同步到云后端，供 iOS / Android 只读消费。"
+          defaultExpanded={false}
+        >
+          <CloudSyncSection />
         </SettingGroup>
 
         <SettingGroup

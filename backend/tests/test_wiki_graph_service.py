@@ -97,7 +97,7 @@ class WikiGraphServiceTests(unittest.TestCase):
         self.assertEqual(len(timeline_edges), 1)
         self.assertEqual(len(support_edges), 2)
         self.assertEqual(len(active_papers), 1)
-        self.assertEqual(active_papers[0]["paper_id"], 2)
+        self.assertEqual(active_papers[0]["paper_id"], "2")
 
     def test_build_graph_includes_publishable_db_concept_without_compiled_page(self):
         paper = _paper(1, "Drive World Model", {

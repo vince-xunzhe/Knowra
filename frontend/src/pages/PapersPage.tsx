@@ -2,10 +2,11 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
-  PanelRightOpen, PanelRightClose, Pencil,
+  PanelRightOpen, PanelRightClose, Pencil, Upload,
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
+  uploadPapers,
   type PaperRecord,
 } from '../api/client'
 import PromptPanel from '../components/PromptPanel'
@@ -41,6 +42,9 @@ export default function PapersPage() {
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [bulkProcessingPending, setBulkProcessingPending] = useState(false)
   const [bulkRetrying, setBulkRetrying] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
   // Global Prompt column collapses to a thin icon strip by default so
   // the paper grid gets the whole horizontal width. Most users don't
   // edit the extraction prompt every visit; surface it on demand.
@@ -279,6 +283,47 @@ export default function PapersPage() {
     }
   }
 
+  // Step 1+2: the OS picker browses folders + multi-selects PDFs. We then
+  // stage them for an explicit 确认 step rather than uploading immediately.
+  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files
+    const files = fileList ? Array.from(fileList).filter(f => f.name.toLowerCase().endsWith('.pdf')) : []
+    e.target.value = '' // reset so re-picking the same files fires onChange again
+    if (files.length === 0) {
+      setActionNotice({ tone: 'warning', title: '没有选择 PDF 文件' })
+      return
+    }
+    setPendingFiles(files)
+  }
+
+  // Step 3: 确认 → copy the staged files into ./papers and register them.
+  const handleConfirmUpload = async () => {
+    if (pendingFiles.length === 0) return
+    setUploading(true)
+    setActionNotice(null)
+    try {
+      const r = await uploadPapers(pendingFiles)
+      const parts = [`上传 ${r.saved} 篇`]
+      if (r.skipped_existing > 0) parts.push(`已存在跳过 ${r.skipped_existing} 篇`)
+      if (r.duplicates > 0) parts.push(`去重 ${r.duplicates} 篇`)
+      if (r.rejected.length > 0) parts.push(`无效 ${r.rejected.length} 个`)
+      setActionNotice({
+        tone: r.saved > 0 ? 'success' : 'info',
+        title: parts.join(' · '),
+        detail:
+          r.saved > 0
+            ? '已拷贝到 ./papers 并登记为未处理，可在此直接处理。'
+            : '所选文件都已存在或无效，未新增。',
+      })
+      setPendingFiles([])
+      await load()
+    } catch (error) {
+      setActionNotice({ tone: 'error', title: '上传失败', detail: getErrorMessage(error) })
+    } finally {
+      setUploading(false)
+    }
+  }
+
   const isPending = (p: PaperRecord) =>
     pendingIds.has(p.id) || !!(status?.running && status.current === p.filename)
 
@@ -371,6 +416,23 @@ export default function PapersPage() {
                   <ListIcon size={14} />
                 </button>
               </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                multiple
+                className="hidden"
+                onChange={handleFilesSelected}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || pendingFiles.length > 0}
+                className="inline-flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+                title="从本地选择 PDF 拷贝到资料库 (./papers)"
+              >
+                <Upload size={14} />
+                上传 PDF
+              </button>
               <button
                 onClick={handleProcessPendingAll}
                 disabled={bulkProcessingPending || !!status?.running || stats.pending === 0}
@@ -537,6 +599,64 @@ export default function PapersPage() {
             <Pencil size={14} />
           </button>
         </aside>
+      )}
+
+      {/* Upload confirm — review the picked PDFs before copying to ./papers. */}
+      {pendingFiles.length > 0 && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+          onClick={e => { if (e.target === e.currentTarget && !uploading) setPendingFiles([]) }}
+        >
+          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-[#0f1117] shadow-2xl">
+            <div className="flex items-center gap-2 border-b border-slate-800 px-5 py-3">
+              <Upload size={15} className="text-indigo-300" />
+              <h3 className="text-sm font-semibold text-white">确认上传 {pendingFiles.length} 个 PDF</h3>
+              <button
+                onClick={() => !uploading && setPendingFiles([])}
+                className="ml-auto rounded p-1 text-slate-500 hover:bg-slate-800/60 hover:text-slate-200"
+              >
+                <XCircle size={15} />
+              </button>
+            </div>
+            <div className="max-h-72 space-y-0.5 overflow-y-auto px-5 py-3">
+              {pendingFiles.map((f, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800/40"
+                >
+                  <FileText size={13} className="shrink-0 text-indigo-300/70" />
+                  <span className="min-w-0 flex-1 truncate">{f.name}</span>
+                  <span className="shrink-0 tabular-nums text-[10.5px] text-slate-500">
+                    {fmtSize(f.size)}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2.5 border-t border-slate-800 px-5 py-3.5">
+              <p className="text-[11px] leading-relaxed text-slate-500">
+                将拷贝到 <code className="rounded bg-slate-800/70 px-1 text-slate-400">./papers</code>
+                ，已存在或重复的会自动跳过。
+              </p>
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  onClick={() => setPendingFiles([])}
+                  disabled={uploading}
+                  className="rounded-lg border border-slate-700 px-4 py-1.5 text-[12px] text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-50"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmUpload}
+                  disabled={uploading}
+                  className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-indigo-500 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-indigo-400 disabled:opacity-50"
+                >
+                  {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  {uploading ? '上传中…' : '确认上传'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
@@ -747,6 +867,11 @@ function StatusDot({ paper, pending }: { paper: PaperRecord; pending: boolean })
   if (paper.processed) return <CheckCircle2 size={16} className="text-emerald-400 drop-shadow" />
   if (paper.error) return <XCircle size={16} className="text-red-400 drop-shadow" />
   return <Clock size={16} className="text-slate-500 drop-shadow" />
+}
+
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
 }
 
 function getErrorMessage(error: unknown): string {

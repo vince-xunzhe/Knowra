@@ -368,7 +368,8 @@ class AskSynthesisConceptTests(unittest.TestCase):
         self.assertFalse(result["forced_create"])
         self.assertNotEqual(result["concept_id"], existing.id)
         self.assertEqual(len(db.added), 1)
-        self.assertEqual(db.added[0].source_paper_ids, [1])
+        # Post-multitenant: paper_ids are opaque string identifiers
+        self.assertEqual(db.added[0].source_paper_ids, ["1"])
         self.assertEqual(db.added[0].tags, ["synthesis"])
 
     def test_session_traceability_fields_are_written_to_frontmatter(self):

@@ -34,6 +34,7 @@ import {
   Pencil,
   Bot,
   Hand,
+  CloudUpload,
 } from 'lucide-react'
 import type {
   PipelineActions,
@@ -42,6 +43,7 @@ import type {
   StageSnapshot,
 } from '../hooks/usePipelineState'
 import PromotionPromptEditor from './PromotionPromptEditor'
+import SyncStageCard from './SyncStageCard'
 
 type CandidateMode = 'off' | 'pending' | 'all'
 
@@ -68,27 +70,60 @@ export default function PipelineConsole({
   onOpenAsk,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false)
-  const [expanded, setExpanded] = useState<StageId | null>(null)
+  // Note: 'sync' is not in StageId since it lives outside usePipelineState
+  // — see SyncStageCard for why. We widen the local state's type so the
+  // user can still expand/collapse it like the other stages.
+  const [expanded, setExpanded] = useState<StageId | 'sync' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [promptEditorOpen, setPromptEditorOpen] = useState(false)
+  // Which pipeline action is currently in-flight (null = idle). Drives
+  // the grey/disabled + spinner state on the action buttons so the user
+  // gets feedback and can't double-fire a long-running job (e.g. 自动剔除
+  // calls the LLM and takes a while).
+  const [busyKey, setBusyKey] = useState<string | null>(null)
   // Local toggles that live inside the curate stage but persist across
   // re-renders within the page.
   const [useLlm, setUseLlm] = useState(true)
   const [forceAll, setForceAll] = useState(false)
 
-  const safeRun = async (fn: () => Promise<unknown>) => {
+  const safeRun = async (key: string, fn: () => Promise<unknown>) => {
+    if (busyKey) return // already running something — ignore re-clicks
     setError(null)
+    setBusyKey(key)
     try {
       await fn()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  // Scan reports its result inline (new vs. skipped-duplicate counts).
+  const [scanNotice, setScanNotice] = useState<string | null>(null)
+  const runScan = async () => {
+    if (busyKey) return
+    setError(null)
+    setScanNotice(null)
+    setBusyKey('scan')
+    try {
+      const r = await state.scan()
+      setScanNotice(
+        `扫描完成：新增 ${r.new_found} 篇` +
+          (r.duplicates > 0 ? ` · 跳过重复 ${r.duplicates} 篇` : '') +
+          ` · 待处理 ${r.unprocessed} 篇`,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusyKey(null)
     }
   }
 
   // Auto-expand the stage that nextStep is pointing at, so the user lands
   // on the relevant CTA without an extra click. Manual expand/collapse
   // overrides this.
-  const effectiveExpanded: StageId | null =
+  const effectiveExpanded: StageId | 'sync' | null =
     expanded != null ? expanded : state.nextStep?.stage ?? null
 
   if (collapsed) {
@@ -120,6 +155,16 @@ export default function PipelineConsole({
             )}
           </button>
         ))}
+        <button
+          onClick={() => {
+            setCollapsed(false)
+            setExpanded('sync')
+          }}
+          className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
+          title="⑤ 同步 — 推送到云端"
+        >
+          <CloudUpload size={14} />
+        </button>
         <div className="mt-auto" />
         <button
           onClick={onOpenAsk}
@@ -162,13 +207,16 @@ export default function PipelineConsole({
             {stage.id === 'ingest' && (
               <IngestActions
                 state={state}
-                onScan={() => safeRun(state.scan)}
-                onProcess={() => safeRun(state.process)}
+                busyKey={busyKey}
+                scanNotice={scanNotice}
+                onScan={runScan}
+                onProcess={() => safeRun('process', state.process)}
               />
             )}
             {stage.id === 'curate' && (
               <CurateActions
                 state={state}
+                busyKey={busyKey}
                 useLlm={useLlm}
                 setUseLlm={setUseLlm}
                 forceAll={forceAll}
@@ -178,18 +226,19 @@ export default function PipelineConsole({
                 onOpenRescue={onOpenRescue}
                 onOpenPromptEditor={() => setPromptEditorOpen(true)}
                 onRun={() =>
-                  safeRun(() =>
+                  safeRun('curate-run', () =>
                     state.runPromotionRun({ use_llm: useLlm, force_all: forceAll }),
                   )
                 }
-                onAccept={() => safeRun(state.acceptPromotion)}
+                onAccept={() => safeRun('curate-accept', state.acceptPromotion)}
               />
             )}
             {stage.id === 'compile' && (
               <CompileActions
                 state={state}
-                onCompilePapers={() => safeRun(state.recompilePapers)}
-                onCompileConcepts={() => safeRun(state.recompileConcepts)}
+                busyKey={busyKey}
+                onCompilePapers={() => safeRun('compile-papers', state.recompilePapers)}
+                onCompileConcepts={() => safeRun('compile-concepts', state.recompileConcepts)}
               />
             )}
             {stage.id === 'maintain' && (
@@ -197,6 +246,15 @@ export default function PipelineConsole({
             )}
           </StageCard>
         ))}
+
+        {/* ⑤ Sync — kept outside the StageId state machine; see
+            SyncStageCard for the rationale. */}
+        <SyncStageCard
+          expanded={effectiveExpanded === 'sync'}
+          onToggle={() =>
+            setExpanded(prev => (prev === 'sync' ? null : 'sync'))
+          }
+        />
 
         {error && (
           <div className="px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-[11.5px] text-rose-200">
@@ -284,14 +342,19 @@ function StageCard({
 
 function IngestActions({
   state,
+  busyKey,
+  scanNotice,
   onScan,
   onProcess,
 }: {
   state: PipelineState & PipelineActions
+  busyKey: string | null
+  scanNotice: string | null
   onScan: () => void
   onProcess: () => void
 }) {
   const running = !!state.processing?.running
+  const anyBusy = busyKey !== null
   const remaining = running
     ? Math.max(0, (state.processing?.total ?? 0) - (state.processing?.done ?? 0))
     : state.unprocessedHint
@@ -305,7 +368,9 @@ function IngestActions({
           onClick={onScan}
           icon={<ScanLine size={12} />}
           variant="ghost"
-          disabled={running}
+          disabled={running || anyBusy}
+          loading={busyKey === 'scan'}
+          loadingLabel="扫描中"
           title="扫描 data/papers 目录，找出未入库的 PDF"
         >
           扫描目录
@@ -314,12 +379,17 @@ function IngestActions({
           onClick={onProcess}
           icon={running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
           variant="primary"
-          disabled={running}
+          disabled={running || anyBusy}
           title={state.processing?.current || '处理所有未入库论文'}
         >
           {running ? '处理中' : remaining > 0 ? `处理 ${remaining} 篇` : '处理论文'}
         </ActionButton>
       </div>
+      {scanNotice && !running && (
+        <p className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
+          {scanNotice}
+        </p>
+      )}
       {running && (
         <ProgressLine
           done={state.processing?.done ?? 0}
@@ -336,6 +406,7 @@ function IngestActions({
 
 function CurateActions({
   state,
+  busyKey,
   useLlm,
   setUseLlm,
   forceAll,
@@ -348,6 +419,7 @@ function CurateActions({
   onAccept,
 }: {
   state: PipelineState & PipelineActions
+  busyKey: string | null
   useLlm: boolean
   setUseLlm: (v: boolean) => void
   forceAll: boolean
@@ -364,6 +436,7 @@ function CurateActions({
   const rejected = state.promotion?.counts.rejected ?? 0
   const userPinned = state.promotion?.by.user ?? 0
   const promptEmpty = state.promotionPromptConfigured === false
+  const anyBusy = busyKey !== null
 
   return (
     <div className="space-y-2.5">
@@ -387,6 +460,9 @@ function CurateActions({
           onClick={onRun}
           icon={<Zap size={12} />}
           variant="primary"
+          disabled={anyBusy}
+          loading={busyKey === 'curate-run'}
+          loadingLabel="剔除中"
           title="对所有候选节点跑启发式 + Agent 剔除"
         >
           自动剔除
@@ -395,7 +471,9 @@ function CurateActions({
           onClick={onAccept}
           icon={<ShieldCheck size={12} />}
           variant="ghost"
-          disabled={llmDecided === 0}
+          disabled={llmDecided === 0 || anyBusy}
+          loading={busyKey === 'curate-accept'}
+          loadingLabel="确认中"
           title="把 Agent 的剔除结果锁成 human 确定"
         >
           确认 Agent {llmDecided > 0 ? `(${llmDecided})` : ''}
@@ -503,15 +581,18 @@ function CurateActions({
 
 function CompileActions({
   state,
+  busyKey,
   onCompilePapers,
   onCompileConcepts,
 }: {
   state: PipelineState & PipelineActions
+  busyKey: string | null
   onCompilePapers: () => void
   onCompileConcepts: () => void
 }) {
   const running = !!state.compileStatus?.running
   const runningKind = state.compileStatus?.kind
+  const anyBusy = busyKey !== null
   const f = state.freshness
   const paperIssues =
     (f?.papers.missing_count ?? 0) + (f?.papers.stale_count ?? 0)
@@ -531,10 +612,10 @@ function CompileActions({
           missing={f?.papers.missing_count ?? 0}
           stale={f?.papers.stale_count ?? 0}
           orphan={f?.papers.orphan_count ?? 0}
-          runningHere={running && runningKind === 'papers'}
+          runningHere={(running && runningKind === 'papers') || busyKey === 'compile-papers'}
           progress={state.compileStatus}
           onClick={onCompilePapers}
-          disabled={running || paperIssues === 0}
+          disabled={running || anyBusy || paperIssues === 0}
         />
         <CompileRow
           icon={<BookMarked size={12} />}
@@ -544,10 +625,10 @@ function CompileActions({
           missing={f?.concepts.missing_count ?? 0}
           stale={f?.concepts.stale_count ?? 0}
           orphan={f?.concepts.orphan_count ?? 0}
-          runningHere={running && runningKind === 'concepts'}
+          runningHere={(running && runningKind === 'concepts') || busyKey === 'compile-concepts'}
           progress={state.compileStatus}
           onClick={onCompileConcepts}
-          disabled={running || conceptIssues === 0}
+          disabled={running || anyBusy || conceptIssues === 0}
         />
       </div>
     </div>
@@ -580,37 +661,52 @@ function CompileRow({
   disabled: boolean
 }) {
   const issues = missing + stale + orphan
-  const cta = total > 0 && (issues > 0 || total !== ok)
+  // Three terminal states: running (compiling now) → pending (something
+  // to compile) → done (total>0 and everything ok). total==0 means
+  // there's nothing in the DB to compile yet.
+  const allOk = total > 0 && issues === 0 && ok === total
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-2.5 py-1.5">
       <div className="flex items-center gap-2">
         <span className="text-slate-400">{icon}</span>
         <span className="text-[12px] text-slate-200 font-medium">{label}</span>
-        <span className="ml-auto text-[11px] tabular-nums text-slate-400">
+        <span className={`ml-auto text-[11px] tabular-nums ${allOk && !runningHere ? 'text-emerald-300' : 'text-slate-400'}`}>
           {total === 0 ? '尚未编译' : `${ok}/${total}`}
         </span>
       </div>
-      {issues > 0 && (
+      {issues > 0 && !runningHere && (
         <div className="mt-0.5 text-[10.5px] text-slate-500 tabular-nums">
           {missing > 0 && `${missing} 待编译 `}
           {stale > 0 && `${stale} 已过期 `}
           {orphan > 0 && `${orphan} 孤儿`}
         </div>
       )}
-      {cta && (
+      {runningHere ? (
+        <button
+          disabled
+          className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-200 cursor-not-allowed"
+        >
+          <Loader2 size={11} className="animate-spin" />
+          编译中…
+        </button>
+      ) : allOk ? (
+        // Done state: green "up to date" pill. Stays until the next
+        // freshness poll surfaces new missing/stale items, which flips
+        // this back to the amber 重编译 button.
+        <div className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300">
+          <CheckCircle2 size={11} />
+          已是最新
+        </div>
+      ) : total > 0 ? (
         <button
           onClick={onClick}
           disabled={disabled}
           className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
         >
-          {runningHere ? (
-            <Loader2 size={11} className="animate-spin" />
-          ) : (
-            <Sparkles size={11} />
-          )}
-          {runningHere ? '编译中…' : missing === total ? '编译' : '重编译'}
+          <Sparkles size={11} />
+          {missing === total ? '编译' : '重编译'}
         </button>
-      )}
+      ) : null}
       {runningHere && progress && progress.total > 0 && (
         <div className="mt-1 h-1 bg-slate-800/70 rounded">
           <div
@@ -690,6 +786,8 @@ function ActionButton({
   icon,
   variant,
   disabled,
+  loading,
+  loadingLabel,
   title,
   className,
   children,
@@ -698,6 +796,10 @@ function ActionButton({
   icon: React.ReactNode
   variant: 'primary' | 'ghost'
   disabled?: boolean
+  /** This button's own action is in-flight: swap icon → spinner and
+   *  (optionally) the label, on top of being disabled. */
+  loading?: boolean
+  loadingLabel?: string
   title?: string
   className?: string
   children: React.ReactNode
@@ -709,12 +811,12 @@ function ActionButton({
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
+      disabled={disabled || loading}
       title={title}
       className={`inline-flex items-center justify-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1.5 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${cls} ${className || ''}`}
     >
-      {icon}
-      {children}
+      {loading ? <Loader2 size={12} className="animate-spin" /> : icon}
+      {loading && loadingLabel ? loadingLabel : children}
     </button>
   )
 }

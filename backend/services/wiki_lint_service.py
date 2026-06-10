@@ -481,7 +481,7 @@ def read_lint_report() -> Optional[str]:
         return None
 
 
-def accept_stub(db: Session, concept_id: int) -> dict:
+def accept_stub(db: Session, concept_id: str) -> dict:
     """Mark a thin concept as acceptable-as-is. Appends LINT_ACCEPTED_TAG
     to the node's tags so future lint runs skip it. No LLM, idempotent."""
     node = (

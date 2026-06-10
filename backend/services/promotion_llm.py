@@ -94,7 +94,7 @@ def _candidates_for_llm(db: Session) -> list[KnowledgeNode]:
     return out
 
 
-def _build_candidate_block(node: KnowledgeNode, papers_by_id: dict[int, Paper]) -> dict:
+def _build_candidate_block(node: KnowledgeNode, papers_by_id: dict[str, Paper]) -> dict:
     paper_ids = normalize_source_paper_ids(node.source_paper_ids)
     snippets = []
     for pid in paper_ids:
@@ -119,10 +119,15 @@ def _user_prompt(batch: list[dict]) -> str:
     )
 
 
-def _parse_decisions(raw: str) -> dict[int, dict]:
+def _parse_decisions(raw: str) -> dict[str, dict]:
     """Tolerantly parse the LLM's JSON. Strips code fences and falls back to
     finding the first `[` ... `]` block if the response wraps the array in
-    extra prose."""
+    extra prose.
+
+    Keyed by ``str(id)`` — node ids are UUID strings post-migration (and
+    were INT pre-migration). The previous ``int(id)`` cast silently
+    dropped EVERY decision once ids became UUIDs, leaving all candidates
+    'still ambiguous' (the 自动剔除 no-op bug)."""
     text = (raw or "").strip()
     for fence in ("```json", "```"):
         if text.startswith(fence):
@@ -142,13 +147,15 @@ def _parse_decisions(raw: str) -> dict[int, dict]:
             return {}
     if not isinstance(data, list):
         return {}
-    out: dict[int, dict] = {}
+    out: dict[str, dict] = {}
     for entry in data:
         if not isinstance(entry, dict):
             continue
-        try:
-            node_id = int(entry.get("id"))
-        except (TypeError, ValueError):
+        # IDs are opaque strings (UUID now, INT before migration). The
+        # LLM echoes back whatever we sent in the candidate block's
+        # "id" field, so compare as strings.
+        node_id = str(entry.get("id") or "").strip()
+        if not node_id:
             continue
         decision = (entry.get("decision") or "").strip().lower()
         if decision not in {"promote", "reject"}:
@@ -174,7 +181,7 @@ def run_llm_pass(db: Session) -> LLMRunResult:
     if not candidates:
         return LLMRunResult(0, 0, 0, 0, model)
 
-    paper_ids: set[int] = set()
+    paper_ids: set[str] = set()
     for node in candidates:
         paper_ids.update(normalize_source_paper_ids(node.source_paper_ids))
     papers = db.query(Paper).filter(Paper.id.in_(list(paper_ids))).all() if paper_ids else []
@@ -202,7 +209,7 @@ def run_llm_pass(db: Session) -> LLMRunResult:
 
         decisions = _parse_decisions(raw)
         for node in batch_nodes:
-            verdict = decisions.get(node.id)
+            verdict = decisions.get(str(node.id))
             if not verdict:
                 still_ambiguous += 1
                 continue

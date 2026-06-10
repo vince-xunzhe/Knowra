@@ -51,8 +51,8 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         "routers.wiki.compute_freshness_summary",
         side_effect=[
             {
-                "papers": {"missing": [{"paper_id": 1}], "stale": []},
-                "concepts": {"missing": [{"concept_id": 7}], "stale": []},
+                "papers": {"missing": [{"paper_id": "1"}], "stale": []},
+                "concepts": {"missing": [{"concept_id": "7"}], "stale": []},
             },
             {
                 "papers": {"missing": [], "stale": []},
@@ -74,14 +74,14 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         mock_refresh_index,
         mock_rebuild_search,
     ):
-        paper = SimpleNamespace(id=1, title="Paper A", filename="a.pdf", processed=True, raw_llm_response="{}")
-        concept = SimpleNamespace(id=7, title="Concept A")
+        paper = SimpleNamespace(id="1", title="Paper A", filename="a.pdf", processed=True, raw_llm_response="{}")
+        concept = SimpleNamespace(id="7", title="Concept A")
         db = _SeqDB([paper, concept])
 
         resp = wiki.recompile_dirty_items(body=wiki.RecompileDirtyInput(), db=db)
 
-        self.assertEqual(resp["requested"]["paper_ids"], [1])
-        self.assertEqual(resp["requested"]["concept_ids"], [7])
+        self.assertEqual(resp["requested"]["paper_ids"], ["1"])
+        self.assertEqual(resp["requested"]["concept_ids"], ["7"])
         self.assertEqual(resp["compiled"]["papers"], 1)
         self.assertEqual(resp["compiled"]["concepts"], 1)
         self.assertEqual(resp["failed"]["count"], 0)
@@ -113,11 +113,11 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         "routers.wiki.compute_freshness_summary",
         side_effect=[
             {
-                "papers": {"missing": [{"paper_id": 1}, {"paper_id": 2}], "stale": []},
+                "papers": {"missing": [{"paper_id": "1"}, {"paper_id": "2"}], "stale": []},
                 "concepts": {"missing": [], "stale": []},
             },
             {
-                "papers": {"missing": [{"paper_id": 2}], "stale": []},
+                "papers": {"missing": [{"paper_id": "2"}], "stale": []},
                 "concepts": {"missing": [], "stale": []},
             },
         ],
@@ -136,15 +136,15 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         mock_rebuild_search,
         mock_record_failure,
     ):
-        paper1 = SimpleNamespace(id=1, title="Paper A", filename="a.pdf", processed=True, raw_llm_response="{}")
-        paper2 = SimpleNamespace(id=2, title="Paper B", filename="b.pdf", processed=True, raw_llm_response="{}")
+        paper1 = SimpleNamespace(id="1", title="Paper A", filename="a.pdf", processed=True, raw_llm_response="{}")
+        paper2 = SimpleNamespace(id="2", title="Paper B", filename="b.pdf", processed=True, raw_llm_response="{}")
         db = _SeqDB([paper1, paper2])
 
         resp = wiki.recompile_dirty_items(body=wiki.RecompileDirtyInput(), db=db)
 
         self.assertEqual(resp["compiled"]["papers"], 1)
         self.assertEqual(resp["failed"]["count"], 1)
-        self.assertEqual(resp["failed"]["items"][0]["id"], 2)
+        self.assertEqual(resp["failed"]["items"][0]["id"], "2")
         self.assertEqual(mock_compile_paper.call_count, 2)
         mock_record_failure.assert_called_once()
         mock_refresh_index.assert_called_once()
@@ -184,19 +184,19 @@ class WikiRouterIncrementalTests(unittest.TestCase):
         mock_refresh_index,
         mock_rebuild_search,
     ):
-        paper = SimpleNamespace(id=3, title="Paper C", filename="c.pdf", processed=True, raw_llm_response="{}")
-        concept = SimpleNamespace(id=9, title="Concept C")
+        paper = SimpleNamespace(id="3", title="Paper C", filename="c.pdf", processed=True, raw_llm_response="{}")
+        concept = SimpleNamespace(id="9", title="Concept C")
         db = _SeqDB([paper, concept])
 
         resp = wiki.recompile_by_ids(
-            body=wiki.RecompileByIdsInput(paper_ids=[3], concept_ids=[9]),
+            body=wiki.RecompileByIdsInput(paper_ids=["3"], concept_ids=["9"]),
             db=db,
         )
 
         self.assertEqual(resp["requested"]["include_missing"], False)
         self.assertEqual(resp["requested"]["include_stale"], False)
-        self.assertEqual(resp["requested"]["paper_ids"], [3])
-        self.assertEqual(resp["requested"]["concept_ids"], [9])
+        self.assertEqual(resp["requested"]["paper_ids"], ["3"])
+        self.assertEqual(resp["requested"]["concept_ids"], ["9"])
         self.assertEqual(resp["compiled"]["papers"], 1)
         self.assertEqual(resp["compiled"]["concepts"], 1)
         self.assertEqual(resp["failed"]["count"], 0)

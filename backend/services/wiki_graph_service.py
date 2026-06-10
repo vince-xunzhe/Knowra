@@ -13,7 +13,7 @@ from services.paper_category_service import (
     PAPER_CATEGORY_OPTIONS,
     PAPER_CATEGORY_OTHER,
     effective_paper_category,
-    legacy_classify_paper_category,
+    get_active_categories,
     sync_paper_category_fields,
 )
 from services.wiki_compiler import (
@@ -73,36 +73,58 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _paper_node_id(paper_id: int) -> str:
-    return f"paper:{paper_id}"
+def _coerce_id(value) -> Optional[str]:
+    """Treat paper/concept IDs as opaque strings.
+
+    Tolerates pre-multitenant INT ids and post-multitenant UUID strings
+    by collapsing both to ``str``. Returns ``None`` for empty / null /
+    untyped input."""
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
 
 
-def _concept_node_id(concept_id: int) -> str:
+def _paper_node_id(paper_id) -> str:
+    return f"paper:{_coerce_id(paper_id) or ''}"
+
+
+def _concept_node_id(concept_id: str) -> str:
     return f"concept:{concept_id}"
 
 
 def _category_rank(name: str) -> int:
+    # Order by the ACTIVE (user-editable) list so custom categories slot in
+    # where the user placed them; fall back to the built-in default order.
+    order = get_active_categories() or _CATEGORY_ORDER
     try:
-        return _CATEGORY_ORDER.index(name)
+        return order.index(name)
     except ValueError:
-        return len(_CATEGORY_ORDER)
+        return len(order)
 
 
 def build_wiki_graph(
     db: Session,
     active_kind: Optional[str] = None,
-    active_id: Optional[int] = None,
+    active_id: Optional[Any] = None,
 ) -> dict[str, Any]:
-    paper_pages = [item for item in list_paper_pages() if isinstance(item.get("paper_id"), int)]
+    # Accept ints or strings; the rest of the function compares as str.
+    active_id = _coerce_id(active_id) if active_id is not None else None
+    # Normalize paper / concept IDs to opaque strings so this service
+    # is happy with both legacy INT ids and post-migration UUIDs.
+    paper_pages = [
+        item for item in list_paper_pages()
+        if _coerce_id(item.get("paper_id")) is not None
+    ]
     concept_pages = [
         item for item in list_concept_pages()
-        if isinstance(item.get("concept_id"), int)
+        if _coerce_id(item.get("concept_id")) is not None
     ]
-    concept_page_by_id: dict[int, dict[str, Any]] = {}
+    concept_page_by_id: dict[str, dict[str, Any]] = {}
     for item in concept_pages:
-        concept_id = item.get("concept_id")
-        if isinstance(concept_id, int) and concept_id not in concept_page_by_id:
-            concept_page_by_id[concept_id] = item
+        cid = _coerce_id(item.get("concept_id"))
+        if cid is not None and cid not in concept_page_by_id:
+            concept_page_by_id[cid] = item
     concept_nodes = [
         node for node in list_publishable_concept_nodes(db)
         if (node.node_type or "") in {"concept", "technique", "dataset", "problem_area"}
@@ -111,17 +133,36 @@ def build_wiki_graph(
     if not paper_pages and not concept_nodes:
         return {"nodes": [], "edges": [], "categories": [], "updated_at": datetime.utcnow().isoformat()}
 
-    paper_ids = [int(item["paper_id"]) for item in paper_pages]
-    papers = db.query(Paper).filter(Paper.id.in_(paper_ids)).all()
-    paper_by_id = {paper.id: paper for paper in papers}
+    # Wiki .md frontmatter carries paper_id as it was at COMPILE time.
+    # Pages compiled before the multitenant migration have a legacy INT
+    # (paper_id: 1), pages compiled after have the UUID. Meanwhile the
+    # live Paper.id is now always a UUID, with the old INT preserved in
+    # legacy_id. So we can't match frontmatter ids against Paper.id
+    # directly — we build a lookup keyed by BOTH id and str(legacy_id)
+    # and always emit the CANONICAL UUID downstream so paper nodes,
+    # positions, and concept source_paper_ids (all UUIDs) line up.
+    # Fetching all papers is cheap at single-user scale and sidesteps a
+    # mixed-type IN() query.
+    paper_by_any_id: dict[str, Paper] = {}
+    for paper in db.query(Paper).all():
+        pid = _coerce_id(paper.id)
+        if pid:
+            paper_by_any_id[pid] = paper
+        legacy = getattr(paper, "legacy_id", None)
+        if legacy is not None:
+            lid = _coerce_id(legacy)
+            if lid:
+                paper_by_any_id.setdefault(lid, paper)
 
     compiled_papers: list[dict[str, Any]] = []
     changed = False
     for item in paper_pages:
-        paper_id = int(item["paper_id"])
-        paper = paper_by_id.get(paper_id)
+        frontmatter_id = _coerce_id(item["paper_id"])
+        paper = paper_by_any_id.get(frontmatter_id)
         if not paper:
             continue
+        # Canonical id used everywhere from here on.
+        paper_id = _coerce_id(paper.id)
         extraction = _safe_parse(paper.raw_llm_response)
         if sync_paper_category_fields(paper, extraction):
             changed = True
@@ -131,7 +172,7 @@ def build_wiki_graph(
             "title": item.get("title") or paper.title or paper.filename,
             "compiled_at": item.get("compiled_at"),
             "year": _paper_year(paper, extraction),
-            "category": effective_paper_category(paper, extraction) or legacy_classify_paper_category(paper, extraction),
+            "category": effective_paper_category(paper, extraction),
         })
     if changed and hasattr(db, "commit"):
         db.commit()
@@ -144,8 +185,8 @@ def build_wiki_graph(
 
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
-    paper_positions: dict[int, tuple[float, float]] = {}
-    paper_category: dict[int, str] = {}
+    paper_positions: dict[str, tuple[float, float]] = {}
+    paper_category: dict[str, str] = {}
 
     for category in categories_in_use:
         category_papers = sorted(
@@ -200,8 +241,16 @@ def build_wiki_graph(
 
     concept_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for node in concept_nodes:
-        concept_id = int(node.id)
-        page_meta = concept_page_by_id.get(concept_id) or {}
+        concept_id = _coerce_id(node.id)
+        # Concept wiki frontmatter concept_id has the same legacy-INT vs
+        # UUID split as papers. Resolve page meta by canonical id first,
+        # then fall back to the node's legacy_id.
+        legacy_cid = _coerce_id(getattr(node, "legacy_id", None))
+        page_meta = (
+            concept_page_by_id.get(concept_id)
+            or (concept_page_by_id.get(legacy_cid) if legacy_cid else None)
+            or {}
+        )
         linked_papers = [
             pid for pid in normalize_source_paper_ids(node.source_paper_ids)
             if pid in paper_positions

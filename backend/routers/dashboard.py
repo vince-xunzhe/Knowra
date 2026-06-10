@@ -119,7 +119,13 @@ class RadarPoint(BaseModel):
 
 
 class HubNode(BaseModel):
-    id: int
+    # Post-W3.2 ids are UUID strings. Frontend types DashboardHub.id as
+    # number (api/client.ts) — we'll let pydantic coerce on the wire
+    # for now by typing as string; the frontend dashboard widget only
+    # uses id for keying React lists, so the type drift is harmless
+    # for rendering. A later cleanup can flip the frontend type to
+    # `string` too.
+    id: str
     title: str
     node_type: str
     degree: int
@@ -208,14 +214,15 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
     }
 
     # ── 2. Tag aggregation (drives radar + tag cloud) ─────────────────
+    # Post-W3.2: node ids are UUID strings. We use them as opaque hashable
+    # keys throughout — no need to coerce to int (the legacy code did
+    # that, but dict keys / set members work identically on strings).
     tag_counter: Counter[str] = Counter()
-    # node_id → set of tags so we can later compute edge density per tag.
-    node_tags: dict[int, set[str]] = {}
-    # Per-tag membership for radar axes.
-    tag_nodes: defaultdict[str, set[int]] = defaultdict(set)
-    tag_paper_refs: defaultdict[str, set[int]] = defaultdict(set)
+    node_tags: dict[str, set[str]] = {}
+    tag_nodes: defaultdict[str, set[str]] = defaultdict(set)
+    tag_paper_refs: defaultdict[str, set[str]] = defaultdict(set)
     for n in nodes:
-        node_id = int(n.id)
+        node_id = str(n.id)
         tags = {
             t.strip()
             for t in _safe_json_list(n.tags)
@@ -226,10 +233,9 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
             tag_counter[tag] += 1
             tag_nodes[tag].add(node_id)
             for pid in _safe_json_list(n.source_paper_ids):
-                try:
-                    tag_paper_refs[tag].add(int(pid))
-                except (TypeError, ValueError):
+                if pid is None:
                     continue
+                tag_paper_refs[tag].add(str(pid))
 
     top_tags = [
         DistributionSlice(label=tag, value=count)
@@ -237,9 +243,9 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
     ]
 
     # Build adjacency for edge density per tag.
-    adjacency: defaultdict[int, set[int]] = defaultdict(set)
+    adjacency: defaultdict[str, set[str]] = defaultdict(set)
     for e in edges:
-        s, t = int(e.source_id), int(e.target_id)
+        s, t = str(e.source_id), str(e.target_id)
         adjacency[s].add(t)
         adjacency[t].add(s)
 
@@ -249,7 +255,7 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
         n = len(members)
         # Edges where both endpoints belong to this tag bucket.
         internal_edges = 0
-        seen: set[tuple[int, int]] = set()
+        seen: set[tuple[str, str]] = set()
         for a in members:
             for b in adjacency.get(a, ()):
                 if b in members and a != b:
@@ -336,14 +342,15 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
         )
 
     # ── 6. Network structure ──────────────────────────────────────────
-    degree_counter: Counter[int] = Counter()
+    # All ids are UUID strings post-W3.2 — keep them opaque, never int().
+    degree_counter: Counter[str] = Counter()
     relation_counter: Counter[str] = Counter()
     for e in edges:
-        degree_counter[int(e.source_id)] += 1
-        degree_counter[int(e.target_id)] += 1
+        degree_counter[str(e.source_id)] += 1
+        degree_counter[str(e.target_id)] += 1
         relation_counter[(e.relation_type or "related").strip() or "related"] += 1
-    promoted_node_ids = {int(n.id) for n in nodes if n.promotion_status == "promoted"}
-    nodes_by_id = {int(n.id): n for n in nodes}
+    promoted_node_ids = {str(n.id) for n in nodes if n.promotion_status == "promoted"}
+    nodes_by_id = {str(n.id): n for n in nodes}
     # Restrict hub ranking to promoted concepts — pending / rejected
     # clutter the leaderboard with noise.
     hub_candidates = [

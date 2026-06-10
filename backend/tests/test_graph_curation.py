@@ -130,14 +130,14 @@ class GraphCurationTests(unittest.TestCase):
             promotion_reason=None,
             last_promotion_eval_at=None,
             tags=[],
-            source_paper_ids=[14],
+            source_paper_ids=["14"],
             created_at=None,
         )
 
-        data = _serialize_graph_node(node, {14})
+        data = _serialize_graph_node(node, {"14"})
 
         self.assertEqual(data["id"], "42")
-        self.assertEqual(data["paper_id"], 14)
+        self.assertEqual(data["paper_id"], "14")
         self.assertIsNone(data["concept_id"])
 
     def test_repair_merged_paper_nodes_reassigns_edges(self):
@@ -148,51 +148,51 @@ class GraphCurationTests(unittest.TestCase):
         try:
             db.add_all(
                 [
-                    Paper(id=1, filepath="paper-1.pdf", filename="paper-1.pdf", file_hash="h1", title="N3D-VLM: Native 3D Grounding Enables Accurate Spatial Reasoning in Vision-Language Models"),
-                    Paper(id=14, filepath="paper-14.pdf", filename="paper-14.pdf", file_hash="h14", title="DriveLM: Driving with Graph Visual Question Answering"),
+                    Paper(id="1", filepath="paper-1.pdf", filename="paper-1.pdf", file_hash="h1", title="N3D-VLM: Native 3D Grounding Enables Accurate Spatial Reasoning in Vision-Language Models"),
+                    Paper(id="14", filepath="paper-14.pdf", filename="paper-14.pdf", file_hash="h14", title="DriveLM: Driving with Graph Visual Question Answering"),
                 ]
             )
             merged = KnowledgeNode(
-                id=1,
+                id="1",
                 title="N3D-VLM: Native 3D Grou…",
                 content="merged content",
                 node_type="paper",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[1, 14],
+                source_paper_ids=["1", "14"],
                 embedding=None,
                 tags=[],
             )
             drivelm = KnowledgeNode(
-                id=303,
+                id="303",
                 title="DriveLM: Driving with G…",
                 content="DriveLM content",
                 node_type="paper",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[14],
+                source_paper_ids=["14"],
                 embedding=None,
                 tags=[],
             )
             n3d_only = KnowledgeNode(
-                id=3,
+                id="3",
                 title="结构化语言输出",
                 content="belongs to paper 1",
                 node_type="technique",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[1],
+                source_paper_ids=["1"],
                 embedding=None,
                 tags=[],
             )
             drivelm_only = KnowledgeNode(
-                id=304,
+                id="304",
                 title="视觉问答",
                 content="belongs to paper 14",
                 node_type="technique",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[14],
+                source_paper_ids=["14"],
                 embedding=None,
                 tags=[],
             )
@@ -200,9 +200,9 @@ class GraphCurationTests(unittest.TestCase):
             db.flush()
             db.add_all(
                 [
-                    KnowledgeEdge(source_id=1, target_id=3, relation_type="uses", weight=1.0),
-                    KnowledgeEdge(source_id=1, target_id=304, relation_type="uses", weight=1.0),
-                    KnowledgeEdge(source_id=1, target_id=303, relation_type="uses", weight=1.0),
+                    KnowledgeEdge(source_id="1", target_id="3", relation_type="uses", weight=1.0),
+                    KnowledgeEdge(source_id="1", target_id="304", relation_type="uses", weight=1.0),
+                    KnowledgeEdge(source_id="1", target_id="303", relation_type="uses", weight=1.0),
                 ]
             )
             db.commit()
@@ -210,8 +210,8 @@ class GraphCurationTests(unittest.TestCase):
             repaired = repair_merged_paper_nodes(db, similarity_threshold=0.6)
 
             self.assertEqual(repaired, 1)
-            repaired_merged = db.query(KnowledgeNode).filter(KnowledgeNode.id == 1).first()
-            self.assertEqual(repaired_merged.source_paper_ids, [1])
+            repaired_merged = db.query(KnowledgeNode).filter(KnowledgeNode.id == "1").first()
+            self.assertEqual(repaired_merged.source_paper_ids, ["1"])
             self.assertEqual(
                 repaired_merged.title,
                 "N3D-VLM: Native 3D Grounding Enables Accurate Spatial Reasoning in Vision-Language Models",
@@ -221,10 +221,10 @@ class GraphCurationTests(unittest.TestCase):
                 (edge.source_id, edge.target_id, edge.relation_type)
                 for edge in db.query(KnowledgeEdge).all()
             }
-            self.assertIn((1, 3, "uses"), edges)
-            self.assertNotIn((1, 304, "uses"), edges)
-            self.assertIn((303, 304, "uses"), edges)
-            self.assertNotIn((1, 303, "uses"), edges)
+            self.assertIn(("1", "3", "uses"), edges)
+            self.assertNotIn(("1", "304", "uses"), edges)
+            self.assertIn(("303", "304", "uses"), edges)
+            self.assertNotIn(("1", "303", "uses"), edges)
         finally:
             db.close()
             engine.dispose()
@@ -236,40 +236,40 @@ class GraphCurationTests(unittest.TestCase):
         db = Session()
         try:
             n1 = KnowledgeNode(
-                id=1,
+                id="1",
                 title="Node 1",
                 content="n1",
                 node_type="technique",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[1],
+                source_paper_ids=["1"],
                 embedding=[1.0, 0.0],
                 tags=[],
             )
             n2 = KnowledgeNode(
-                id=2,
+                id="2",
                 title="Node 2",
                 content="n2",
                 node_type="technique",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[2],
+                source_paper_ids=["2"],
                 embedding=[1.0, 0.0],
                 tags=[],
             )
             n3 = KnowledgeNode(
-                id=3,
+                id="3",
                 title="Node 3",
                 content="n3",
                 node_type="technique",
                 node_origin="auto",
                 promotion_status="promoted",
-                source_paper_ids=[3],
+                source_paper_ids=["3"],
                 embedding=[0.0, 1.0],
                 tags=[],
             )
             manual_node = KnowledgeNode(
-                id=4,
+                id="4",
                 title="Manual Concept",
                 content="manual",
                 node_type="concept",
@@ -283,8 +283,8 @@ class GraphCurationTests(unittest.TestCase):
             db.flush()
             db.add_all(
                 [
-                    KnowledgeEdge(source_id=1, target_id=3, relation_type="similar", weight=0.95),
-                    KnowledgeEdge(source_id=1, target_id=4, relation_type="curated_link", weight=1.0),
+                    KnowledgeEdge(source_id="1", target_id="3", relation_type="similar", weight=0.95),
+                    KnowledgeEdge(source_id="1", target_id="4", relation_type="curated_link", weight=1.0),
                 ]
             )
             db.commit()
@@ -300,7 +300,7 @@ class GraphCurationTests(unittest.TestCase):
 
             manual_still_exists = (
                 db.query(KnowledgeNode)
-                .filter(KnowledgeNode.id == 4, KnowledgeNode.node_origin == "manual")
+                .filter(KnowledgeNode.id == "4", KnowledgeNode.node_origin == "manual")
                 .first()
             )
             self.assertIsNotNone(manual_still_exists)
@@ -312,10 +312,10 @@ class GraphCurationTests(unittest.TestCase):
             self.assertEqual(len(similar_edges), 1)
             self.assertEqual(
                 {similar_edges[0].source_id, similar_edges[0].target_id},
-                {1, 2},
+                {"1", "2"},
             )
             self.assertEqual(len(curated_edges), 1)
-            self.assertEqual((curated_edges[0].source_id, curated_edges[0].target_id), (1, 4))
+            self.assertEqual((curated_edges[0].source_id, curated_edges[0].target_id), ("1", "4"))
         finally:
             db.close()
             engine.dispose()

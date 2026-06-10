@@ -12,7 +12,7 @@ auto-runs skip the node.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -64,7 +64,11 @@ class StatusUpdate(BaseModel):
 
 
 class BulkStatusUpdate(BaseModel):
-    node_ids: list[int]
+    # Node IDs are UUID strings post-multitenant migration (legacy INT in
+    # older data). A bare list[int] 422-rejects UUIDs — breaking the rescue
+    # UI's bulk recall. bulk_set_status compares ids as-is against the
+    # (string) UUID column, so accepting both is correct.
+    node_ids: list[Union[int, str]]
     status: str
     reason: Optional[str] = None
 
@@ -146,7 +150,7 @@ def list_candidates(
 
 @router.patch("/{node_id}")
 def update_status(
-    node_id: int,
+    node_id: str,
     body: StatusUpdate,
     db: Session = Depends(get_db),
 ):

@@ -19,6 +19,24 @@ from model_gateway import (
 CONFIG_FILE = Path(__file__).parent.parent / "data" / "config.json"
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
 
+# ── Deploy mode ─────────────────────────────────────────────────────────
+# Controls whether this FastAPI process runs as:
+#   "local"  → desktop sidecar mode: SQLite, no auth, single user, Codex CLI on
+#   "cloud"  → multi-tenant cloud mode: Postgres (Supabase), JWT auth, no Codex
+# See docs/ARCHITECTURE-CLOUD.md §4.3.
+#
+# Default is "local" so an unset env var keeps current desktop behavior.
+DEPLOY_MODE = os.environ.get("KNOWRA_DEPLOY_MODE", "local").lower().strip()
+if DEPLOY_MODE not in {"local", "cloud"}:
+    raise RuntimeError(
+        f"KNOWRA_DEPLOY_MODE must be 'local' or 'cloud', got: {DEPLOY_MODE!r}"
+    )
+
+
+def is_cloud_mode() -> bool:
+    """Convenience predicate used by routers that gate behavior on deploy mode."""
+    return DEPLOY_MODE == "cloud"
+
 # Exposed OpenAI models for the frontend dropdown.
 # Only file_search-compatible models. Reasoning models (o1/o3) removed because
 # the Assistants API + file_search pipeline does not support them.

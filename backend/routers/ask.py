@@ -275,7 +275,7 @@ class SynthesisConceptInput(BaseModel):
 def _sync_synthesis_relation_edges(
     db: Session,
     *,
-    source_node_id: int,
+    source_node_id: str,
     related_links: list,
 ) -> list[dict]:
     if not related_links:
@@ -401,10 +401,12 @@ def create_concept_from_synthesis(
     paper_ids = []
     if body.source_paper_ids:
         paper_ids = normalize_source_paper_ids(body.source_paper_ids)
+        # Coerce both sides to strings so legacy INT-id storage and
+        # post-multitenant UUID-id storage compare cleanly.
         existing = {
-            p.id for p in db.query(Paper).filter(Paper.id.in_(paper_ids)).all()
+            str(p.id) for p in db.query(Paper).filter(Paper.id.in_(paper_ids)).all()
         }
-        paper_ids = [pid for pid in paper_ids if pid in existing]
+        paper_ids = [pid for pid in paper_ids if str(pid) in existing]
 
     cfg = load_config()
     analysis = analyze_synthesis_concept(

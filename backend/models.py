@@ -1,14 +1,44 @@
+"""SQLAlchemy models for the local desktop SQLite.
+
+Post-multitenant migration these declare:
+  - id columns as String (UUID v4)
+  - user_id column (per-row tenant attribution; nullable locally so
+    pre-multitenant code paths still work during migration)
+  - legacy_id column (preserved INT id from pre-migration days; kept
+    around for 6 months for forensics)
+
+These match the cloud Postgres schema declared in
+``supabase/migrations/0001_init.sql`` 1:1 — any change here must mirror
+the SQL file (or vice versa). See docs/SCHEMA-MIGRATION.md.
+"""
 from sqlalchemy import Column, Integer, String, Boolean, Float, DateTime, Text, JSON
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime, timezone
+import uuid
 
 Base = declarative_base()
+
+
+def _uuid() -> str:
+    """Generate a string UUID for new rows. Used as a Column default so
+    callers can just ``Paper(filepath=..., ...)`` and the id is auto-
+    populated, mirroring the pre-multitenant INT autoincrement UX."""
+    return str(uuid.uuid4())
 
 
 class Paper(Base):
     __tablename__ = "papers"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True, default=_uuid)
+    # Multi-tenant attribution. Nullable locally for backwards-compat
+    # with pre-migration data; populated by the multitenant migration
+    # for all existing rows and by routers for new rows once the
+    # current_user dependency is wired through.
+    user_id = Column(String, nullable=True, index=True)
+    # Preserved INT id from the pre-multitenant schema. Kept ~6 months
+    # for forensics and to support `legacy_id` URL fallbacks if needed.
+    legacy_id = Column(Integer, nullable=True)
+
     filepath = Column(String, unique=True, nullable=False)
     filename = Column(String, nullable=False)
     file_hash = Column(String, nullable=False)
@@ -62,7 +92,10 @@ class Paper(Base):
 class KnowledgeNode(Base):
     __tablename__ = "knowledge_nodes"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    legacy_id = Column(Integer, nullable=True)
+
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     node_type = Column(String, default="concept")  # paper/technique/dataset/problem/concept/entity
@@ -77,16 +110,25 @@ class KnowledgeNode(Base):
     last_promotion_eval_at = Column(DateTime, nullable=True)
     tags = Column(JSON, default=list)
     embedding = Column(JSON, nullable=True)
-    source_paper_ids = Column(JSON, default=list)  # list of Paper IDs
+    # JSON array of paper id STRINGS post-migration. Pre-migration rows
+    # may carry INT entries until the migration rewrites them; helper
+    # code in graph_service tolerates both during the transition.
+    source_paper_ids = Column(JSON, default=list)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class KnowledgeEdge(Base):
     __tablename__ = "knowledge_edges"
 
-    id = Column(Integer, primary_key=True, index=True)
-    source_id = Column(Integer, nullable=False)
-    target_id = Column(Integer, nullable=False)
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    legacy_id = Column(Integer, nullable=True)
+
+    # FK to knowledge_nodes.id. We don't declare a SQLAlchemy
+    # ForeignKey constraint to keep SQLite migrations cheap; the cloud
+    # Postgres schema is the one with the strict FK + cross-user trigger.
+    source_id = Column(String, nullable=False)
+    target_id = Column(String, nullable=False)
     relation_type = Column(String, default="related")
     weight = Column(Float, default=0.0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -100,7 +142,10 @@ class LLMCall(Base):
 
     __tablename__ = "llm_calls"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    legacy_id = Column(Integer, nullable=True)
+
     called_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     # Logical task label set via telemetry.task_context(...). "unknown" for
     # call sites that haven't been tagged yet.

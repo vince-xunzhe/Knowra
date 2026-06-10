@@ -195,14 +195,25 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   ) => {
     if (cy.destroyed()) return
     stopRuntimeMotion(cy)
-    const layout = cy.layout(graphLayout(nodeCount, options))
-    activeLayoutRef.current = layout
-    layout.one('layoutstop', () => {
-      if (activeLayoutRef.current === layout) {
-        activeLayoutRef.current = null
-      }
+    // Defer the new layout by one animation frame. Cytoscape's old
+    // layout schedules its refresh() via requestAnimationFrame; even
+    // after layout.stop() the last queued frame still fires once,
+    // and if we've already removed/replaced elements it walks a
+    // null collection and throws "Cannot read properties of null
+    // (reading 'notify')". Waiting one RAF lets that orphan frame
+    // run to completion (it's a no-op against the now-empty graph)
+    // before we kick the new layout.
+    requestAnimationFrame(() => {
+      if (cy.destroyed()) return
+      const layout = cy.layout(graphLayout(nodeCount, options))
+      activeLayoutRef.current = layout
+      layout.one('layoutstop', () => {
+        if (activeLayoutRef.current === layout) {
+          activeLayoutRef.current = null
+        }
+      })
+      layout.run()
     })
-    layout.run()
   }, [stopRuntimeMotion])
 
   useEffect(() => {
