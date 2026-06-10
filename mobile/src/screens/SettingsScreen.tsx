@@ -4,23 +4,26 @@ import {
 } from 'react-native'
 
 import { useAuth } from '../contexts/AuthContext'
-import { getOpenAIKey, setOpenAIKey } from '../api/cloud'
+import { CLOUD_DEFAULTS, getCloudConfigOverride, getOpenAIKey, setOpenAIKey } from '../api/cloud'
 
 export default function SettingsScreen() {
   const auth = useAuth()
-  const [supabaseUrl, setSupabaseUrl] = useState(auth.config.supabaseUrl)
-  const [supabaseAnonKey, setSupabaseAnonKey] = useState(auth.config.supabaseAnonKey)
-  const [baseUrl, setBaseUrl] = useState(auth.config.baseUrl)
+  // The advanced fields hold the user's explicit OVERRIDE (blank = use the
+  // baked-in default). Loaded from raw storage, not from auth.config — which
+  // is the merged effective config and would otherwise show defaults as typed.
+  const [supabaseUrl, setSupabaseUrl] = useState('')
+  const [supabaseAnonKey, setSupabaseAnonKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
   const [openaiKey, setOpenaiKeyState] = useState('')
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
-    setSupabaseUrl(auth.config.supabaseUrl)
-    setSupabaseAnonKey(auth.config.supabaseAnonKey)
-    setBaseUrl(auth.config.baseUrl)
-  }, [auth.config])
-
-  useEffect(() => {
+    getCloudConfigOverride().then(o => {
+      setSupabaseUrl(o.supabaseUrl)
+      setSupabaseAnonKey(o.supabaseAnonKey)
+      setBaseUrl(o.baseUrl)
+    })
     getOpenAIKey().then(setOpenaiKeyState)
   }, [])
 
@@ -40,22 +43,30 @@ export default function SettingsScreen() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-      <Section title="云端连接" desc="所有字段由你在 Supabase 控制台获取。">
-        <Field label="Supabase URL" value={supabaseUrl} onChange={setSupabaseUrl}
-               placeholder="https://xxxxx.supabase.co" />
-        <Field label="Supabase anon key" value={supabaseAnonKey} onChange={setSupabaseAnonKey}
-               placeholder="eyJ..." secure />
-        <Field label="云后端 URL" value={baseUrl} onChange={setBaseUrl}
-               placeholder="https://knowra-cloud.fly.dev" />
-      </Section>
-
-      <Section title="OpenAI Key" desc="仅用于 Ask 调用时本机发送一次，云端不存储。">
+      <Section title="OpenAI Key" desc="云端提问时本机发送一次、用完即弃，云端不存储。通常你只需填这一项。">
         <Field label="API key" value={openaiKey} onChange={setOpenaiKeyState}
                placeholder="sk-..." secure />
         <TouchableOpacity onPress={() => void Linking.openURL('https://platform.openai.com/api-keys')}>
           <Text style={styles.link}>到 platform.openai.com 创建 key →</Text>
         </TouchableOpacity>
       </Section>
+
+      <TouchableOpacity style={styles.advancedToggle} onPress={() => setShowAdvanced(v => !v)}>
+        <Text style={styles.advancedToggleText}>
+          {showAdvanced ? '▾' : '▸'}  高级：自定义云端连接（默认已连好，一般无需修改）
+        </Text>
+      </TouchableOpacity>
+
+      {showAdvanced && (
+        <Section title="云端连接" desc="默认已连接到 Knowra 云端。仅当你自建后端时才需在此覆盖；留空即用内置默认值。">
+          <Field label="Supabase URL" value={supabaseUrl} onChange={setSupabaseUrl}
+                 placeholder={CLOUD_DEFAULTS.supabaseUrl} />
+          <Field label="Supabase anon key" value={supabaseAnonKey} onChange={setSupabaseAnonKey}
+                 placeholder="已内置默认值" secure />
+          <Field label="云后端 URL" value={baseUrl} onChange={setBaseUrl}
+                 placeholder={CLOUD_DEFAULTS.baseUrl} />
+        </Section>
+      )}
 
       <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
         <Text style={styles.saveButtonText}>{saved ? '已保存 ✓' : '保存设置'}</Text>
@@ -129,6 +140,8 @@ const styles = StyleSheet.create({
     color: '#e2e8f0', fontSize: 14, fontFamily: 'Menlo',
   },
   link: { color: '#818cf8', fontSize: 13, marginTop: 6 },
+  advancedToggle: { paddingVertical: 10, marginBottom: 4 },
+  advancedToggleText: { color: '#64748b', fontSize: 13, fontWeight: '500' },
   saveButton: {
     backgroundColor: '#6366f1', borderRadius: 12, paddingVertical: 14,
     alignItems: 'center', marginVertical: 12,
