@@ -14,6 +14,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
 import { Ionicons } from '@expo/vector-icons'
 
 import { useAuth } from '../contexts/AuthContext'
+import HomeScreen from '../screens/HomeScreen'
 import LoginScreen from '../screens/LoginScreen'
 import PapersScreen from '../screens/PapersScreen'
 import PaperDetailScreen from '../screens/PaperDetailScreen'
@@ -26,6 +27,7 @@ import type { RootStackParamList } from './types'
 // triangle markers.
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 const TAB_ICONS: Record<string, { on: IoniconName; off: IoniconName }> = {
+  首页: { on: 'home', off: 'home-outline' },
   资料: { on: 'document-text', off: 'document-text-outline' },
   Ask: { on: 'chatbubbles', off: 'chatbubbles-outline' },
   设置: { on: 'settings', off: 'settings-outline' },
@@ -93,6 +95,10 @@ function MainTabs() {
         tabBarIcon: tabIcon(route.name),
       })}
     >
+      <Tabs.Screen name="首页" component={HomeScreen}
+        options={{
+          headerShown: true, ...screenOptions, title: 'Knowra',
+        }} />
       <Tabs.Screen name="资料" component={PapersTab} />
       <Tabs.Screen name="Ask" component={AskScreen}
         options={{
