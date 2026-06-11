@@ -6,7 +6,7 @@
  * <View> bars (no SVG / chart lib) to keep the standalone build dependency
  * surface minimal.
  *
- * Shows: greeting + last-sync, four headline counts, papers-by-category,
+ * Shows: an overview header + last-sync, four headline counts, papers-by-category,
  * a reading timeline (papers by publication year), concept composition
  * (by node_type), and the most recently added papers.
  */
@@ -118,9 +118,9 @@ export default function HomeScreen() {
         <RefreshControl refreshing={snap.loading} onRefresh={() => void snap.refresh()} tintColor="#818cf8" />
       }
     >
-      <View style={styles.greet}>
-        <Text style={styles.greetHi}>欢迎回来 👋</Text>
-        <Text style={styles.greetSub}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>知识库概览</Text>
+        <Text style={styles.headerMeta}>
           {auth.user?.email || '已登录'} · 上次同步 {fmtSync(snap.fetchedAt)}
         </Text>
       </View>
@@ -293,9 +293,9 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: '#0b0d12' },
   content: { padding: 16, paddingTop: 14 },
 
-  greet: { marginBottom: 18 },
-  greetHi: { color: '#f1f5f9', fontSize: 20, fontWeight: '700' },
-  greetSub: { color: '#64748b', fontSize: 12, marginTop: 4 },
+  header: { marginBottom: 18 },
+  headerTitle: { color: '#f1f5f9', fontSize: 20, fontWeight: '700', letterSpacing: 0.2 },
+  headerMeta: { color: '#64748b', fontSize: 12, marginTop: 4 },
 
   // headline stats — 2×2
   statGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
