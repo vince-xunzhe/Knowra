@@ -221,6 +221,72 @@ export default function SettingsPage() {
     }))
   }, [updateGateway])
 
+  // ── merged model selection ────────────────────────────────────────────
+  // Settings used to render one card per task (8 of them — too fragmented).
+  // We collapse every NON-embedding task into a single 「主模型」 and keep
+  // embedding (图谱向量与相似边) on its own. Under the hood we still write
+  // per-task bindings (the backend resolves per task), but one picker drives
+  // the whole non-embedding set together.
+  const mainTaskIds = useMemo(
+    () => taskSpecs.filter(task => task.task_type !== 'embedding').map(task => task.id),
+    [taskSpecs],
+  )
+  const embeddingTask = useMemo(
+    () => taskSpecs.find(task => task.task_type === 'embedding') || null,
+    [taskSpecs],
+  )
+  const mainRepTaskId = mainTaskIds[0] || 'paper_extract'
+  // A 主模型 candidate must support EVERY non-embedding task so one choice is
+  // valid everywhere it's written. paper_extract is a vision task, so this
+  // naturally restricts the list to vision-capable models.
+  const mainCandidates = useMemo(
+    () => (mainTaskIds.length === 0
+      ? []
+      : models.filter(model => mainTaskIds.every(taskId => model.supported_tasks.includes(taskId)))),
+    [models, mainTaskIds],
+  )
+  const embeddingCandidates = useMemo(
+    () => (embeddingTask ? models.filter(model => model.supported_tasks.includes(embeddingTask.id)) : []),
+    [models, embeddingTask],
+  )
+  const mainRecommendedId = useMemo(
+    () => taskSpecs.find(task => task.id === mainRepTaskId)?.recommended_model_id || '',
+    [taskSpecs, mainRepTaskId],
+  )
+  const mainBinding = normalizeTaskBinding(taskBindings[mainRepTaskId], mainRecommendedId)
+  const embeddingBinding = embeddingTask
+    ? normalizeTaskBinding(taskBindings[embeddingTask.id], embeddingTask.recommended_model_id || '')
+    : null
+
+  // Writing the main model fans the same binding out to every non-embedding
+  // task in one atomic update.
+  const setMainBinding = useCallback((next: Required<ModelGatewayTaskBinding>) => {
+    updateGateway(current => ({
+      ...current,
+      task_bindings: {
+        ...current.task_bindings,
+        ...Object.fromEntries(mainTaskIds.map(taskId => [taskId, next])),
+      },
+    }))
+  }, [updateGateway, mainTaskIds])
+
+  // The cards actually rendered: one synthetic 主模型 + the embedding task.
+  const displayTasks = useMemo<ModelGatewayTaskSpec[]>(() => {
+    const list: ModelGatewayTaskSpec[] = []
+    const rep = taskSpecs.find(task => task.id === mainRepTaskId)
+    if (rep) {
+      list.push({
+        ...rep,
+        id: '__main__',
+        label: '主模型',
+        category: '通用',
+        description: '论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查 —— 除“图谱向量”外的全部任务共用此模型；改这里即全部生效。需支持视觉（论文抽取要读首页图）。',
+      })
+    }
+    if (embeddingTask) list.push(embeddingTask)
+    return list
+  }, [taskSpecs, mainRepTaskId, embeddingTask])
+
   const handleTestProvider = useCallback(async (providerId: string) => {
     setTestingProviderId(providerId)
     try {
@@ -335,7 +401,7 @@ export default function SettingsPage() {
 
         <SettingGroup
           title="任务模型"
-          description="每个任务单独选模型。系统推荐只是默认值，你可以按任务改成更便宜或更强的路线。"
+          description="除“图谱向量”外的所有任务共用一个主模型；向量单独配置。Provider 区只保留连接参数与联通测试。"
           defaultExpanded={false}
         >
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
@@ -430,15 +496,19 @@ export default function SettingsPage() {
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="mb-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">任务配置</p>
-              <p className="mt-1 text-base font-semibold text-slate-100">任务绑定</p>
-              <p className="text-xs text-slate-500 mt-1">按任务挑模型。`Provider` 决定走 `Codex` 还是 `OpenAPI`，`Brand` 和 `Model` 只显示这个任务当前可用的候选。</p>
+              <p className="mt-1 text-base font-semibold text-slate-100">模型选择</p>
+              <p className="text-xs text-slate-500 mt-1">除“图谱向量”外的任务共用「主模型」，向量单独配。`Provider` 决定走 `Codex` 还是 `OpenAPI`，`Brand`/`Model` 显示当前可用候选。</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
-              {taskSpecs.map(task => {
+              {displayTasks.map(task => {
+                const isMain = task.id === '__main__'
                 const recommendedModel = task.recommended_model_id ? modelById[task.recommended_model_id] : null
-                const binding = normalizeTaskBinding(taskBindings[task.id], task.recommended_model_id || '')
-                const candidates = models.filter(model => model.supported_tasks.includes(task.id))
+                const candidates = isMain ? mainCandidates : embeddingCandidates
+                const binding = isMain ? mainBinding : (embeddingBinding ?? mainBinding)
+                const applyBinding = isMain
+                  ? setMainBinding
+                  : (next: Required<ModelGatewayTaskBinding>) => setTaskBinding(task.id, next)
                 const selectedModel = binding.model_id ? modelById[binding.model_id] || null : null
                 const selectedModelProvider = selectedModel ? providerById[selectedModel.provider_id] : null
 
@@ -489,7 +559,7 @@ export default function SettingsPage() {
                           onChange={e => {
                             const nextRoute = e.target.value as ProviderRoute
                             const nextModel = candidates.find(model => providerRoute(providerById[model.provider_id]) === nextRoute)
-                            setTaskBinding(task.id, {
+                            applyBinding({
                               model_id: nextModel?.id || '',
                               reasoning_effort: binding.reasoning_effort,
                             })
@@ -518,7 +588,7 @@ export default function SettingsPage() {
                           onChange={e => {
                             const nextProviderId = e.target.value
                             const nextModel = routeCandidates.find(model => model.provider_id === nextProviderId)
-                            setTaskBinding(task.id, {
+                            applyBinding({
                               model_id: nextModel?.id || '',
                               reasoning_effort: binding.reasoning_effort,
                             })
@@ -536,7 +606,7 @@ export default function SettingsPage() {
                       <Field label="Model">
                         <select
                           value={currentModelId}
-                          onChange={e => setTaskBinding(task.id, {
+                          onChange={e => applyBinding({
                             model_id: e.target.value,
                             reasoning_effort: binding.reasoning_effort,
                           })}
@@ -554,7 +624,7 @@ export default function SettingsPage() {
                         <select
                           value={task.task_type === 'embedding' ? 'not_applicable' : binding.reasoning_effort}
                           disabled={task.task_type === 'embedding'}
-                          onChange={e => setTaskBinding(task.id, {
+                          onChange={e => applyBinding({
                             model_id: currentModelId,
                             reasoning_effort: e.target.value as Required<ModelGatewayTaskBinding>['reasoning_effort'],
                           })}
