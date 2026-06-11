@@ -24,8 +24,10 @@ import type { KnowledgeNodeRow, PaperRow } from '../api/cloud'
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
-// Bar palette — cycled across rows / columns.
-const PALETTE = ['#818cf8', '#34d399', '#fbbf24', '#f472b6', '#22d3ee', '#a78bfa', '#fb7185', '#4ade80']
+// Restrained indigo ramp (light → deep), one hue family — no rainbow. Bars are
+// labelled and valued, so colour carries no extra meaning; the gradation just
+// adds a little depth without the playful multicolour.
+const PALETTE = ['#c7d2fe', '#a5b4fc', '#818cf8', '#6366f1', '#5b54d6', '#4f46e5']
 
 function fmtSync(ts: number | null): string {
   if (!ts) return '从未'
@@ -147,10 +149,10 @@ export default function HomeScreen() {
       ) : (
         <>
           <View style={styles.statGrid}>
-            <StatCard icon="document-text" label="论文" value={papers.length} color="#818cf8" onPress={() => nav.navigate('资料')} />
-            <StatCard icon="bulb" label="概念" value={concepts.length} color="#34d399" />
-            <StatCard icon="git-network" label="连接" value={edges.length} color="#fbbf24" />
-            <StatCard icon="book" label="Wiki 页" value={wikis.length} color="#f472b6" />
+            <StatCard icon="document-text" label="论文" value={papers.length} color="#c7d2fe" onPress={() => nav.navigate('资料')} />
+            <StatCard icon="bulb" label="概念" value={concepts.length} color="#a5b4fc" />
+            <StatCard icon="git-network" label="连接" value={edges.length} color="#818cf8" />
+            <StatCard icon="book" label="Wiki 页" value={wikis.length} color="#6366f1" />
           </View>
 
           {categoryData.length > 0 && (
