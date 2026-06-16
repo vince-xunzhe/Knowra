@@ -65,6 +65,12 @@ class Paper(Base):
     # Optional human override for the paper's lane/category. When present,
     # wiki graph grouping prefers this over the model-predicted value.
     paper_category_override = Column(String, nullable=True)
+    # Team/lab dimension — a second grouping axis parallel to paper_category.
+    # Auto-assigned by matching the paper's authors against the editable team
+    # registry (services.paper_team_service); manual override wins; papers with
+    # no matching team fall back to "others".
+    paper_team_model = Column(String, nullable=True)
+    paper_team_override = Column(String, nullable=True)
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)
