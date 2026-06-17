@@ -6,7 +6,7 @@ import {
   X,
   Plus,
   ArrowRight,
-  Tags,
+  Tags, Users2,
 } from 'lucide-react'
 import KnowledgeGraph from '../components/KnowledgeGraph'
 import NodeDetail from '../components/NodeDetail'
@@ -14,6 +14,7 @@ import RejectedRescueModal from '../components/RejectedRescueModal'
 import PipelineConsole from '../components/PipelineConsole'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import CategoryComposer from '../components/CategoryComposer'
+import TeamComposer from '../components/TeamComposer'
 import ConceptListView from '../components/ConceptListView'
 import AskDrawer from '../components/AskDrawer'
 import WikiLintModal from '../components/WikiLintModal'
@@ -94,6 +95,7 @@ export default function GraphPage() {
   const [askOpen, setAskOpen] = useState(false)
   const [lintOpen, setLintOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
+  const [teamComposerOpen, setTeamComposerOpen] = useState(false)
   // Three flavors of view:
   //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
   //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
@@ -796,6 +798,16 @@ export default function GraphPage() {
                 编排大类
               </button>
             )}
+            {viewKind === 'compiled' && (
+              <button
+                onClick={() => setTeamComposerOpen(true)}
+                title="按核心作者维护团队，并批量调整论文归队"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
+              >
+                <Users2 size={12} />
+                编排团队
+              </button>
+            )}
           </>
         )}
       </div>
@@ -964,6 +976,15 @@ export default function GraphPage() {
           onClose={() => {
             setComposerOpen(false)
             // category edits change lane membership → refresh the swim-lane graph.
+            void loadGraph()
+          }}
+        />
+      )}
+
+      {teamComposerOpen && (
+        <TeamComposer
+          onClose={() => {
+            setTeamComposerOpen(false)
             void loadGraph()
           }}
         />
