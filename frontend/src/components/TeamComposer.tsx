@@ -92,6 +92,16 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
       if (!m.has(c)) m.set(c, [])
       m.get(c)!.push(p)
     }
+    // Within a team lane, order chronologically by publication year (oldest →
+    // newest; unknown last) — a team's work reads as a timeline.
+    for (const [, ps] of m) {
+      ps.sort((a, b) => {
+        const ya = a.year || 9999
+        const yb = b.year || 9999
+        if (ya !== yb) return ya - yb
+        return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
+      })
+    }
     return m
   }, [papers, laneNames, shownTeam])
 

@@ -82,6 +82,16 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       if (!m.has(c)) m.set(c, [])
       m.get(c)!.push(p)
     }
+    // Within a lane, order chronologically by publication year (oldest →
+    // newest; unknown last), matching the 回顾 / 资料 / 泳道图 ordering.
+    for (const [, ps] of m) {
+      ps.sort((a, b) => {
+        const ya = a.year || 9999
+        const yb = b.year || 9999
+        if (ya !== yb) return ya - yb
+        return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
+      })
+    }
     return m
   }, [papers, catNames, shownCategory])
 
