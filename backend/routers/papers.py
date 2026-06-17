@@ -1546,6 +1546,60 @@ def download_recommendation(body: RecDownloadInput, db: Session = Depends(get_db
     return {"status": "downloaded", "filename": dest.name, "arxiv_id": base, "bytes": len(data)}
 
 
+class RecSummaryInput(BaseModel):
+    arxiv_id: str
+    title: Optional[str] = None
+    abstract: Optional[str] = None
+
+
+@router.post("/recommendations/summarize")
+def summarize_recommendation(body: RecSummaryInput, db: Session = Depends(get_db)):
+    """Condense a recommended paper's abstract with the user's LOCAL model
+    (request-scoped key, never uploaded). Cached by arXiv base id so each paper
+    is summarized only once."""
+    from models import RecSummary
+    from services.scanner_service import _arxiv_base_id
+    from model_gateway import call_text_model
+
+    arxiv_id = (body.arxiv_id or "").strip()
+    if not arxiv_id:
+        raise HTTPException(status_code=400, detail="缺少 arxiv_id")
+    key = _arxiv_base_id(arxiv_id) or arxiv_id
+
+    cached = db.query(RecSummary).filter(RecSummary.arxiv_id == key).first()
+    if cached:
+        return {"summary": cached.summary, "cached": True}
+
+    abstract = (body.abstract or "").strip()
+    if not abstract:
+        raise HTTPException(status_code=400, detail="缺少摘要内容")
+
+    cfg = load_config()
+    model_id = task_model_name(cfg, "wiki_compile")
+    system = (
+        "你是一名严谨的科研助理。把给定论文的英文摘要浓缩成 2–3 句中文要点，"
+        "突出：要解决的问题、核心方法、关键结果或贡献。只输出要点本身，不要客套或复述标题。"
+    )
+    user = f"标题：{body.title or ''}\n\n摘要：{abstract}"
+    try:
+        summary = call_text_model(
+            cfg,
+            model_id=model_id,
+            system=system,
+            user=user,
+            max_tokens=320,
+            reasoning_effort=task_reasoning_effort(cfg, "wiki_compile"),
+        ).strip()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"总结失败：{e}")
+    if not summary:
+        raise HTTPException(status_code=502, detail="模型未返回内容")
+
+    db.add(RecSummary(arxiv_id=key, summary=summary, model=model_id))
+    db.commit()
+    return {"summary": summary, "cached": False, "model": model_id}
+
+
 @router.get("/papers/{paper_id}/chat")
 def get_chat(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()

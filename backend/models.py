@@ -170,3 +170,16 @@ class LLMCall(Base):
     # Exception class name on failure (no message — message can contain
     # tokens or PII; class is enough for grouping).
     error_class = Column(String, nullable=True)
+
+
+class RecSummary(Base):
+    """Local cache of LLM-generated summaries for recommended arXiv papers,
+    keyed by arXiv base id. Generated on-demand on the desktop using the user's
+    own model + key — never leaves the machine. Auto-created by create_all."""
+
+    __tablename__ = "rec_summaries"
+
+    arxiv_id = Column(String, primary_key=True)
+    summary = Column(Text, nullable=False)
+    model = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

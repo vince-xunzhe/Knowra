@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Sparkles, RefreshCw, Download, Check, Loader2, ExternalLink, Tag as TagIcon,
+  ChevronDown, ChevronRight, Star, Wand2,
 } from 'lucide-react'
 import {
   cloudRecommendations, cloudRefreshRecommendations,
   type RecItem, type RecTag,
 } from '../api/cloud'
-import { downloadRecommendation } from '../api/client'
+import { downloadRecommendation, summarizeRecommendation, listPaperTeams } from '../api/client'
 import { useCloudAuth } from '../hooks/useCloudAuth'
 
 // Followed tags are a client-side display filter (the feed itself is global).
@@ -34,16 +35,47 @@ function apiErr(e: unknown): string {
   return x?.response?.data?.detail || x?.message || String(e)
 }
 
+// Normalize an author name for team matching — mirror backend _name_key.
+const nameKey = (s: string) => (s || '').toLowerCase().replace(/[\s.\-_,]+/g, '')
+
+// Concurrency-limited runner so expanding a 40-paper section doesn't fire 40
+// local-LLM summary calls at once.
+function makeLimiter(max: number) {
+  let active = 0
+  const queue: (() => void)[] = []
+  const pump = () => {
+    if (active >= max) return
+    const job = queue.shift()
+    if (!job) return
+    active += 1
+    job()
+  }
+  return function run<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      queue.push(() =>
+        fn().then(resolve, reject).finally(() => {
+          active -= 1
+          pump()
+        }),
+      )
+      pump()
+    })
+  }
+}
+
 export default function RecommendPage() {
   const auth = useCloudAuth()
   const [tags, setTags] = useState<RecTag[]>([])
   const [items, setItems] = useState<RecItem[]>([])
   const [followed, setFollowed] = useState<Set<string>>(new Set())
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [teamMap, setTeamMap] = useState<Map<string, string>>(new Map())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // arxiv_id → 'downloading' | 'downloaded' | 'duplicate'
   const [dl, setDl] = useState<Map<string, string>>(new Map())
+  const limiterRef = useRef(makeLimiter(3))
 
   const load = useCallback(async () => {
     setError(null)
@@ -51,7 +83,26 @@ export default function RecommendPage() {
     setTags(data.tags)
     setItems(data.items)
     const saved = loadFollowed()
-    setFollowed(new Set(saved ?? data.tags.map(t => t.name))) // default: follow all
+    const follow = new Set(saved ?? data.tags.map(t => t.name)) // default: follow all
+    setFollowed(follow)
+    // Expand the first followed tag so the page isn't blank; the rest stay
+    // collapsed — collapsed sections don't render cards, so no summary calls
+    // fire until the user opens a section.
+    const first = data.tags.map(t => t.name).find(n => follow.has(n))
+    setExpanded(new Set(first ? [first] : []))
+  }, [])
+
+  // Local team registry → normalized author → team name, for highlighting
+  // papers written by a team the user follows.
+  const loadTeams = useCallback(async () => {
+    try {
+      const res = await listPaperTeams()
+      const m = new Map<string, string>()
+      for (const t of res.teams) for (const a of t.authors || []) m.set(nameKey(a), t.name)
+      setTeamMap(m)
+    } catch {
+      /* team registry is optional for highlighting */
+    }
   }, [])
 
   useEffect(() => {
@@ -62,7 +113,8 @@ export default function RecommendPage() {
     load()
       .catch(e => setError(apiErr(e)))
       .finally(() => setLoading(false))
-  }, [auth.user, load])
+    void loadTeams()
+  }, [auth.user, load, loadTeams])
 
   const toggleFollow = (name: string) =>
     setFollowed(prev => {
@@ -72,6 +124,35 @@ export default function RecommendPage() {
       saveFollowed([...next])
       return next
     })
+
+  const toggleExpand = (name: string) =>
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+
+  const matchTeam = useCallback(
+    (it: RecItem): string | null => {
+      for (const a of it.authors || []) {
+        const t = teamMap.get(nameKey(a))
+        if (t) return t
+      }
+      return null
+    },
+    [teamMap],
+  )
+
+  const summarize = useCallback(
+    (it: RecItem) =>
+      limiterRef.current(() =>
+        summarizeRecommendation({ arxiv_id: it.arxiv_id, title: it.title, abstract: it.abstract }).then(
+          r => r.summary,
+        ),
+      ),
+    [],
+  )
 
   const refresh = async () => {
     setRefreshing(true)
@@ -89,11 +170,7 @@ export default function RecommendPage() {
   const handleDownload = async (it: RecItem) => {
     setDl(prev => new Map(prev).set(it.arxiv_id, 'downloading'))
     try {
-      const res = await downloadRecommendation({
-        arxiv_id: it.arxiv_id,
-        pdf_url: it.pdf_url,
-        title: it.title,
-      })
+      const res = await downloadRecommendation({ arxiv_id: it.arxiv_id, pdf_url: it.pdf_url, title: it.title })
       setDl(prev => new Map(prev).set(it.arxiv_id, res.status))
     } catch (e) {
       setError(apiErr(e))
@@ -133,7 +210,7 @@ export default function RecommendPage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold tracking-tight text-white">推荐</h1>
             <p className="mt-1 text-sm text-slate-500">
-              每周一 / 三 / 五自动检索 arXiv，按方向推送新论文（保留近 30 天）。点关键词筛选，一键下载到本地 papers 目录。
+              每周一 / 三 / 五自动检索 arXiv（保留近 30 天）。展开方向查看，摘要由本地模型归纳，关注团队的论文会高亮。
             </p>
           </div>
           <button
@@ -180,24 +257,45 @@ export default function RecommendPage() {
             msg="调度器会在周一 / 三 / 五早上自动检索；想立刻拉取，点右上角「立即检索」。"
           />
         ) : (
-          [...grouped.entries()].map(([tag, list]) => (
-            <section key={tag} className="mb-8">
-              <h2 className="mb-3 flex items-center gap-2 text-[15px] font-semibold text-slate-100">
-                {tag}
-                <span className="tabular-nums text-[12px] font-normal text-slate-500">{list.length}</span>
-              </h2>
-              <div className="space-y-3">
-                {list.map(it => (
-                  <RecCard
-                    key={it.id}
-                    it={it}
-                    status={dl.get(it.arxiv_id)}
-                    onDownload={() => handleDownload(it)}
-                  />
-                ))}
-              </div>
-            </section>
-          ))
+          [...grouped.entries()].map(([tag, list]) => {
+            const isOpen = expanded.has(tag)
+            const followedCount = list.reduce((acc, it) => acc + (matchTeam(it) ? 1 : 0), 0)
+            return (
+              <section key={tag} className="mb-4">
+                <button
+                  onClick={() => toggleExpand(tag)}
+                  className="flex w-full items-center gap-2 rounded-lg px-1 py-2 text-left hover:bg-slate-800/30"
+                >
+                  {isOpen ? (
+                    <ChevronDown size={16} className="shrink-0 text-slate-500" />
+                  ) : (
+                    <ChevronRight size={16} className="shrink-0 text-slate-500" />
+                  )}
+                  <span className="text-[15px] font-semibold text-slate-100">{tag}</span>
+                  <span className="tabular-nums text-[12px] font-normal text-slate-500">{list.length}</span>
+                  {followedCount > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-200">
+                      <Star size={9} /> {followedCount} 篇关注团队
+                    </span>
+                  )}
+                </button>
+                {isOpen && (
+                  <div className="mt-2 space-y-3">
+                    {list.map(it => (
+                      <RecCard
+                        key={it.id}
+                        it={it}
+                        status={dl.get(it.arxiv_id)}
+                        matchedTeam={matchTeam(it)}
+                        summarize={summarize}
+                        onDownload={() => handleDownload(it)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            )
+          })
         )}
       </div>
     </div>
@@ -205,26 +303,66 @@ export default function RecommendPage() {
 }
 
 function RecCard({
-  it, status, onDownload,
+  it, status, matchedTeam, summarize, onDownload,
 }: {
   it: RecItem
   status?: string
+  matchedTeam: string | null
+  summarize: (it: RecItem) => Promise<string>
   onDownload: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [summary, setSummary] = useState<string | null>(null)
+  const [sumState, setSumState] = useState<'loading' | 'done' | 'error'>('loading')
+  const [showAbstract, setShowAbstract] = useState(false)
   const abstract = it.abstract || ''
-  const short = abstract.length > 280 && !open ? `${abstract.slice(0, 280)}…` : abstract
   const done = status === 'downloaded' || status === 'duplicate'
+
+  // Lazily generate the local-LLM summary when the card mounts (i.e. its
+  // section is expanded). Server-side cached by arXiv id, so re-mounts are fast.
+  useEffect(() => {
+    let cancelled = false
+    if (!abstract) {
+      setSumState('error')
+      return
+    }
+    setSumState('loading')
+    summarize(it)
+      .then(s => {
+        if (!cancelled) {
+          setSummary(s)
+          setSumState('done')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setSumState('error')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [it, abstract, summarize])
+
   return (
-    <div className="rounded-xl border border-slate-800 bg-[#0f1117] p-4">
+    <div
+      className={`rounded-xl border p-4 ${
+        matchedTeam
+          ? 'border-amber-400/50 bg-amber-500/[0.06] ring-1 ring-amber-400/20'
+          : 'border-slate-800 bg-[#0f1117]'
+      }`}
+    >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
+          {matchedTeam && (
+            <span className="mb-1 inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
+              <Star size={9} /> 关注团队 · {matchedTeam}
+            </span>
+          )}
           <p className="text-[14.5px] font-medium leading-snug text-slate-100">{it.title}</p>
           <p className="mt-1 truncate text-[12px] text-slate-500">
             {(it.authors || []).slice(0, 4).join(', ')}
             {it.authors.length > 4 ? ' 等' : ''}
             {it.primary_category ? ` · ${it.primary_category}` : ''}
-            {it.published ? ` · ${it.published.slice(0, 10)}` : ''}
+            {it.published ? ` · 发布 ${it.published.slice(0, 10)}` : ''}
+            {it.created_at ? ` · 检索 ${it.created_at.slice(0, 10)}` : ''}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -267,15 +405,31 @@ function RecCard({
           </button>
         </div>
       </div>
-      {abstract && (
-        <p
-          onClick={() => setOpen(o => !o)}
-          className="mt-2 cursor-pointer text-[12.5px] leading-relaxed text-slate-400"
-          title={open ? '收起' : '展开'}
-        >
-          {short}
-        </p>
-      )}
+
+      <div className="mt-2 text-[12.5px] leading-relaxed">
+        {sumState === 'loading' ? (
+          <p className="flex items-center gap-1.5 text-slate-500">
+            <Loader2 size={11} className="animate-spin" /> 本地模型总结中…
+          </p>
+        ) : sumState === 'done' && summary ? (
+          <p className="text-slate-300">
+            <Wand2 size={11} className="mr-1 inline align-[-1px] text-indigo-300" />
+            {summary}
+          </p>
+        ) : abstract ? (
+          <p className="text-slate-400">{abstract.length > 280 ? `${abstract.slice(0, 280)}…` : abstract}</p>
+        ) : null}
+
+        {abstract && sumState === 'done' && (
+          <button
+            onClick={() => setShowAbstract(s => !s)}
+            className="mt-1 text-[11px] text-slate-500 hover:text-slate-300"
+          >
+            {showAbstract ? '收起原始摘要' : '查看原始摘要'}
+          </button>
+        )}
+        {showAbstract && <p className="mt-1 text-[12px] leading-relaxed text-slate-500">{abstract}</p>}
+      </div>
     </div>
   )
 }

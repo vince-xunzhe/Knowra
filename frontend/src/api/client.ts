@@ -357,6 +357,17 @@ export const downloadRecommendation = (payload: {
       payload,
     )
     .then(r => r.data)
+export const summarizeRecommendation = (payload: {
+  arxiv_id: string
+  title?: string | null
+  abstract?: string | null
+}) =>
+  api
+    .post<{ summary: string; cached: boolean; model?: string }>(
+      '/recommendations/summarize',
+      payload,
+    )
+    .then(r => r.data)
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
 
 // Chat — follow-up Q&A against the same Assistants thread used for extraction.
