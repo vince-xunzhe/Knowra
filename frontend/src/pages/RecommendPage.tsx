@@ -311,20 +311,38 @@ function RecCard({
   summarize: (it: RecItem) => Promise<string>
   onDownload: () => void
 }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [inView, setInView] = useState(false)
   const [summary, setSummary] = useState<string | null>(null)
-  const [sumState, setSumState] = useState<'loading' | 'done' | 'error'>('loading')
+  const [sumState, setSumState] = useState<'idle' | 'loading' | 'done' | 'error'>('idle')
   const [showAbstract, setShowAbstract] = useState(false)
   const abstract = it.abstract || ''
   const done = status === 'downloaded' || status === 'duplicate'
 
-  // Lazily generate the local-LLM summary when the card mounts (i.e. its
-  // section is expanded). Server-side cached by arXiv id, so re-mounts are fast.
+  // Only summarize once the card scrolls into view, so expanding a 40-paper
+  // section doesn't fire 40 (possibly slow, e.g. local Codex) LLM calls at once.
   useEffect(() => {
+    const el = ref.current
+    if (!el || inView) return
+    const obs = new IntersectionObserver(
+      entries => {
+        if (entries.some(e => e.isIntersecting)) {
+          setInView(true)
+          obs.disconnect()
+        }
+      },
+      { rootMargin: '300px' },
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [inView])
+
+  // Local-LLM summary (server-side cached by arXiv id). The abstract stays
+  // visible until the summary lands and simply gets replaced — so a slow model
+  // never leaves the card looking stuck.
+  useEffect(() => {
+    if (!inView || !abstract) return
     let cancelled = false
-    if (!abstract) {
-      setSumState('error')
-      return
-    }
     setSumState('loading')
     summarize(it)
       .then(s => {
@@ -339,10 +357,11 @@ function RecCard({
     return () => {
       cancelled = true
     }
-  }, [it, abstract, summarize])
+  }, [inView, it, abstract, summarize])
 
   return (
     <div
+      ref={ref}
       className={`rounded-xl border p-4 ${
         matchedTeam
           ? 'border-amber-400/50 bg-amber-500/[0.06] ring-1 ring-amber-400/20'
@@ -407,28 +426,32 @@ function RecCard({
       </div>
 
       <div className="mt-2 text-[12.5px] leading-relaxed">
-        {sumState === 'loading' ? (
-          <p className="flex items-center gap-1.5 text-slate-500">
-            <Loader2 size={11} className="animate-spin" /> 本地模型总结中…
-          </p>
-        ) : sumState === 'done' && summary ? (
-          <p className="text-slate-300">
-            <Wand2 size={11} className="mr-1 inline align-[-1px] text-indigo-300" />
-            {summary}
-          </p>
+        {sumState === 'done' && summary ? (
+          <>
+            <p className="text-slate-300">
+              <Wand2 size={11} className="mr-1 inline align-[-1px] text-indigo-300" />
+              {summary}
+            </p>
+            {abstract && (
+              <button
+                onClick={() => setShowAbstract(s => !s)}
+                className="mt-1 text-[11px] text-slate-500 hover:text-slate-300"
+              >
+                {showAbstract ? '收起原始摘要' : '查看原始摘要'}
+              </button>
+            )}
+            {showAbstract && <p className="mt-1 text-[12px] leading-relaxed text-slate-500">{abstract}</p>}
+          </>
         ) : abstract ? (
-          <p className="text-slate-400">{abstract.length > 280 ? `${abstract.slice(0, 280)}…` : abstract}</p>
+          <>
+            <p className="text-slate-400">{abstract.length > 280 ? `${abstract.slice(0, 280)}…` : abstract}</p>
+            {sumState === 'loading' && (
+              <p className="mt-1 flex items-center gap-1.5 text-[11px] text-indigo-300/80">
+                <Loader2 size={10} className="animate-spin" /> 本地模型总结中…
+              </p>
+            )}
+          </>
         ) : null}
-
-        {abstract && sumState === 'done' && (
-          <button
-            onClick={() => setShowAbstract(s => !s)}
-            className="mt-1 text-[11px] text-slate-500 hover:text-slate-300"
-          >
-            {showAbstract ? '收起原始摘要' : '查看原始摘要'}
-          </button>
-        )}
-        {showAbstract && <p className="mt-1 text-[12px] leading-relaxed text-slate-500">{abstract}</p>}
       </div>
     </div>
   )

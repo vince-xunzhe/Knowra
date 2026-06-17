@@ -1588,7 +1588,10 @@ def summarize_recommendation(body: RecSummaryInput, db: Session = Depends(get_db
             system=system,
             user=user,
             max_tokens=320,
-            reasoning_effort=task_reasoning_effort(cfg, "wiki_compile"),
+            # Condensing one abstract is a light task — force low reasoning so
+            # it stays fast even when the main model is a slow reasoning model
+            # (e.g. local Codex gpt-5.x).
+            reasoning_effort="low",
         ).strip()
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"总结失败：{e}")
