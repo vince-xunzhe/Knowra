@@ -79,7 +79,7 @@ export default function RecommendPage() {
 
   const load = useCallback(async () => {
     setError(null)
-    const data = await cloudRecommendations(30)
+    const data = await cloudRecommendations(7)
     setTags(data.tags)
     setItems(data.items)
     const saved = loadFollowed()
@@ -210,7 +210,7 @@ export default function RecommendPage() {
           <div className="min-w-0 flex-1">
             <h1 className="text-2xl font-semibold tracking-tight text-white">推荐</h1>
             <p className="mt-1 text-sm text-slate-500">
-              每周一 / 三 / 五自动检索 arXiv（保留近 30 天）。展开方向查看，摘要由本地模型归纳，关注团队的论文会高亮。
+              每周一 / 三 / 五自动检索 arXiv（保留近 7 天）。展开方向查看，摘要由本地模型归纳，关注团队的论文会高亮。
             </p>
           </div>
           <button

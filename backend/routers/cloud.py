@@ -440,18 +440,18 @@ def rec_tags_endpoint(user: AuthenticatedUser = Depends(current_user)):
 
 @router.get("/recommendations")
 def recommendations_endpoint(
-    days: int = 30,
+    days: int = 7,
     db: Session = Depends(get_cloud_db),
     user: AuthenticatedUser = Depends(current_user),
 ):
-    """Recommendations from the last ``days`` (capped at the 30-day retention),
+    """Recommendations from the last ``days`` (capped at the retention window),
     newest paper first. The client groups by tag and filters to followed tags."""
     from datetime import datetime, timedelta, timezone
 
     from cloud_models import Recommendation
-    from services.recommend_service import rec_tags
+    from services.recommend_service import rec_tags, RETENTION_DAYS
 
-    days = max(1, min(int(days or 30), 30))
+    days = max(1, min(int(days or RETENTION_DAYS), RETENTION_DAYS))
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     rows = (
         db.query(Recommendation).filter(Recommendation.created_at >= cutoff).all()

@@ -596,7 +596,7 @@ export interface RecommendationsResponse {
   days: number
 }
 
-export const cloudRecommendations = (days = 30) =>
+export const cloudRecommendations = (days = 7) =>
   withRetry(
     () =>
       cloudClient()

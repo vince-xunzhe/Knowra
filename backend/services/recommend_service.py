@@ -20,7 +20,7 @@ from services.arxiv_service import search_arxiv
 
 log = logging.getLogger(__name__)
 
-RETENTION_DAYS = 30
+RETENTION_DAYS = 7
 MAX_RESULTS_PER_TAG = 40
 SEARCH_WEEKDAYS = {0, 2, 4}  # Mon / Wed / Fri
 MIN_GAP_HOURS = 20           # don't re-search a tag more than ~once/day
