@@ -119,6 +119,8 @@ class CloudPaper(CloudBase):
     authors = Column(JSON, default=list)
     paper_category_model = Column(String, nullable=True)
     paper_category_override = Column(String, nullable=True)
+    paper_team_model = Column(String, nullable=True)
+    paper_team_override = Column(String, nullable=True)
 
     processed = Column(Boolean, default=False)
     processed_at = Column(DateTime, nullable=True)

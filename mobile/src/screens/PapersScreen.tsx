@@ -8,7 +8,7 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useSnapshot } from '../contexts/SnapshotContext'
 import type { RootStackParamList } from '../navigation/types'
 import type { PaperRow } from '../api/cloud'
-import { categoryOf, categoryRank, paperYear } from '../lib/paperMeta'
+import { categoryOf, categoryRank, teamOf, teamRank, paperYear } from '../lib/paperMeta'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PapersList'>
 
@@ -17,6 +17,7 @@ interface Section { title: string; data: PaperRow[] }
 export default function PapersScreen({ navigation }: Props) {
   const snap = useSnapshot()
   const [q, setQ] = useState('')
+  const [groupMode, setGroupMode] = useState<'category' | 'team'>('category')
 
   const wikiByPaperId = useMemo(() => {
     const map = new Map<string, string>()
@@ -38,24 +39,29 @@ export default function PapersScreen({ navigation }: Props) {
     const yearById = new Map<string, number>()
     for (const p of filtered) yearById.set(p.id, paperYear(p))
 
-    const byCat = new Map<string, PaperRow[]>()
+    // Group by the active dimension: 大类 (category) or 团队 (team).
+    const keyOf = groupMode === 'team' ? teamOf : categoryOf
+    const rankOf = groupMode === 'team' ? teamRank : categoryRank
+
+    const byKey = new Map<string, PaperRow[]>()
     for (const p of filtered) {
-      const c = categoryOf(p)
-      if (!byCat.has(c)) byCat.set(c, [])
-      byCat.get(c)!.push(p)
+      const k = keyOf(p)
+      if (!byKey.has(k)) byKey.set(k, [])
+      byKey.get(k)!.push(p)
     }
     const result: Section[] = []
-    for (const cat of [...byCat.keys()].sort((a, b) => categoryRank(a) - categoryRank(b))) {
-      const rows = byCat.get(cat)!.sort((a, b) => {
+    const keys = [...byKey.keys()].sort((a, b) => rankOf(a) - rankOf(b) || a.localeCompare(b))
+    for (const key of keys) {
+      const rows = byKey.get(key)!.sort((a, b) => {
         const ya = yearById.get(a.id) || 9999
         const yb = yearById.get(b.id) || 9999
         if (ya !== yb) return ya - yb
         return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
       })
-      result.push({ title: cat, data: rows })
+      result.push({ title: key, data: rows })
     }
     return result
-  }, [snap.data, q])
+  }, [snap.data, q, groupMode])
 
   if (snap.loading && !snap.data) {
     return (
@@ -82,6 +88,19 @@ export default function PapersScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.modeRow}>
+        {(['category', 'team'] as const).map(m => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.modeBtn, groupMode === m && styles.modeBtnOn]}
+            onPress={() => setGroupMode(m)}
+          >
+            <Text style={[styles.modeBtnText, groupMode === m && styles.modeBtnTextOn]}>
+              {m === 'category' ? '大类' : '团队'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <TextInput
         style={styles.search}
         value={q}
@@ -167,6 +186,14 @@ const styles = StyleSheet.create({
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
     color: '#e2e8f0', marginBottom: 12, fontSize: 14,
   },
+  modeRow: {
+    flexDirection: 'row', backgroundColor: '#0f1117', borderWidth: 1,
+    borderColor: '#1e293b', borderRadius: 10, padding: 3, marginBottom: 10,
+  },
+  modeBtn: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: 8 },
+  modeBtnOn: { backgroundColor: '#312e81' },
+  modeBtnText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
+  modeBtnTextOn: { color: '#e0e7ff' },
   empty: { color: '#64748b', textAlign: 'center', marginTop: 40, fontSize: 13 },
 
   sectionHeader: {

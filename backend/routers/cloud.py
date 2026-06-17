@@ -243,6 +243,8 @@ def snapshot(
                 extraction_model=r.extraction_model,
                 paper_category_model=r.paper_category_model,
                 paper_category_override=r.paper_category_override,
+                paper_team_model=r.paper_team_model,
+                paper_team_override=r.paper_team_override,
                 raw_llm_response=r.raw_llm_response,
                 notes=r.notes,
                 error=r.error,

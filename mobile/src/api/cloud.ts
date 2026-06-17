@@ -323,6 +323,8 @@ export interface PaperRow {
   processed_at?: string | null
   paper_category_model?: string | null
   paper_category_override?: string | null
+  paper_team_model?: string | null
+  paper_team_override?: string | null
   raw_llm_response?: string | null
   notes?: string | null
   updated_at?: string | null

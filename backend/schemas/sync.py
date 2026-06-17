@@ -47,6 +47,8 @@ class PaperRow(_Row):
     extraction_model: Optional[str] = None
     paper_category_model: Optional[str] = None
     paper_category_override: Optional[str] = None
+    paper_team_model: Optional[str] = None
+    paper_team_override: Optional[str] = None
     raw_llm_response: Optional[str] = None
     notes: Optional[str] = None
     error: Optional[str] = None

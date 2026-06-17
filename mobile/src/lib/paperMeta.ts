@@ -33,6 +33,23 @@ export function categoryRank(name: string): number {
   return i === -1 ? CATEGORY_ORDER.length : i
 }
 
+// Team/lab dimension — a second grouping axis parallel to category. The team is
+// computed server-side by matching authors against the registry and synced as
+// model/override; here we just mirror backend effective_paper_team:
+// override → model → "others". Unmatched papers group under "others".
+export const TEAM_OTHER = 'others'
+
+export function teamOf(p: PaperRow): string {
+  const override = p.paper_team_override as string | undefined
+  const model = p.paper_team_model as string | undefined
+  return override || model || TEAM_OTHER
+}
+
+// "others" always sorts last; real teams keep insertion/alpha order otherwise.
+export function teamRank(name: string): number {
+  return name === TEAM_OTHER ? 1 : 0
+}
+
 // Publication year, read from the extraction JSON. 0 = unknown.
 export function paperYear(p: PaperRow): number {
   const raw = p.raw_llm_response as string | undefined
