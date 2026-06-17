@@ -32,6 +32,10 @@ REC_TAGS: list[dict] = [
     {"name": "世界模型", "query": "(abs:\"world model\" OR abs:\"world models\") AND (cat:cs.LG OR cat:cs.AI OR cat:cs.RO)"},
     {"name": "计算机视觉", "query": "cat:cs.CV"},
     {"name": "计算机科学", "query": "cat:cs.AI"},
+    {"name": "具身智能", "query": "cat:cs.RO"},
+    {"name": "三维重建", "query": "cat:cs.CV AND (\"3D reconstruction\" OR NeRF OR \"gaussian splatting\" OR \"neural rendering\")"},
+    {"name": "自动驾驶", "query": "(cat:cs.RO OR cat:cs.CV) AND (\"autonomous driving\" OR \"vision-language-action\" OR VLA)"},
+    {"name": "智能体", "query": "cat:cs.AI AND (agent OR \"LLM agent\" OR \"language agent\")"},
 ]
 
 
