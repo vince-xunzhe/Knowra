@@ -96,6 +96,7 @@ export default function GraphPage() {
   const [lintOpen, setLintOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
   const [teamComposerOpen, setTeamComposerOpen] = useState(false)
+  const [compiledGroupBy, setCompiledGroupBy] = useState<'category' | 'team'>('category')
   // Three flavors of view:
   //   - graph    : structured Cytoscape canvas (KnowledgeGraph)
   //   - compiled : compile-aware swim-lane (WikiKnowledgeMap)
@@ -789,10 +790,27 @@ export default function GraphPage() {
               类型筛选 — 仅节点图谱
             </span>
             {viewKind === 'compiled' && (
+              <div className="ml-auto inline-flex items-center rounded-lg border border-slate-700 bg-slate-900/60 p-0.5 text-[12px]">
+                {(['category', 'team'] as const).map(m => (
+                  <button
+                    key={m}
+                    onClick={() => setCompiledGroupBy(m)}
+                    className={`rounded-md px-2.5 py-1 transition-colors ${
+                      compiledGroupBy === m
+                        ? 'bg-indigo-500/20 text-indigo-100'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {m === 'category' ? '按大类' : '按团队'}
+                  </button>
+                ))}
+              </div>
+            )}
+            {viewKind === 'compiled' && (
               <button
                 onClick={() => setComposerOpen(true)}
-                title="新增/重命名/删除大类、设置关键词规则，并批量调整论文归属"
-                className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
+                title="新增/重命名/删除大类，并批量调整论文归属"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
               >
                 <Tags size={12} />
                 编排大类
@@ -845,6 +863,7 @@ export default function GraphPage() {
                 data={wikiGraph}
                 selectedId={selectedNode?.id || null}
                 onPick={handleWikiGraphPick}
+                groupBy={compiledGroupBy}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">

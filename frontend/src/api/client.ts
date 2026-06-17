@@ -500,6 +500,7 @@ export interface WikiGraphNode {
   concept_id?: number | null
   node_type?: string | null
   category?: string | null
+  team?: string | null
   compiled_at?: string | null
   x: number
   y: number
@@ -524,6 +525,7 @@ export interface WikiGraphSummary {
 export interface WikiGraphData {
   updated_at: string
   categories: WikiGraphSummary[]
+  teams: { name: string; paper_count: number }[]
   nodes: WikiGraphNode[]
   edges: WikiGraphEdge[]
 }

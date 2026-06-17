@@ -234,6 +234,7 @@ export default function ReviewPage() {
   // Sidebar grouped by 大类 (ordered like the active taxonomy), with
   // per-group collapse. Only non-empty groups show.
   const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set())
+  const [groupMode, setGroupMode] = useState<'category' | 'team'>('category')
   const toggleCat = (c: string) =>
     setCollapsedCats(prev => {
       const n = new Set(prev)
@@ -243,28 +244,35 @@ export default function ReviewPage() {
     })
   const groupedFiltered = useMemo(() => {
     const order = categoryOptions.length ? categoryOptions : [...PAPER_CATEGORY_OPTIONS]
-    const rank = (c: string) => {
+    const catRank = (c: string) => {
       const i = order.indexOf(c)
       return i === -1 ? order.length : i
     }
+    const byYear = (a: PaperRecord, b: PaperRecord) => {
+      const ya = a.year || 9999
+      const yb = b.year || 9999
+      if (ya !== yb) return ya - yb
+      return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
+    }
     const m = new Map<string, PaperRecord[]>()
     for (const p of filtered) {
-      const c = p.paper_category || '其他'
-      if (!m.has(c)) m.set(c, [])
-      m.get(c)!.push(p)
+      const key = groupMode === 'team' ? p.paper_team || 'others' : p.paper_category || '其他'
+      if (!m.has(key)) m.set(key, [])
+      m.get(key)!.push(p)
     }
-    // Within a 大类, order by publication year (chronological, oldest →
+    // Within a group, order by publication year (chronological, oldest →
     // newest; unknown years last), matching the mobile 资料 ordering.
-    for (const [, ps] of m) {
-      ps.sort((a, b) => {
-        const ya = a.year || 9999
-        const yb = b.year || 9999
-        if (ya !== yb) return ya - yb
-        return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
+    for (const [, ps] of m) ps.sort(byYear)
+    if (groupMode === 'team') {
+      // Real teams first (alphabetical), "others" last.
+      return [...m.entries()].sort((a, b) => {
+        const ao = a[0] === 'others' ? 1 : 0
+        const bo = b[0] === 'others' ? 1 : 0
+        return ao - bo || a[0].localeCompare(b[0])
       })
     }
-    return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]))
-  }, [filtered, categoryOptions])
+    return [...m.entries()].sort((a, b) => catRank(a[0]) - catRank(b[0]))
+  }, [filtered, categoryOptions, groupMode])
 
   const visibleDetail = selectedId !== null && detail?.id === selectedId ? detail : null
   const visibleProcessMeta = useMemo(
@@ -438,6 +446,19 @@ export default function ReviewPage() {
                 }`}
               >
                 {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center rounded-lg border border-slate-700/60 bg-slate-900/40 p-0.5 text-xs">
+            {(['category', 'team'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setGroupMode(m)}
+                className={`flex-1 rounded-md px-2 py-1 transition-colors ${
+                  groupMode === m ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {m === 'category' ? '按大类分组' : '按团队分组'}
               </button>
             ))}
           </div>
