@@ -425,3 +425,69 @@ def ask(
         tokens=result["tokens"],
         model=result["model"],
     )
+
+
+# ── recommendations (arXiv feed; global, read-only for clients) ───────
+
+
+@router.get("/rec-tags")
+def rec_tags_endpoint(user: AuthenticatedUser = Depends(current_user)):
+    """The system-maintained tag list the user can follow on the 推荐 page."""
+    from services.recommend_service import rec_tags
+
+    return {"tags": rec_tags()}
+
+
+@router.get("/recommendations")
+def recommendations_endpoint(
+    days: int = 30,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Recommendations from the last ``days`` (capped at the 30-day retention),
+    newest paper first. The client groups by tag and filters to followed tags."""
+    from datetime import datetime, timedelta, timezone
+
+    from cloud_models import Recommendation
+    from services.recommend_service import rec_tags
+
+    days = max(1, min(int(days or 30), 30))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(Recommendation).filter(Recommendation.created_at >= cutoff).all()
+    )
+
+    def _key(r):
+        try:
+            return r.published.timestamp() if r.published else 0.0
+        except Exception:
+            return 0.0
+
+    rows.sort(key=_key, reverse=True)
+    items = [
+        {
+            "id": r.id,
+            "tag": r.tag,
+            "arxiv_id": r.arxiv_id,
+            "title": r.title,
+            "authors": r.authors or [],
+            "abstract": r.abstract,
+            "pdf_url": r.pdf_url,
+            "primary_category": r.primary_category,
+            "published": r.published.isoformat() if r.published else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+    return {"tags": rec_tags(), "items": items, "days": days}
+
+
+@router.post("/recommendations/refresh")
+def recommendations_refresh(
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Force an arXiv search now (ignores the Mon/Wed/Fri schedule)."""
+    from services.recommend_service import run_search
+
+    return run_search(db, force=True)

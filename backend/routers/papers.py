@@ -1497,6 +1497,55 @@ def bulk_set_paper_team(body: BulkTeamInput, db: Session = Depends(get_db)):
     return {"updated": updated, "team": normalized}
 
 
+# ── recommendations: download an arXiv PDF into the local papers dir ───
+
+
+class RecDownloadInput(BaseModel):
+    arxiv_id: str
+    pdf_url: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.post("/recommendations/download")
+def download_recommendation(body: RecDownloadInput, db: Session = Depends(get_db)):
+    """Fetch a recommended arXiv PDF into the local papers directory (PDFs only
+    ever land locally). Dedups by arXiv base id against files already on disk;
+    the user's next 扫描目录 ingests it into the normal pipeline."""
+    import urllib.request
+    from path_utils import PAPERS_DIR, resolve_papers_directory
+    from services.scanner_service import _arxiv_base_id
+
+    arxiv_id = (body.arxiv_id or "").strip()
+    if not arxiv_id:
+        raise HTTPException(status_code=400, detail="缺少 arxiv_id")
+    base = _arxiv_base_id(arxiv_id) or arxiv_id
+
+    cfg = load_config()
+    papers_dir = resolve_papers_directory(cfg.get("scan_directory") or str(PAPERS_DIR))
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dedup against PDFs already present (same arXiv base id, any version).
+    for existing in papers_dir.glob("*.pdf"):
+        if _arxiv_base_id(existing.name) == base:
+            return {"status": "duplicate", "filename": existing.name, "arxiv_id": base}
+
+    url = (body.pdf_url or f"https://arxiv.org/pdf/{arxiv_id}").strip()
+    if not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="非法 PDF URL")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Knowra/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            data = resp.read()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"下载失败：{e}")
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(status_code=502, detail="下载内容不是 PDF")
+
+    dest = papers_dir / f"arxiv_{base.replace('/', '_')}.pdf"
+    dest.write_bytes(data)
+    return {"status": "downloaded", "filename": dest.name, "arxiv_id": base, "bytes": len(data)}
+
+
 @router.get("/papers/{paper_id}/chat")
 def get_chat(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()

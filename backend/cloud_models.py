@@ -299,6 +299,43 @@ class CloudDeletion(CloudBase):
     )
 
 
+# ── recommendations (global arXiv feed; not per-user) ─────────────────
+
+
+class Recommendation(CloudBase):
+    """A recommended paper from arXiv for a system tag. Global (arXiv metadata
+    is public) — written only by the Mon/Wed/Fri scheduler, pruned to 30 days.
+    Per-user 'followed tags' is a client-side display filter, so no per-user
+    table is needed."""
+
+    __tablename__ = "recommendations"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tag = Column(String, nullable=False, index=True)
+    arxiv_id = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    authors = Column(JSON, default=list)
+    abstract = Column(Text, nullable=True)
+    pdf_url = Column(String, nullable=True)
+    primary_category = Column(String, nullable=True)
+    published = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("tag", "arxiv_id", name="recommendations_tag_arxiv_uniq"),
+    )
+
+
+class RecSearchState(CloudBase):
+    """Per-tag last-search bookmark so 'new since last search' works and the
+    scheduler is catch-up friendly across machine restarts."""
+
+    __tablename__ = "rec_search_state"
+
+    tag = Column(String, primary_key=True)
+    last_searched_at = Column(DateTime, nullable=True)
+
+
 def init_cloud_schema(engine) -> None:
     """Create all cloud-mode tables. Used by tests + the cloud-mode
     boot path; production goes through Supabase migrations instead."""

@@ -72,6 +72,13 @@ if is_cloud_mode():
     app.include_router(sync_router.router)
     app.include_router(cloud_router.router)
 
+    # Mon/Wed/Fri arXiv recommendation scheduler — a daemon thread that's
+    # catch-up friendly (runs due tags on the next hourly tick). Skipped on the
+    # in-memory test backend so smoke harnesses don't hit arXiv.
+    if os.environ.get("KNOWRA_STORAGE_BACKEND", "").lower() != "memory":
+        from services.recommend_service import start_scheduler
+        start_scheduler()
+
     # E2E test backdoor: real HTTP wrapper around InMemoryStorage so
     # out-of-process smoke harnesses (curl, the mobile dev client) can
     # actually PUT bytes to the "signed URLs" InMemoryStorage hands
