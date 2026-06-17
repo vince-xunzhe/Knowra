@@ -343,6 +343,20 @@ export const bulkSetPaperTeam = (paperIds: (string | number)[], team: string | n
 export const updatePaperNotes = (id: number, notes: string) =>
   api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
+
+// Download a recommended arXiv PDF into the local papers directory (local
+// backend; PDFs only ever land locally). The next 扫描目录 ingests it.
+export const downloadRecommendation = (payload: {
+  arxiv_id: string
+  pdf_url?: string | null
+  title?: string | null
+}) =>
+  api
+    .post<{ status: 'downloaded' | 'duplicate'; filename: string; arxiv_id: string; bytes?: number }>(
+      '/recommendations/download',
+      payload,
+    )
+    .then(r => r.data)
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
 
 // Chat — follow-up Q&A against the same Assistants thread used for extraction.

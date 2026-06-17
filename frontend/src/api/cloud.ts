@@ -571,6 +571,51 @@ export const cloudMe = () =>
     { label: 'me' },
   )
 
+// ── recommendations (arXiv feed) ────────────────────────────────────────
+
+export interface RecTag {
+  name: string
+}
+
+export interface RecItem {
+  id: string
+  tag: string
+  arxiv_id: string
+  title: string
+  authors: string[]
+  abstract: string | null
+  pdf_url: string | null
+  primary_category: string | null
+  published: string | null
+  created_at: string | null
+}
+
+export interface RecommendationsResponse {
+  tags: RecTag[]
+  items: RecItem[]
+  days: number
+}
+
+export const cloudRecommendations = (days = 30) =>
+  withRetry(
+    () =>
+      cloudClient()
+        .get<RecommendationsResponse>('/api/cloud/recommendations', { params: { days } })
+        .then(r => r.data),
+    { label: 'recommendations' },
+  )
+
+export const cloudRecTags = () =>
+  withRetry(
+    () => cloudClient().get<{ tags: RecTag[] }>('/api/cloud/rec-tags').then(r => r.data.tags),
+    { label: 'rec-tags' },
+  )
+
+export const cloudRefreshRecommendations = () =>
+  cloudClient()
+    .post<{ added: number; pruned: number; tags: string[] }>('/api/cloud/recommendations/refresh')
+    .then(r => r.data)
+
 /** Wake the cloud machine and wait until it's serving before a sync.
  *  With min_machines_running=1 this is normally instant, but if the
  *  machine was restarted (deploy) or the platform bounced it, the

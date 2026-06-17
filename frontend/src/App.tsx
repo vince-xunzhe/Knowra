@@ -1,14 +1,15 @@
 import { useState } from 'react'
-import { Network, BookOpen, FileText, Settings, BarChart3 } from 'lucide-react'
+import { Network, BookOpen, FileText, Settings, BarChart3, Sparkles } from 'lucide-react'
 import GraphPage from './pages/GraphPage'
 import PapersPage from './pages/PapersPage'
 import ReviewPage from './pages/ReviewPage'
+import RecommendPage from './pages/RecommendPage'
 import SettingsPage from './pages/SettingsPage'
 import DashboardPage from './pages/DashboardPage'
 import ProcessingStatus from './components/ProcessingStatus'
 import WikiCompileStatus from './components/WikiCompileStatus'
 
-type Page = 'graph' | 'papers' | 'review' | 'dashboard' | 'settings'
+type Page = 'graph' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
 type NavItem =
   | { id: Page; icon: typeof Network; label: string }
   | { divider: true }
@@ -31,6 +32,7 @@ type NavItem =
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, label: '知识' },
   { id: 'review', icon: FileText, label: '回顾' },
+  { id: 'recommend', icon: Sparkles, label: '推荐' },
   { id: 'papers', icon: BookOpen, label: '资料' },
   { id: 'dashboard', icon: BarChart3, label: '看板' },
   { divider: true },
@@ -85,6 +87,7 @@ export default function App() {
         {page === 'graph' && <GraphPage />}
         {page === 'papers' && <PapersPage />}
         {page === 'review' && <ReviewPage />}
+        {page === 'recommend' && <RecommendPage />}
         {page === 'dashboard' && <DashboardPage />}
         {page === 'settings' && <SettingsPage />}
       </main>
