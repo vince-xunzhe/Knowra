@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from auth_deps import current_user
 from cloud_models import (
