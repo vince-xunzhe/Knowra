@@ -12,12 +12,13 @@ import { categoryOf, categoryRank, teamOf, teamRank, paperYear } from '../lib/pa
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PapersList'>
 
-interface Section { title: string; data: PaperRow[] }
+interface Section { title: string; data: PaperRow[]; count: number }
 
 export default function PapersScreen({ navigation }: Props) {
   const snap = useSnapshot()
   const [q, setQ] = useState('')
   const [groupMode, setGroupMode] = useState<'category' | 'team'>('category')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   const wikiByPaperId = useMemo(() => {
     const map = new Map<string, string>()
@@ -58,10 +59,23 @@ export default function PapersScreen({ navigation }: Props) {
         if (ya !== yb) return ya - yb
         return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
       })
-      result.push({ title: key, data: rows })
+      result.push({ title: key, data: rows, count: rows.length })
     }
     return result
   }, [snap.data, q, groupMode])
+
+  // Collapse hides a section's rows but keeps its (tappable) header + count.
+  const displaySections = useMemo<Section[]>(
+    () => sections.map(s => (collapsed.has(s.title) ? { ...s, data: [] } : s)),
+    [sections, collapsed],
+  )
+  const toggleCollapse = (title: string) =>
+    setCollapsed(prev => {
+      const n = new Set(prev)
+      if (n.has(title)) n.delete(title)
+      else n.add(title)
+      return n
+    })
 
   if (snap.loading && !snap.data) {
     return (
@@ -93,7 +107,7 @@ export default function PapersScreen({ navigation }: Props) {
           <TouchableOpacity
             key={m}
             style={[styles.modeBtn, groupMode === m && styles.modeBtnOn]}
-            onPress={() => setGroupMode(m)}
+            onPress={() => { setGroupMode(m); setCollapsed(new Set()) }}
           >
             <Text style={[styles.modeBtnText, groupMode === m && styles.modeBtnTextOn]}>
               {m === 'category' ? '大类' : '团队'}
@@ -109,7 +123,7 @@ export default function PapersScreen({ navigation }: Props) {
         placeholderTextColor="#475569"
       />
       <SectionList
-        sections={sections}
+        sections={displaySections}
         keyExtractor={p => p.id}
         stickySectionHeadersEnabled
         contentContainerStyle={{ paddingBottom: 24 }}
@@ -128,10 +142,15 @@ export default function PapersScreen({ navigation }: Props) {
           </Text>
         }
         renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            activeOpacity={0.6}
+            onPress={() => toggleCollapse(section.title)}
+          >
+            <Text style={styles.sectionChevron}>{collapsed.has(section.title) ? '▸' : '▾'}</Text>
             <Text style={styles.sectionTitle}>{section.title}</Text>
-            <Text style={styles.sectionCount}>{section.data.length}</Text>
-          </View>
+            <Text style={styles.sectionCount}>{section.count}</Text>
+          </TouchableOpacity>
         )}
         renderItem={({ item }) => {
           const wikiFileId = wikiByPaperId.get(item.id) ?? null
@@ -200,6 +219,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: '#0b0d12', paddingTop: 12, paddingBottom: 8,
   },
+  sectionChevron: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   sectionTitle: {
     color: '#a5b4fc', fontSize: 13, fontWeight: '700',
     letterSpacing: 0.5, textTransform: 'uppercase',
