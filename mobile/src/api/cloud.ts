@@ -475,3 +475,53 @@ export async function cloudAsk(
   )
   return data
 }
+
+// ── recommendations (read + 收藏 marks) ────────────────────────────────
+
+export interface RecTag {
+  name: string
+}
+
+export interface RecItem {
+  id: string
+  tag: string
+  arxiv_id: string
+  title: string
+  authors: string[]
+  abstract: string | null
+  summary: string | null // desktop-generated; mobile shows it if present
+  pdf_url: string | null
+  primary_category: string | null
+  published: string | null
+  created_at: string | null
+}
+
+export interface RecommendationsResponse {
+  tags: RecTag[]
+  items: RecItem[]
+  days: number
+}
+
+export async function cloudRecommendations(days = 7): Promise<RecommendationsResponse> {
+  const c = await cloudClient()
+  const { data } = await c.get<RecommendationsResponse>('/api/cloud/recommendations', {
+    params: { days },
+  })
+  return data
+}
+
+export async function cloudRecMarks(): Promise<string[]> {
+  const c = await cloudClient()
+  const { data } = await c.get<{ arxiv_ids: string[] }>('/api/cloud/rec-marks')
+  return data.arxiv_ids
+}
+
+export async function cloudAddRecMark(arxivId: string): Promise<void> {
+  const c = await cloudClient()
+  await c.post('/api/cloud/rec-marks', { arxiv_id: arxivId })
+}
+
+export async function cloudRemoveRecMark(arxivId: string): Promise<void> {
+  const c = await cloudClient()
+  await c.delete(`/api/cloud/rec-marks/${encodeURIComponent(arxivId)}`)
+}

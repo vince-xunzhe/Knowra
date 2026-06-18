@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Sparkles, RefreshCw, Download, Check, Loader2, ExternalLink, Tag as TagIcon,
-  ChevronDown, ChevronRight, Star, Wand2,
+  ChevronDown, ChevronRight, Star, Wand2, Bookmark, BookmarkCheck,
 } from 'lucide-react'
 import {
   cloudRecommendations, cloudRefreshRecommendations,
+  cloudPushRecSummary, cloudRecMarks, cloudAddRecMark, cloudRemoveRecMark,
   type RecItem, type RecTag,
 } from '../api/cloud'
 import { downloadRecommendation, summarizeRecommendation, listPaperTeams } from '../api/client'
@@ -81,6 +82,7 @@ export default function RecommendPage() {
   const [error, setError] = useState<string | null>(null)
   // arxiv_id → 'downloading' | 'downloaded' | 'duplicate'
   const [dl, setDl] = useState<Map<string, string>>(new Map())
+  const [marks, setMarks] = useState<Set<string>>(new Set())
   const [revalidating, setRevalidating] = useState(false)
   const initedRef = useRef(false)
   const limiterRef = useRef(makeLimiter(3))
@@ -140,7 +142,22 @@ export default function RecommendPage() {
         setRevalidating(false)
       })
     void loadTeams()
+    void cloudRecMarks().then(ids => setMarks(new Set(ids))).catch(() => {})
   }, [auth.user, applyData, revalidate, loadTeams])
+
+  const toggleMark = useCallback((arxivId: string) => {
+    setMarks(prev => {
+      const next = new Set(prev)
+      if (next.has(arxivId)) {
+        next.delete(arxivId)
+        cloudRemoveRecMark(arxivId).catch(() => {})
+      } else {
+        next.add(arxivId)
+        cloudAddRecMark(arxivId).catch(() => {})
+      }
+      return next
+    })
+  }, [])
 
   const toggleFollow = (name: string) =>
     setFollowed(prev => {
@@ -176,6 +193,8 @@ export default function RecommendPage() {
     return limiterRef.current(() =>
       summarizeRecommendation({ arxiv_id: it.arxiv_id, title: it.title, abstract: it.abstract }).then(r => {
         summaryCache.set(it.arxiv_id, r.summary)
+        // Push up so mobile (which runs no local model) shows the same summary.
+        cloudPushRecSummary(it.arxiv_id, r.summary).catch(() => {})
         return r.summary
       }),
     )
@@ -319,6 +338,8 @@ export default function RecommendPage() {
                         it={it}
                         status={dl.get(it.arxiv_id)}
                         matchedTeam={matchTeam(it)}
+                        marked={marks.has(it.arxiv_id)}
+                        onToggleMark={() => toggleMark(it.arxiv_id)}
                         summarize={summarize}
                         onDownload={() => handleDownload(it)}
                       />
@@ -335,11 +356,13 @@ export default function RecommendPage() {
 }
 
 function RecCard({
-  it, status, matchedTeam, summarize, onDownload,
+  it, status, matchedTeam, marked, onToggleMark, summarize, onDownload,
 }: {
   it: RecItem
   status?: string
   matchedTeam: string | null
+  marked: boolean
+  onToggleMark: () => void
   summarize: (it: RecItem) => Promise<string>
   onDownload: () => void
 }) {
@@ -373,6 +396,12 @@ function RecCard({
   // visible until the summary lands and simply gets replaced — so a slow model
   // never leaves the card looking stuck.
   useEffect(() => {
+    // Already summarized (pushed up by a desktop session)? Use the cloud copy.
+    if (it.summary) {
+      setSummary(it.summary)
+      setSumState('done')
+      return
+    }
     if (!inView || !abstract) return
     let cancelled = false
     setSumState('loading')
@@ -395,13 +424,20 @@ function RecCard({
     <div
       ref={ref}
       className={`rounded-xl border p-4 ${
-        matchedTeam
-          ? 'border-amber-400/50 bg-amber-500/[0.06] ring-1 ring-amber-400/20'
-          : 'border-slate-800 bg-[#0f1117]'
+        marked
+          ? 'border-indigo-400/60 bg-indigo-500/[0.07] ring-1 ring-indigo-400/30'
+          : matchedTeam
+            ? 'border-amber-400/50 bg-amber-500/[0.06] ring-1 ring-amber-400/20'
+            : 'border-slate-800 bg-[#0f1117]'
       }`}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
+          {marked && (
+            <span className="mb-1 mr-1 inline-flex items-center gap-1 rounded-full border border-indigo-400/50 bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium text-indigo-200">
+              <Bookmark size={9} /> 待下载
+            </span>
+          )}
           {matchedTeam && (
             <span className="mb-1 inline-flex items-center gap-1 rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-medium text-amber-200">
               <Star size={9} /> 关注团队 · {matchedTeam}
@@ -417,6 +453,18 @@ function RecCard({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            onClick={onToggleMark}
+            title={marked ? '取消收藏' : '收藏（在移动端/桌面同步，提醒下载）'}
+            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] transition-colors ${
+              marked
+                ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-200'
+                : 'border-slate-700 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {marked ? <BookmarkCheck size={11} /> : <Bookmark size={11} />}
+            {marked ? '已收藏' : '收藏'}
+          </button>
           {it.pdf_url && (
             <a
               href={it.pdf_url}

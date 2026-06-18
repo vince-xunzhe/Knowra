@@ -584,6 +584,7 @@ export interface RecItem {
   title: string
   authors: string[]
   abstract: string | null
+  summary: string | null
   pdf_url: string | null
   primary_category: string | null
   published: string | null
@@ -614,6 +615,28 @@ export const cloudRecTags = () =>
 export const cloudRefreshRecommendations = () =>
   cloudClient()
     .post<{ added: number; pruned: number; tags: string[] }>('/api/cloud/recommendations/refresh')
+    .then(r => r.data)
+
+/** Push a desktop-generated summary up so mobile (no local model) can show it. */
+export const cloudPushRecSummary = (arxivId: string, summary: string) =>
+  cloudClient()
+    .post<{ updated: number }>('/api/cloud/recommendations/summary', { arxiv_id: arxivId, summary })
+    .then(r => r.data)
+
+/** arXiv ids the user has saved/收藏 (synced across mobile + desktop). */
+export const cloudRecMarks = () =>
+  cloudClient()
+    .get<{ arxiv_ids: string[] }>('/api/cloud/rec-marks')
+    .then(r => r.data.arxiv_ids)
+
+export const cloudAddRecMark = (arxivId: string) =>
+  cloudClient()
+    .post<{ marked: boolean }>('/api/cloud/rec-marks', { arxiv_id: arxivId })
+    .then(r => r.data)
+
+export const cloudRemoveRecMark = (arxivId: string) =>
+  cloudClient()
+    .delete<{ marked: boolean }>(`/api/cloud/rec-marks/${encodeURIComponent(arxivId)}`)
     .then(r => r.data)
 
 /** Wake the cloud machine and wait until it's serving before a sync.

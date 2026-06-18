@@ -19,6 +19,7 @@ import LoginScreen from '../screens/LoginScreen'
 import PapersScreen from '../screens/PapersScreen'
 import PaperDetailScreen from '../screens/PaperDetailScreen'
 import AskScreen from '../screens/AskScreen'
+import RecommendScreen from '../screens/RecommendScreen'
 import SettingsScreen from '../screens/SettingsScreen'
 import type { RootStackParamList } from './types'
 
@@ -29,6 +30,7 @@ type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 const TAB_ICONS: Record<string, { on: IoniconName; off: IoniconName }> = {
   首页: { on: 'home', off: 'home-outline' },
   资料: { on: 'document-text', off: 'document-text-outline' },
+  推荐: { on: 'sparkles', off: 'sparkles-outline' },
   Ask: { on: 'chatbubbles', off: 'chatbubbles-outline' },
   设置: { on: 'settings', off: 'settings-outline' },
   登录: { on: 'log-in', off: 'log-in-outline' },
@@ -100,6 +102,8 @@ function MainTabs() {
           headerShown: true, ...screenOptions, title: 'Knowra',
         }} />
       <Tabs.Screen name="资料" component={PapersTab} />
+      <Tabs.Screen name="推荐" component={RecommendScreen}
+        options={{ headerShown: true, ...screenOptions, title: '推荐' }} />
       <Tabs.Screen name="Ask" component={AskScreen}
         options={{
           headerShown: true, ...screenOptions, title: '提问',

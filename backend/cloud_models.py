@@ -319,6 +319,9 @@ class Recommendation(CloudBase):
     pdf_url = Column(String, nullable=True)
     primary_category = Column(String, nullable=True)
     published = Column(DateTime, nullable=True)
+    # Desktop-generated local-LLM summary, pushed up so mobile (no local model)
+    # can show it. Global/single-user for now (see docs).
+    summary = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
     __table_args__ = (
@@ -334,6 +337,18 @@ class RecSearchState(CloudBase):
 
     tag = Column(String, primary_key=True)
     last_searched_at = Column(DateTime, nullable=True)
+
+
+class RecMark(CloudBase):
+    """A user's 'saved / 收藏' mark on a recommended paper. Per-user, so the
+    mark syncs between mobile (where it's set) and desktop (where it prompts a
+    local download)."""
+
+    __tablename__ = "rec_marks"
+
+    user_id = Column(String, primary_key=True)
+    arxiv_id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
 def init_cloud_schema(engine) -> None:

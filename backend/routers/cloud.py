@@ -472,6 +472,7 @@ def recommendations_endpoint(
             "title": r.title,
             "authors": r.authors or [],
             "abstract": r.abstract,
+            "summary": r.summary,
             "pdf_url": r.pdf_url,
             "primary_category": r.primary_category,
             "published": r.published.isoformat() if r.published else None,
@@ -491,3 +492,84 @@ def recommendations_refresh(
     from services.recommend_service import run_search
 
     return run_search(db, force=True)
+
+
+class RecSummaryPush(BaseModel):
+    arxiv_id: str
+    summary: str
+
+
+@router.post("/recommendations/summary")
+def push_recommendation_summary(
+    body: RecSummaryPush,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Store a desktop-generated summary on the recommendation rows for this
+    arXiv id, so mobile (no local model) can display it. Updates every tag's
+    row for that paper."""
+    from cloud_models import Recommendation
+
+    aid = (body.arxiv_id or "").strip()
+    summary = (body.summary or "").strip()
+    if not aid or not summary:
+        raise _err(400, "bad_request", "缺少 arxiv_id 或 summary")
+    rows = db.query(Recommendation).filter(Recommendation.arxiv_id == aid).all()
+    for r in rows:
+        r.summary = summary
+    db.commit()
+    return {"updated": len(rows)}
+
+
+class RecMarkInput(BaseModel):
+    arxiv_id: str
+
+
+@router.get("/rec-marks")
+def list_rec_marks(
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """arXiv ids the current user has saved/收藏 — synced across mobile/desktop."""
+    from cloud_models import RecMark
+
+    rows = db.query(RecMark).filter(RecMark.user_id == user.user_id).all()
+    return {"arxiv_ids": [r.arxiv_id for r in rows]}
+
+
+@router.post("/rec-marks")
+def add_rec_mark(
+    body: RecMarkInput,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    from cloud_models import RecMark
+
+    aid = (body.arxiv_id or "").strip()
+    if not aid:
+        raise _err(400, "bad_request", "缺少 arxiv_id")
+    existing = (
+        db.query(RecMark)
+        .filter(RecMark.user_id == user.user_id, RecMark.arxiv_id == aid)
+        .first()
+    )
+    if not existing:
+        db.add(RecMark(user_id=user.user_id, arxiv_id=aid))
+        db.commit()
+    return {"marked": True, "arxiv_id": aid}
+
+
+@router.delete("/rec-marks/{arxiv_id}")
+def remove_rec_mark(
+    arxiv_id: str,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    from cloud_models import RecMark
+
+    db.query(RecMark).filter(
+        RecMark.user_id == user.user_id,
+        RecMark.arxiv_id == (arxiv_id or "").strip(),
+    ).delete()
+    db.commit()
+    return {"marked": False, "arxiv_id": arxiv_id}
