@@ -13,6 +13,12 @@ import { useCloudAuth } from '../hooks/useCloudAuth'
 // Followed tags are a client-side display filter (the feed itself is global).
 const FOLLOW_KEY = 'knowra.rec.followed'
 
+// Session caches (module-level so they survive the 推荐 tab unmounting /
+// remounting → re-opening the tab paints instantly; a full app reload clears
+// them). recCache holds the last feed; summaryCache holds per-paper summaries.
+let recCache: { tags: RecTag[]; items: RecItem[] } | null = null
+const summaryCache = new Map<string, string>()
+
 function loadFollowed(): string[] | null {
   try {
     const raw = localStorage.getItem(FOLLOW_KEY)
@@ -75,13 +81,16 @@ export default function RecommendPage() {
   const [error, setError] = useState<string | null>(null)
   // arxiv_id → 'downloading' | 'downloaded' | 'duplicate'
   const [dl, setDl] = useState<Map<string, string>>(new Map())
+  const [revalidating, setRevalidating] = useState(false)
+  const initedRef = useRef(false)
   const limiterRef = useRef(makeLimiter(3))
 
-  const load = useCallback(async () => {
-    setError(null)
-    const data = await cloudRecommendations(7)
+  const applyData = useCallback((data: { tags: RecTag[]; items: RecItem[] }) => {
     setTags(data.tags)
     setItems(data.items)
+    recCache = { tags: data.tags, items: data.items }
+    if (initedRef.current) return
+    initedRef.current = true
     const saved = loadFollowed()
     const follow = new Set(saved ?? data.tags.map(t => t.name)) // default: follow all
     setFollowed(follow)
@@ -91,6 +100,10 @@ export default function RecommendPage() {
     const first = data.tags.map(t => t.name).find(n => follow.has(n))
     setExpanded(new Set(first ? [first] : []))
   }, [])
+
+  const revalidate = useCallback(async () => {
+    applyData(await cloudRecommendations(7))
+  }, [applyData])
 
   // Local team registry → normalized author → team name, for highlighting
   // papers written by a team the user follows.
@@ -110,11 +123,24 @@ export default function RecommendPage() {
       setLoading(false)
       return
     }
-    load()
-      .catch(e => setError(apiErr(e)))
-      .finally(() => setLoading(false))
+    // Instant paint from the session cache, then refresh in the background — so
+    // switching back to 推荐 doesn't show a blocking "加载中" every time.
+    const hadCache = !!recCache
+    if (hadCache) {
+      applyData(recCache!)
+      setLoading(false)
+      setRevalidating(true)
+    }
+    revalidate()
+      .catch(e => {
+        if (!hadCache) setError(apiErr(e))
+      })
+      .finally(() => {
+        setLoading(false)
+        setRevalidating(false)
+      })
     void loadTeams()
-  }, [auth.user, load, loadTeams])
+  }, [auth.user, applyData, revalidate, loadTeams])
 
   const toggleFollow = (name: string) =>
     setFollowed(prev => {
@@ -144,22 +170,23 @@ export default function RecommendPage() {
     [teamMap],
   )
 
-  const summarize = useCallback(
-    (it: RecItem) =>
-      limiterRef.current(() =>
-        summarizeRecommendation({ arxiv_id: it.arxiv_id, title: it.title, abstract: it.abstract }).then(
-          r => r.summary,
-        ),
-      ),
-    [],
-  )
+  const summarize = useCallback((it: RecItem): Promise<string> => {
+    const hit = summaryCache.get(it.arxiv_id)
+    if (hit) return Promise.resolve(hit)
+    return limiterRef.current(() =>
+      summarizeRecommendation({ arxiv_id: it.arxiv_id, title: it.title, abstract: it.abstract }).then(r => {
+        summaryCache.set(it.arxiv_id, r.summary)
+        return r.summary
+      }),
+    )
+  }, [])
 
   const refresh = async () => {
     setRefreshing(true)
     setError(null)
     try {
       await cloudRefreshRecommendations()
-      await load()
+      await revalidate()
     } catch (e) {
       setError(apiErr(e))
     } finally {
@@ -208,7 +235,12 @@ export default function RecommendPage() {
         <header className="mb-6 flex items-start gap-3">
           <Sparkles size={20} className="mt-0.5 shrink-0 text-indigo-300" />
           <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-semibold tracking-tight text-white">推荐</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">
+              推荐
+              {revalidating && (
+                <Loader2 size={14} className="ml-2 inline animate-spin align-[-1px] text-slate-500" />
+              )}
+            </h1>
             <p className="mt-1 text-sm text-slate-500">
               每周一 / 三 / 五自动检索 arXiv（保留近 7 天）。展开方向查看，摘要由本地模型归纳，关注团队的论文会高亮。
             </p>
