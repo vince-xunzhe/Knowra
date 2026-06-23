@@ -55,11 +55,21 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
 
 
 def _is_due(now: datetime, last: Optional[datetime]) -> bool:
-    if now.weekday() not in SEARCH_WEEKDAYS:
-        return False
     if last is None:
         return True
-    return (now - last) >= timedelta(hours=MIN_GAP_HOURS)
+    if (now - last) < timedelta(hours=MIN_GAP_HOURS):
+        return False
+
+    # Catch-up friendly: if the VM sleeps through a scheduled UTC day, the
+    # next hourly tick should still run instead of waiting for the next
+    # Mon/Wed/Fri. Use date-level slots because this scheduler has no fixed
+    # time-of-day contract.
+    day = last.date() + timedelta(days=1)
+    while day <= now.date():
+        if day.weekday() in SEARCH_WEEKDAYS:
+            return True
+        day += timedelta(days=1)
+    return False
 
 
 def _prune(db, now: datetime) -> int:

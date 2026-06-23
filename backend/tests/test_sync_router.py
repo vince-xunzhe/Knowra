@@ -10,7 +10,8 @@ Covers:
   - happy path: prepare → simulated PUTs → commit returns revision 1
   - idempotency: repeated commit on same session_id returns same revision
   - content_hash dedup: unchanged files don't appear in uploads_required
-  - storage HEAD mismatch → commit rejects without bumping revision
+  - storage HEAD mismatch → commit rejects that wiki file while still
+    committing valid metadata rows
   - session expiry → commit returns 410
   - cross-tenant: user B can't commit user A's session
   - per-row user_id mismatch → validation_errors in prepare response
@@ -272,7 +273,9 @@ class SyncRouterTests(unittest.TestCase):
         })
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        self.assertEqual(body["revision"], 0)
+        self.assertEqual(body["revision"], 1)
+        self.assertEqual(body["accepted"]["papers"], 1)
+        self.assertEqual(body["accepted"]["wiki_files"], 0)
         self.assertEqual(len(body["rejected"]), 1)
         self.assertEqual(body["rejected"][0]["code"], "HASH_MISMATCH")
 
@@ -284,7 +287,9 @@ class SyncRouterTests(unittest.TestCase):
             "api_version": "1", "sync_session_id": sid,
             "uploaded": [{"rel_path": "papers/foo.md", "content_hash": "sha256:abc"}],
         }).json()
-        self.assertEqual(resp["revision"], 0)
+        self.assertEqual(resp["revision"], 1)
+        self.assertEqual(resp["accepted"]["papers"], 1)
+        self.assertEqual(resp["accepted"]["wiki_files"], 0)
         self.assertEqual(resp["rejected"][0]["code"], "UPLOAD_MISSING_AT_STORAGE")
 
     # ---- session lifecycle ---------------------------------------------
@@ -396,6 +401,58 @@ class SyncRouterTests(unittest.TestCase):
         # revision keeps moving forward even when nothing semantically
         # changed (helps clients tell "the server has acked").
         self.assertGreaterEqual(body["revision"], 2)
+
+    def test_older_paper_payload_backfills_empty_team_metadata(self):
+        """Team/category fields may be derived after the original sync.
+
+        Older desktop snapshots used processed_at as paper.updated_at, so a
+        later metadata-only backfill could carry the same/older timestamp than
+        the existing cloud row. Empty cloud metadata should still be filled from
+        the desktop source-of-truth snapshot.
+        """
+        server_ts = datetime(2020, 1, 2, 10, tzinfo=timezone.utc)
+        db = self.SessionLocal()
+        try:
+            db.add(CloudPaper(
+                id="paper-a",
+                user_id=USER_A,
+                filepath="/tmp/foo.pdf",
+                filename="foo.pdf",
+                file_hash="hash1",
+                title="Foo",
+                updated_at=server_ts,
+                created_at=server_ts,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        payload = self._basic_payload()
+        payload["tables"]["wiki_files"] = []
+        payload["tables"]["papers"][0]["updated_at"] = "2020-01-01T10:00:00Z"
+        payload["tables"]["papers"][0]["paper_team_model"] = "Kaiming He"
+        payload["tables"]["papers"][0]["paper_category_model"] = "VLM"
+
+        prep = self.client.post("/api/sync/prepare", json=payload).json()
+        resp = self.client.post("/api/sync/commit", json={
+            "api_version": "1",
+            "sync_session_id": prep["sync_session_id"],
+            "uploaded": [],
+        })
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["accepted"]["papers"], 1)
+
+        db = self.SessionLocal()
+        try:
+            paper = db.query(CloudPaper).filter(CloudPaper.id == "paper-a").one()
+            self.assertEqual(paper.paper_team_model, "Kaiming He")
+            self.assertEqual(paper.paper_category_model, "VLM")
+            updated_at = paper.updated_at
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            self.assertGreater(updated_at, server_ts)
+        finally:
+            db.close()
 
     # ---- protocol versioning -------------------------------------------
 

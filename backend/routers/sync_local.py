@@ -110,7 +110,7 @@ def _ensure_paper_hash(paper: Paper) -> str:
         return ""
 
 
-def _paper_row(paper: Paper) -> dict[str, Any]:
+def _paper_row(paper: Paper, snapshot_at: datetime) -> dict[str, Any]:
     return {
         "id": str(paper.id),
         # user_id is stamped by the frontend agent right before /prepare.
@@ -118,7 +118,12 @@ def _paper_row(paper: Paper) -> dict[str, Any]:
         # writer — avoids divergent partial values if the user swaps
         # cloud accounts mid-sync.
         "user_id": "",
-        "updated_at": _isoformat(paper.processed_at or paper.created_at),
+        # Paper rows have no local updated_at column yet. Derived metadata
+        # such as paper_team_model can be backfilled long after processed_at,
+        # so using processed_at would make the cloud treat that row as stale
+        # and skip the new field. The desktop is the v1 source of truth, so a
+        # full snapshot should carry a fresh row timestamp.
+        "updated_at": _isoformat(snapshot_at),
         "filepath": paper.filepath or "",
         "filename": paper.filename or "",
         "file_hash": _ensure_paper_hash(paper),
@@ -335,7 +340,8 @@ def local_snapshot(
     nodes = db.query(KnowledgeNode).all()
     edges = db.query(KnowledgeEdge).all()
 
-    paper_rows = [_paper_row(p) for p in papers]
+    snapshot_at = datetime.now(timezone.utc)
+    paper_rows = [_paper_row(p, snapshot_at) for p in papers]
 
     # Commit any newly computed file_hashes back so we don't re-hash on
     # next snapshot. _ensure_paper_hash mutates the ORM object in place.
@@ -389,7 +395,7 @@ def local_snapshot(
             "knowledge_edges": [],
             "wiki_files": [],
         },
-        "generated_at": _isoformat(datetime.now(timezone.utc)),
+        "generated_at": _isoformat(snapshot_at),
         "counts": {
             "papers": len(paper_rows),
             "knowledge_nodes": len(node_rows),

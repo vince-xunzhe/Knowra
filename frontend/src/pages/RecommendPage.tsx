@@ -373,6 +373,8 @@ function RecCard({
   const [showAbstract, setShowAbstract] = useState(false)
   const abstract = it.abstract || ''
   const done = status === 'downloaded' || status === 'duplicate'
+  const publishedAt = formatRecTime(it.published)
+  const retrievedAt = formatRecTime(it.created_at)
 
   // Only summarize once the card scrolls into view, so expanding a 40-paper
   // section doesn't fire 40 (possibly slow, e.g. local Codex) LLM calls at once.
@@ -448,8 +450,6 @@ function RecCard({
             {(it.authors || []).slice(0, 4).join(', ')}
             {it.authors.length > 4 ? ' 等' : ''}
             {it.primary_category ? ` · ${it.primary_category}` : ''}
-            {it.published ? ` · 发布 ${it.published.slice(0, 10)}` : ''}
-            {it.created_at ? ` · 检索 ${it.created_at.slice(0, 10)}` : ''}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -505,6 +505,21 @@ function RecCard({
         </div>
       </div>
 
+      {(publishedAt || retrievedAt) && (
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] leading-relaxed text-slate-500">
+          {publishedAt && (
+            <span className="whitespace-nowrap">
+              发布 {publishedAt}
+            </span>
+          )}
+          {retrievedAt && (
+            <span className="whitespace-nowrap">
+              检索 {retrievedAt}
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="mt-2 text-[12.5px] leading-relaxed">
         {sumState === 'done' && summary ? (
           <>
@@ -535,6 +550,14 @@ function RecCard({
       </div>
     </div>
   )
+}
+
+function formatRecTime(value: string | null | undefined): string | null {
+  if (!value) return null
+  const trimmed = String(value).trim()
+  if (!trimmed) return null
+  const compact = trimmed.replace('T', ' ').replace(/\.\d+Z?$/, '').replace(/Z$/, '')
+  return compact.length >= 16 ? compact.slice(0, 16) : compact.slice(0, 10)
 }
 
 function CenteredNote({ title, msg, spinner }: { title: string; msg?: string; spinner?: boolean }) {

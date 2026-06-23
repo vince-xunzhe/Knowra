@@ -174,6 +174,18 @@ class LocalSnapshotTests(unittest.TestCase):
         self.assertEqual(p["legacy_id"], 1)
         self.assertTrue(p["processed"])
 
+    def test_paper_updated_at_uses_snapshot_time(self):
+        self._seed_rows()
+        before = datetime.now(timezone.utc)
+        body = self.client.get("/api/sync/local_snapshot").json()
+        after = datetime.now(timezone.utc)
+
+        p = body["papers"][0]
+        ts = datetime.fromisoformat(p["updated_at"])
+        self.assertGreaterEqual(ts, before)
+        self.assertLessEqual(ts, after)
+        self.assertEqual(p["updated_at"], body["generated_at"])
+
     def test_node_source_paper_ids_are_strings(self):
         self._seed_rows()
         body = self.client.get("/api/sync/local_snapshot").json()

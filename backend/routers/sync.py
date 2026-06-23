@@ -377,6 +377,8 @@ def _bulk_upsert(db: Session, model, payloads: list[dict]) -> int:
             incoming_ts is not None and server_ts is not None
             and _to_utc(server_ts) >= _to_utc(incoming_ts)
         ):
+            if model is CloudPaper and _backfill_empty_paper_metadata(ex, payload):
+                accepted += 1
             continue
         for k, v in payload.items():
             if k == "id" or v is None:
@@ -384,6 +386,33 @@ def _bulk_upsert(db: Session, model, payloads: list[dict]) -> int:
             setattr(ex, k, v)
         accepted += 1
     return accepted
+
+
+def _backfill_empty_paper_metadata(existing: CloudPaper, payload: dict) -> bool:
+    """Fill metadata fields added after the original cloud row was synced.
+
+    Older desktop builds stamped paper rows with processed_at. Team/category
+    model fields can be derived later without changing processed_at, causing
+    the cloud upsert to skip the row as "stale" and leaving mobile grouped
+    under fallback lanes such as "others". When the server value is empty and
+    the incoming full snapshot has a value, accept that narrow backfill even if
+    the row timestamp is older.
+    """
+    changed = False
+    for field in (
+        "paper_category_model",
+        "paper_category_override",
+        "paper_team_model",
+        "paper_team_override",
+    ):
+        incoming = payload.get(field)
+        current = getattr(existing, field, None)
+        if incoming not in (None, "") and current in (None, ""):
+            setattr(existing, field, incoming)
+            changed = True
+    if changed:
+        existing.updated_at = datetime.now(timezone.utc)
+    return changed
 
 
 def _to_paper_dict(row: PaperRow) -> dict:
