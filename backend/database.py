@@ -127,6 +127,10 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_model VARCHAR"))
         if "paper_category_override" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_category_override VARCHAR"))
+        if "paper_team_model" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN paper_team_model VARCHAR"))
+        if "paper_team_override" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN paper_team_override VARCHAR"))
         if "processing_status" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN processing_status VARCHAR"))
         if "retry_count" not in existing:

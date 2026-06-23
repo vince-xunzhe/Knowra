@@ -130,6 +130,8 @@ def _paper_row(paper: Paper) -> dict[str, Any]:
         "extraction_model": paper.extraction_model,
         "paper_category_model": paper.paper_category_model,
         "paper_category_override": paper.paper_category_override,
+        "paper_team_model": paper.paper_team_model,
+        "paper_team_override": paper.paper_team_override,
         "raw_llm_response": paper.raw_llm_response,
         "notes": paper.notes,
         "error": paper.error,

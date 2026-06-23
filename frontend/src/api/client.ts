@@ -15,6 +15,10 @@ export interface PaperRecord {
   paper_category_model: string | null
   paper_category_override: string | null
   paper_category_source: 'manual' | 'model' | 'none'
+  paper_team: string | null
+  paper_team_model: string | null
+  paper_team_override: string | null
+  paper_team_source: 'manual' | 'model' | 'none'
   year: number | null
   error: string | null
   created_at: string | null
@@ -296,9 +300,74 @@ export const bulkSetPaperCategory = (paperIds: (string | number)[], category: st
       category,
     })
     .then(r => r.data)
+
+// ── paper-team dimension (parallel to category) ────────────────────────
+export const updatePaperTeam = (id: string | number, team: string | null) =>
+  api.put<PaperDetail>(`/papers/${id}/team`, { team }).then(r => r.data)
+
+export interface PaperTeamItem {
+  name: string
+  authors: string[]
+  builtin: boolean
+  count: number
+}
+export interface TeamListResponse {
+  teams: PaperTeamItem[]
+  others_count: number
+}
+export const listPaperTeams = () =>
+  api.get<TeamListResponse>('/paper-teams').then(r => r.data)
+export const addPaperTeam = (name: string, authors: string[] = []) =>
+  api.post<TeamListResponse>('/paper-teams', { name, authors }).then(r => r.data)
+export const updatePaperTeamRegistry = (
+  name: string,
+  payload: { new_name?: string; authors?: string[] },
+) =>
+  api
+    .put<TeamListResponse>(`/paper-teams/${encodeURIComponent(name)}`, payload)
+    .then(r => r.data)
+export const deletePaperTeam = (name: string) =>
+  api.delete<TeamListResponse>(`/paper-teams/${encodeURIComponent(name)}`).then(r => r.data)
+export const recomputePaperTeams = () =>
+  api
+    .post<TeamListResponse & { recomputed: number }>('/paper-teams/recompute')
+    .then(r => r.data)
+export const bulkSetPaperTeam = (paperIds: (string | number)[], team: string | null) =>
+  api
+    .post<{ updated: number; team: string | null }>('/papers/bulk-team', {
+      paper_ids: paperIds,
+      team,
+    })
+    .then(r => r.data)
+
 export const updatePaperNotes = (id: number, notes: string) =>
   api.put<PaperDetail>(`/papers/${id}/notes`, { notes }).then(r => r.data)
 export const pdfFileUrl = (id: number) => `/api/papers/${id}/file`
+
+// Download a recommended arXiv PDF into the local papers directory (local
+// backend; PDFs only ever land locally). The next 扫描目录 ingests it.
+export const downloadRecommendation = (payload: {
+  arxiv_id: string
+  pdf_url?: string | null
+  title?: string | null
+}) =>
+  api
+    .post<{ status: 'downloaded' | 'duplicate'; filename: string; arxiv_id: string; bytes?: number }>(
+      '/recommendations/download',
+      payload,
+    )
+    .then(r => r.data)
+export const summarizeRecommendation = (payload: {
+  arxiv_id: string
+  title?: string | null
+  abstract?: string | null
+}) =>
+  api
+    .post<{ summary: string; cached: boolean; model?: string }>(
+      '/recommendations/summarize',
+      payload,
+    )
+    .then(r => r.data)
 export const firstPageUrl = (id: number) => `/api/papers/${id}/first_page`
 
 // Chat — follow-up Q&A against the same Assistants thread used for extraction.
@@ -442,6 +511,7 @@ export interface WikiGraphNode {
   concept_id?: number | null
   node_type?: string | null
   category?: string | null
+  team?: string | null
   compiled_at?: string | null
   x: number
   y: number
@@ -466,6 +536,7 @@ export interface WikiGraphSummary {
 export interface WikiGraphData {
   updated_at: string
   categories: WikiGraphSummary[]
+  teams: { name: string; paper_count: number }[]
   nodes: WikiGraphNode[]
   edges: WikiGraphEdge[]
 }

@@ -158,6 +158,16 @@ def get_cloud_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def cloud_session() -> Session:
+    """A standalone cloud DB session for background workers (e.g. the
+    recommendation scheduler) that run outside a FastAPI request. The caller
+    is responsible for closing it."""
+    if _SessionLocal is None:
+        init_cloud_engine()
+    assert _SessionLocal is not None
+    return _SessionLocal()
+
+
 def reset_for_tests() -> None:
     """Drop the cached engine + factory so the next ``init_cloud_engine``
     re-reads env vars. Tests only."""

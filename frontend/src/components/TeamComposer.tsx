@@ -1,54 +1,64 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  Tags, Plus, Trash2, Pencil, Check, X, Loader2, Save, RotateCw, ArrowRight,
-  ChevronRight, ChevronDown,
+  Users2, Plus, Trash2, Pencil, Check, X, Loader2, Save, RotateCw, ArrowRight,
+  ChevronRight, ChevronDown, RefreshCw,
 } from 'lucide-react'
 import {
-  listPaperCategories, addPaperCategory, renamePaperCategory, deletePaperCategory,
-  bulkSetPaperCategory, listPapers,
-  type PaperCategoryItem, type PaperRecord,
+  listPaperTeams, addPaperTeam, updatePaperTeamRegistry, deletePaperTeam,
+  recomputePaperTeams, bulkSetPaperTeam, listPapers,
+  type PaperTeamItem, type PaperRecord,
 } from '../api/client'
 
-// Sentinel for "follow the model" (clears the manual override).
+// Sentinel for "follow author auto-match" (clears the manual override).
 const INHERIT = '__inherit__'
+const OTHERS = 'others'
 
 function apiErr(e: unknown): string {
   const x = e as { response?: { data?: { detail?: string } }; message?: string }
   return x?.response?.data?.detail || x?.message || String(e)
 }
 
+function parseAuthors(s: string): string[] {
+  return s
+    .split(/[,，\n]/)
+    .map(a => a.trim())
+    .filter(Boolean)
+}
+
 /**
- * 编排大类 — taxonomy + assignment editor surfaced from the 编译图谱 view.
+ * 编排团队 — the team dimension's taxonomy + assignment editor, a sibling of
+ * 编排大类 (CategoryComposer). The big difference: each team carries a list of
+ * core authors. A paper is auto-assigned to a team when its authors match, so
+ * editing a team's authors (and 重算) is the primary workflow; the per-paper
+ * board move (override) is for exceptions.
  *
- * Left: the categories (add / rename / delete).
- * Right: a BOARD — one lane per category, papers grouped inside. Select one or
- * more paper cards and move them to another lane. Changes stage locally and
- * commit together on 保存.
+ * Left: teams (add / rename / edit authors / delete) + 重算.
+ * Right: a collapsible board — one lane per team plus "others", select papers
+ * and move them to a team (override) or back to author-match. Saves together.
  */
-export default function CategoryComposer({ onClose }: { onClose: () => void }) {
-  const [cats, setCats] = useState<PaperCategoryItem[]>([])
+export default function TeamComposer({ onClose }: { onClose: () => void }) {
+  const [teams, setTeams] = useState<PaperTeamItem[]>([])
+  const [othersCount, setOthersCount] = useState(0)
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  // Staged override changes: paperId → category name, or INHERIT (follow model).
   const [pending, setPending] = useState<Map<string, string>>(new Map())
-  // Selected paper cards (ids) awaiting a move.
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  // Which category groups are expanded (default: all collapsed → compact).
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
-  // Category-management local UI state.
   const [newName, setNewName] = useState('')
   const [editing, setEditing] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
+  const [editAuthors, setEditAuthors] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
-    const [c, p] = await Promise.all([listPaperCategories(), listPapers()])
-    setCats(c)
+    const [t, p] = await Promise.all([listPaperTeams(), listPapers()])
+    setTeams(t.teams)
+    setOthersCount(t.others_count)
     setPapers(p)
   }, [])
 
@@ -58,32 +68,32 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       .finally(() => setLoading(false))
   }, [reload])
 
-  const catNames = useMemo(() => cats.map(c => c.name), [cats])
+  const teamNames = useMemo(() => teams.map(t => t.name), [teams])
+  // Lanes shown on the right: real teams in registry order, then "others".
+  const laneNames = useMemo(() => [...teamNames, OTHERS], [teamNames])
 
-  // The displayed (possibly-staged) category for a paper.
-  const shownCategory = useCallback(
+  const shownTeam = useCallback(
     (p: PaperRecord): string => {
       const staged = pending.get(String(p.id))
       if (staged !== undefined) {
-        if (staged === INHERIT) return p.paper_category_model || '其他'
+        if (staged === INHERIT) return p.paper_team_model || OTHERS
         return staged
       }
-      return p.paper_category || '其他'
+      return p.paper_team || OTHERS
     },
     [pending],
   )
 
-  // Group papers into lanes by their (staged) category.
   const grouped = useMemo(() => {
     const m = new Map<string, PaperRecord[]>()
-    for (const c of catNames) m.set(c, [])
+    for (const c of laneNames) m.set(c, [])
     for (const p of papers) {
-      const c = shownCategory(p)
+      const c = shownTeam(p)
       if (!m.has(c)) m.set(c, [])
       m.get(c)!.push(p)
     }
-    // Within a lane, order chronologically by publication year (oldest →
-    // newest; unknown last), matching the 回顾 / 资料 / 泳道图 ordering.
+    // Within a team lane, order chronologically by publication year (oldest →
+    // newest; unknown last) — a team's work reads as a timeline.
     for (const [, ps] of m) {
       ps.sort((a, b) => {
         const ya = a.year || 9999
@@ -93,7 +103,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       })
     }
     return m
-  }, [papers, catNames, shownCategory])
+  }, [papers, laneNames, shownTeam])
 
   const toggleSelect = (id: string) =>
     setSelected(prev => {
@@ -103,14 +113,13 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       return next
     })
 
-  // Move all currently-selected papers into `target` (a category or INHERIT).
   const moveSelectedTo = (target: string) => {
     setPending(prev => {
       const next = new Map(prev)
       for (const pid of selected) {
         const p = papers.find(x => String(x.id) === pid)
         if (!p) continue
-        const current = p.paper_category_override || INHERIT
+        const current = p.paper_team_override || INHERIT
         if (target === current) next.delete(pid)
         else next.set(pid, target)
       }
@@ -132,6 +141,22 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const startEdit = (t: PaperTeamItem) => {
+    setEditing(t.name)
+    setEditName(t.name)
+    setEditAuthors((t.authors || []).join(', '))
+  }
+
+  const saveEdit = (original: string) =>
+    void runManage(`edit:${original}`, async () => {
+      const newName = editName.trim()
+      await updatePaperTeamRegistry(original, {
+        new_name: newName && newName !== original ? newName : undefined,
+        authors: parseAuthors(editAuthors),
+      })
+      setEditing(null)
+    })
+
   const handleSave = async () => {
     if (pending.size === 0) return
     setSaving(true)
@@ -144,7 +169,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
         groups.set(val, arr)
       }
       for (const [val, ids] of groups) {
-        await bulkSetPaperCategory(ids, val === INHERIT ? null : val)
+        await bulkSetPaperTeam(ids, val === INHERIT ? null : val)
       }
       setPending(new Map())
       await reload()
@@ -162,28 +187,36 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       else next.add(name)
       return next
     })
-  const allExpanded = catNames.length > 0 && catNames.every(n => expanded.has(n))
+  const allExpanded = laneNames.length > 0 && laneNames.every(n => expanded.has(n))
 
-  // Clicking a category on the left expands it + scrolls it into view.
   const scrollToLane = (name: string) => {
     setExpanded(prev => new Set(prev).add(name))
     setTimeout(
-      () =>
-        document.getElementById(`lane-${name}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      () => document.getElementById(`team-lane-${name}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
       0,
     )
   }
 
+  const laneLabel = (name: string) => (name === OTHERS ? 'others（未匹配）' : name)
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12]">
-      {/* header */}
       <header className="flex items-center gap-3 border-b border-slate-800 bg-[#0f1117] px-5 py-3">
-        <Tags size={15} className="text-indigo-300" />
-        <h2 className="text-sm font-semibold text-white">编排大类</h2>
+        <Users2 size={15} className="text-indigo-300" />
+        <h2 className="text-sm font-semibold text-white">编排团队</h2>
         <span className="text-[11px] text-slate-500">
-          左侧管理大类；右侧选中论文卡片，移到目标大类，保存后生效
+          按核心作者自动归队；编辑作者后「重算」即可。右侧可手动把论文移入某队
         </span>
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => void runManage('recompute', async () => { await recomputePaperTeams() })}
+            disabled={busy === 'recompute' || saving}
+            title="按当前作者名单重新归队所有论文"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+          >
+            {busy === 'recompute' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            重算
+          </button>
           <button
             onClick={() => setPending(new Map())}
             disabled={pending.size === 0 || saving}
@@ -221,114 +254,102 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <div className="flex min-h-0 flex-1">
-          {/* ── LEFT: categories (manage) ──────────────────────── */}
-          <aside className="flex w-80 shrink-0 flex-col border-r border-slate-800 bg-[#0d1016]">
+          {/* ── LEFT: teams (manage + authors) ─────────────────── */}
+          <aside className="flex w-96 shrink-0 flex-col border-r border-slate-800 bg-[#0d1016]">
             <div className="border-b border-slate-800/70 px-4 py-2 text-[11px] font-medium text-slate-400">
-              大类（点击跳到该组）
+              团队（核心作者命中即自动归队）
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1">
-              {cats.map(cat => {
-                const isEditing = editing === cat.name
-                const rowBusy =
-                  busy === `rename:${cat.name}` || busy === `delete:${cat.name}`
-                const count = grouped.get(cat.name)?.length ?? 0
+              {teams.map(team => {
+                const isEditing = editing === team.name
+                const rowBusy = busy === `edit:${team.name}` || busy === `delete:${team.name}`
+                const count = grouped.get(team.name)?.length ?? 0
                 return (
-                  <div
-                    key={cat.name}
-                    className="rounded-lg border border-slate-800 bg-slate-900/30 px-2.5 py-2"
-                  >
-                    <div className="flex items-center gap-2">
-                      {isEditing ? (
-                        <>
-                          <input
-                            autoFocus
-                            value={editName}
-                            onChange={e => setEditName(e.target.value)}
-                            onKeyDown={e => {
-                              if (e.key === 'Enter' && editName.trim() && editName.trim() !== cat.name)
-                                void runManage(`rename:${cat.name}`, async () => {
-                                  await renamePaperCategory(cat.name, editName.trim())
-                                  setEditing(null)
-                                })
-                              if (e.key === 'Escape') setEditing(null)
-                            }}
-                            className="min-w-0 flex-1 rounded border border-indigo-500/50 bg-slate-950/70 px-1.5 py-0.5 text-[12px] text-slate-100 focus:outline-none"
-                          />
+                  <div key={team.name} className="rounded-lg border border-slate-800 bg-slate-900/30 px-2.5 py-2">
+                    {isEditing ? (
+                      <div className="space-y-1.5">
+                        <input
+                          autoFocus
+                          value={editName}
+                          onChange={e => setEditName(e.target.value)}
+                          placeholder="团队名"
+                          className="w-full rounded border border-indigo-500/50 bg-slate-950/70 px-1.5 py-1 text-[12px] text-slate-100 focus:outline-none"
+                        />
+                        <textarea
+                          value={editAuthors}
+                          onChange={e => setEditAuthors(e.target.value)}
+                          placeholder="核心作者，逗号分隔（如：Kaiming He, Ross Girshick）"
+                          rows={2}
+                          className="w-full resize-none rounded border border-slate-700 bg-slate-950/70 px-1.5 py-1 text-[11px] text-slate-200 focus:border-indigo-500/60 focus:outline-none"
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          <button onClick={() => setEditing(null)} className="text-[11px] text-slate-500 hover:text-slate-300">
+                            取消
+                          </button>
                           <button
-                            onClick={() =>
-                              void runManage(`rename:${cat.name}`, async () => {
-                                if (editName.trim() && editName.trim() !== cat.name)
-                                  await renamePaperCategory(cat.name, editName.trim())
-                                setEditing(null)
-                              })
-                            }
+                            onClick={() => saveEdit(team.name)}
                             disabled={rowBusy}
-                            className="text-emerald-300 hover:text-emerald-200"
+                            className="inline-flex items-center gap-1 rounded bg-indigo-500 px-2 py-0.5 text-[11px] text-white hover:bg-indigo-400 disabled:opacity-50"
                           >
-                            {rowBusy ? <Loader2 size={12} className="animate-spin" /> : <Check size={13} />}
+                            {rowBusy ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+                            保存并重算
                           </button>
-                          <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-slate-300">
-                            <X size={13} />
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button onClick={() => scrollToLane(cat.name)} className="min-w-0 flex-1 text-left">
-                            <span className="text-[12px] font-medium text-slate-100">{cat.name}</span>
-                            {!cat.removable && <span className="ml-1 text-[9px] text-slate-500">保留</span>}
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => scrollToLane(team.name)} className="min-w-0 flex-1 text-left">
+                            <span className="text-[12px] font-medium text-slate-100">{team.name}</span>
+                            {team.builtin && <span className="ml-1 text-[9px] text-slate-500">内置</span>}
                           </button>
                           <span className="tabular-nums text-[11px] text-slate-500">{count}</span>
-                          {cat.removable && (
-                            <>
+                          <button onClick={() => startEdit(team)} title="编辑名称 / 核心作者" className="text-slate-500 hover:text-indigo-200">
+                            <Pencil size={11} />
+                          </button>
+                          {confirmDelete === team.name ? (
+                            <span className="flex items-center gap-1">
                               <button
-                                onClick={() => {
-                                  setEditing(cat.name)
-                                  setEditName(cat.name)
-                                }}
-                                title="重命名（迁移该类所有论文）"
-                                className="text-slate-500 hover:text-indigo-200"
+                                onClick={() =>
+                                  void runManage(`delete:${team.name}`, async () => {
+                                    await deletePaperTeam(team.name)
+                                    setConfirmDelete(null)
+                                  })
+                                }
+                                disabled={rowBusy}
+                                className="text-[10px] text-rose-300 hover:text-rose-200"
                               >
-                                <Pencil size={11} />
+                                确认
                               </button>
-                              {confirmDelete === cat.name ? (
-                                <span className="flex items-center gap-1">
-                                  <button
-                                    onClick={() =>
-                                      void runManage(`delete:${cat.name}`, async () => {
-                                        await deletePaperCategory(cat.name)
-                                        setConfirmDelete(null)
-                                      })
-                                    }
-                                    disabled={rowBusy}
-                                    className="text-[10px] text-rose-300 hover:text-rose-200"
-                                  >
-                                    确认
-                                  </button>
-                                  <button onClick={() => setConfirmDelete(null)} className="text-[10px] text-slate-500">
-                                    取消
-                                  </button>
-                                </span>
-                              ) : (
-                                <button
-                                  onClick={() => setConfirmDelete(cat.name)}
-                                  title="删除（该类论文回退为跟随模型）"
-                                  className="text-slate-500 hover:text-rose-300"
-                                >
-                                  <Trash2 size={11} />
-                                </button>
-                              )}
-                            </>
+                              <button onClick={() => setConfirmDelete(null)} className="text-[10px] text-slate-500">
+                                取消
+                              </button>
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmDelete(team.name)}
+                              title="删除（该队论文回退为 others / 跟随匹配）"
+                              className="text-slate-500 hover:text-rose-300"
+                            >
+                              <Trash2 size={11} />
+                            </button>
                           )}
-                        </>
-                      )}
-                    </div>
-
+                        </div>
+                        {team.authors.length > 0 && (
+                          <div className="mt-1 truncate text-[10px] text-slate-500">
+                            {team.authors.join(' · ')}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )
               })}
+              <div className="rounded-lg border border-dashed border-slate-800 px-2.5 py-2 text-[11px] text-slate-500">
+                others（未匹配）<span className="ml-1 tabular-nums">{grouped.get(OTHERS)?.length ?? othersCount}</span>
+              </div>
             </div>
 
-            {/* add category */}
             <div className="border-t border-slate-800/70 p-2">
               <div className="flex items-center gap-1.5">
                 <input
@@ -337,17 +358,17 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && newName.trim())
                       void runManage('add', async () => {
-                        await addPaperCategory(newName.trim())
+                        await addPaperTeam(newName.trim())
                         setNewName('')
                       })
                   }}
-                  placeholder="新增大类…"
+                  placeholder="新增团队…（先建名，再编辑作者）"
                   className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950/70 px-2 py-1 text-[12px] text-slate-100 focus:border-indigo-500/60 focus:outline-none"
                 />
                 <button
                   onClick={() =>
                     void runManage('add', async () => {
-                      await addPaperCategory(newName.trim())
+                      await addPaperTeam(newName.trim())
                       setNewName('')
                     })
                   }
@@ -360,9 +381,8 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
             </div>
           </aside>
 
-          {/* ── RIGHT: collapsible list grouped by category ─────── */}
+          {/* ── RIGHT: collapsible board grouped by team ────────── */}
           <main className="relative flex min-h-0 flex-1 flex-col">
-            {/* toolbar — move bar when cards are selected, else expand/collapse-all */}
             {selected.size > 0 ? (
               <div className="z-10 flex flex-wrap items-center gap-2 border-b border-indigo-500/30 bg-[#11131b] px-4 py-2">
                 <span className="text-[12px] text-indigo-100">已选 {selected.size} 篇</span>
@@ -372,9 +392,9 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   onClick={() => moveSelectedTo(INHERIT)}
                   className="rounded border border-slate-600 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700"
                 >
-                  跟随模型
+                  跟随作者匹配
                 </button>
-                {catNames.map(n => (
+                {teamNames.map(n => (
                   <button
                     key={n}
                     onClick={() => moveSelectedTo(n)}
@@ -383,18 +403,15 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                     {n}
                   </button>
                 ))}
-                <button
-                  onClick={() => setSelected(new Set())}
-                  className="ml-auto text-[11px] text-slate-500 hover:text-slate-300"
-                >
+                <button onClick={() => setSelected(new Set())} className="ml-auto text-[11px] text-slate-500 hover:text-slate-300">
                   取消选择
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-2 text-[11px] text-slate-500">
-                <span>共 {papers.length} 篇 · 点大类展开，选中论文后移动</span>
+                <span>共 {papers.length} 篇 · 点团队展开，选中论文后移动</span>
                 <button
-                  onClick={() => setExpanded(allExpanded ? new Set() : new Set(catNames))}
+                  onClick={() => setExpanded(allExpanded ? new Set() : new Set(laneNames))}
                   className="ml-auto rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
                 >
                   {allExpanded ? '全部收起' : '全部展开'}
@@ -403,11 +420,11 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
             )}
 
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
-              {catNames.map(name => {
+              {laneNames.map(name => {
                 const lanePapers = grouped.get(name) || []
                 const isOpen = expanded.has(name)
                 return (
-                  <div key={name} id={`lane-${name}`} className="mb-0.5">
+                  <div key={name} id={`team-lane-${name}`} className="mb-0.5">
                     <button
                       onClick={() => toggleExpand(name)}
                       className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-slate-800/40"
@@ -417,7 +434,9 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                       ) : (
                         <ChevronRight size={14} className="shrink-0 text-slate-500" />
                       )}
-                      <span className="text-[13px] font-semibold text-slate-100">{name}</span>
+                      <span className={`text-[13px] font-semibold ${name === OTHERS ? 'text-slate-400' : 'text-slate-100'}`}>
+                        {laneLabel(name)}
+                      </span>
                       <span className="tabular-nums text-[11px] text-slate-500">{lanePapers.length}</span>
                     </button>
                     {isOpen && (
@@ -441,17 +460,13 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                               >
                                 <span
                                   className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border text-[8px] ${
-                                    isSel
-                                      ? 'border-indigo-300 bg-indigo-400 text-white'
-                                      : 'border-slate-600 text-transparent'
+                                    isSel ? 'border-indigo-300 bg-indigo-400 text-white' : 'border-slate-600 text-transparent'
                                   }`}
                                 >
                                   <Check size={9} />
                                 </span>
                                 <span className="truncate">{p.title || '(无标题)'}</span>
-                                {changed && (
-                                  <span className="ml-auto shrink-0 text-[10px] text-indigo-300">● 未保存</span>
-                                )}
+                                {changed && <span className="ml-auto shrink-0 text-[10px] text-indigo-300">● 未保存</span>}
                               </button>
                             )
                           })

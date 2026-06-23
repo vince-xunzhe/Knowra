@@ -8,9 +8,12 @@
  * does not (the data isn't moving fast enough to justify the latency).
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 
 import { cloudSnapshot, type SnapshotResponse } from '../api/cloud'
 import { useAuth } from './AuthContext'
+
+const SNAP_CACHE_KEY = 'knowra.snapshot.cache'
 
 interface SnapshotState {
   loading: boolean
@@ -36,7 +39,9 @@ export function SnapshotProvider({ children }: { children: React.ReactNode }) {
     setState(s => ({ ...s, loading: true, error: null }))
     try {
       const data = await cloudSnapshot()
-      setState({ loading: false, data, error: null, fetchedAt: Date.now() })
+      const ts = Date.now()
+      setState({ loading: false, data, error: null, fetchedAt: ts })
+      AsyncStorage.setItem(SNAP_CACHE_KEY, JSON.stringify({ data, ts })).catch(() => {})
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       setState(s => ({ ...s, loading: false, error: message }))
@@ -44,14 +49,34 @@ export function SnapshotProvider({ children }: { children: React.ReactNode }) {
   }, [auth.user])
 
   // Auto-fetch when user logs in.
+  // Paint the last cached snapshot immediately on login (so the app isn't blank
+  // while the network fetch runs), then revalidate in the background.
   useEffect(() => {
-    if (auth.user && state.data === null && !state.loading) {
-      void refresh()
+    let cancelled = false
+    if (auth.user && state.data === null) {
+      AsyncStorage.getItem(SNAP_CACHE_KEY)
+        .then(raw => {
+          if (cancelled || !raw) return
+          try {
+            const parsed = JSON.parse(raw) as { data?: SnapshotResponse; ts?: number }
+            if (parsed?.data) {
+              setState(s => (s.data ? s : { ...s, data: parsed.data ?? null, fetchedAt: parsed.ts ?? null }))
+            }
+          } catch {
+            /* corrupt cache — ignore */
+          }
+        })
+        .catch(() => {})
+      if (!state.loading) void refresh()
     }
-    // Clear cached data on logout so the next user doesn't see the
+    // Clear cached data + storage on logout so the next user doesn't see the
     // previous account's snapshot.
     if (!auth.user && state.data !== null) {
       setState({ loading: false, data: null, error: null, fetchedAt: null })
+      AsyncStorage.removeItem(SNAP_CACHE_KEY).catch(() => {})
+    }
+    return () => {
+      cancelled = true
     }
   }, [auth.user, state.data, state.loading, refresh])
 

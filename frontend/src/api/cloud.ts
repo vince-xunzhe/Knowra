@@ -55,6 +55,21 @@ export interface CloudConfig {
   baseUrl: string
 }
 
+/**
+ * Baked-in production cloud config. PUBLIC values — the Supabase project URL,
+ * its anon/publishable key, and the Fly backend URL — safe to ship: per-user
+ * isolation is enforced by Supabase RLS + each user's own login, NOT by hiding
+ * these (same model as Firebase's apiKey). Means a fresh install can sign in
+ * with no setup. Precedence: localStorage override → Vite env (.env.local for
+ * dev) → these defaults.
+ */
+export const CLOUD_DEFAULTS: CloudConfig = {
+  supabaseUrl: 'https://umflsxjvndppadtnfxke.supabase.co',
+  supabaseAnonKey:
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVtZmxzeGp2bmRwcGFkdG5meGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDkwMDEsImV4cCI6MjA5NTk4NTAwMX0.hClTx8Zt7nFCIMw62b710zx-uaFKcDHdfAkyw45pFJM',
+  baseUrl: 'https://knowra-cloud.fly.dev',
+}
+
 export function getCloudConfig(): CloudConfig {
   // Vite injects literal env vars at build time via `import.meta.env`.
   // We *read* from it, never assign — assigning trips Vite's HMR
@@ -63,9 +78,9 @@ export function getCloudConfig(): CloudConfig {
   // Hence the indirect Record cast rather than the obvious pattern.
   const env = import.meta.env as unknown as Record<string, string | undefined>
   return {
-    supabaseUrl: readLs(LS_KEYS.supabaseUrl) || env.VITE_SUPABASE_URL || '',
-    supabaseAnonKey: readLs(LS_KEYS.supabaseAnonKey) || env.VITE_SUPABASE_ANON_KEY || '',
-    baseUrl: readLs(LS_KEYS.baseUrl) || env.VITE_KNOWRA_CLOUD_BASE_URL || '',
+    supabaseUrl: readLs(LS_KEYS.supabaseUrl) || env.VITE_SUPABASE_URL || CLOUD_DEFAULTS.supabaseUrl,
+    supabaseAnonKey: readLs(LS_KEYS.supabaseAnonKey) || env.VITE_SUPABASE_ANON_KEY || CLOUD_DEFAULTS.supabaseAnonKey,
+    baseUrl: readLs(LS_KEYS.baseUrl) || env.VITE_KNOWRA_CLOUD_BASE_URL || CLOUD_DEFAULTS.baseUrl,
   }
 }
 
@@ -318,6 +333,8 @@ export interface PaperRow {
   extraction_model?: string | null
   paper_category_model?: string | null
   paper_category_override?: string | null
+  paper_team_model?: string | null
+  paper_team_override?: string | null
   raw_llm_response?: string | null
   notes?: string | null
   error?: string | null
@@ -553,6 +570,74 @@ export const cloudMe = () =>
     () => cloudClient().get<MeResponse>('/api/cloud/me').then(r => r.data),
     { label: 'me' },
   )
+
+// ── recommendations (arXiv feed) ────────────────────────────────────────
+
+export interface RecTag {
+  name: string
+}
+
+export interface RecItem {
+  id: string
+  tag: string
+  arxiv_id: string
+  title: string
+  authors: string[]
+  abstract: string | null
+  summary: string | null
+  pdf_url: string | null
+  primary_category: string | null
+  published: string | null
+  created_at: string | null
+}
+
+export interface RecommendationsResponse {
+  tags: RecTag[]
+  items: RecItem[]
+  days: number
+}
+
+export const cloudRecommendations = (days = 7) =>
+  withRetry(
+    () =>
+      cloudClient()
+        .get<RecommendationsResponse>('/api/cloud/recommendations', { params: { days } })
+        .then(r => r.data),
+    { label: 'recommendations' },
+  )
+
+export const cloudRecTags = () =>
+  withRetry(
+    () => cloudClient().get<{ tags: RecTag[] }>('/api/cloud/rec-tags').then(r => r.data.tags),
+    { label: 'rec-tags' },
+  )
+
+export const cloudRefreshRecommendations = () =>
+  cloudClient()
+    .post<{ added: number; pruned: number; tags: string[] }>('/api/cloud/recommendations/refresh')
+    .then(r => r.data)
+
+/** Push a desktop-generated summary up so mobile (no local model) can show it. */
+export const cloudPushRecSummary = (arxivId: string, summary: string) =>
+  cloudClient()
+    .post<{ updated: number }>('/api/cloud/recommendations/summary', { arxiv_id: arxivId, summary })
+    .then(r => r.data)
+
+/** arXiv ids the user has saved/收藏 (synced across mobile + desktop). */
+export const cloudRecMarks = () =>
+  cloudClient()
+    .get<{ arxiv_ids: string[] }>('/api/cloud/rec-marks')
+    .then(r => r.data.arxiv_ids)
+
+export const cloudAddRecMark = (arxivId: string) =>
+  cloudClient()
+    .post<{ marked: boolean }>('/api/cloud/rec-marks', { arxiv_id: arxivId })
+    .then(r => r.data)
+
+export const cloudRemoveRecMark = (arxivId: string) =>
+  cloudClient()
+    .delete<{ marked: boolean }>(`/api/cloud/rec-marks/${encodeURIComponent(arxivId)}`)
+    .then(r => r.data)
 
 /** Wake the cloud machine and wait until it's serving before a sync.
  *  With min_machines_running=1 this is normally instant, but if the

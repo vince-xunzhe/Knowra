@@ -14,6 +14,7 @@
 import { useState, type FormEvent } from 'react'
 import {
   CloudCog, LogIn, LogOut, UserCircle2, KeyRound, Globe, Mail, RefreshCw,
+  ChevronDown, ChevronRight,
 } from 'lucide-react'
 
 import { useCloudAuth } from '../hooks/useCloudAuth'
@@ -27,6 +28,7 @@ export default function CloudSyncSection() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [info, setInfo] = useState<string | null>(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -57,46 +59,58 @@ export default function CloudSyncSection() {
 
   return (
     <div className="space-y-5">
-      {/* Configuration */}
+      {/* Configuration — defaults are baked in; this is an optional override */}
       <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4 space-y-4">
         <div className="flex items-start gap-2">
           <CloudCog size={16} className="text-indigo-300 mt-0.5 shrink-0" />
           <div className="min-w-0">
             <p className="text-base font-semibold text-slate-100">云端连接</p>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              桌面端把抽取结果同步到云后端，移动端只读消费。PDF 仍只留本机；OpenAI key 也只在本机使用，不上传。
+              默认已连接到 Knowra 云端，直接登录即可。桌面端把抽取结果同步到云后端，移动端只读消费；PDF 仍只留本机，OpenAI key 也只在本机使用、不上传。
             </p>
           </div>
         </div>
 
-        <FieldRow
-          icon={<Globe size={14} />}
-          label="Supabase URL"
-          hint="形如 https://abcde12345.supabase.co"
-          value={auth.config.supabaseUrl}
-          placeholder="https://xxxxx.supabase.co"
-          onChange={v => auth.updateConfig({ supabaseUrl: v })}
-        />
-        <FieldRow
-          icon={<KeyRound size={14} />}
-          label="Supabase anon key"
-          hint="Settings → API → Project API keys → anon public（不是 service_role）"
-          value={auth.config.supabaseAnonKey}
-          placeholder="eyJ..."
-          type="password"
-          onChange={v => auth.updateConfig({ supabaseAnonKey: v })}
-        />
-        <FieldRow
-          icon={<CloudCog size={14} />}
-          label="云后端 URL"
-          hint="部署在 Fly.io 等的 FastAPI cloud；不含末尾斜杠。"
-          value={auth.config.baseUrl}
-          placeholder="https://knowra-cloud.fly.dev"
-          onChange={v => auth.updateConfig({ baseUrl: v })}
-        />
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(v => !v)}
+          className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors"
+        >
+          {showAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          高级：自定义云端连接（自建后端时才需要）
+        </button>
 
-        {!auth.configured && (
-          <p className="text-xs text-amber-300/90">三项都填好后才能登录与同步。</p>
+        {showAdvanced && (
+          <div className="space-y-4 pt-1">
+            <FieldRow
+              icon={<Globe size={14} />}
+              label="Supabase URL"
+              hint="留空即用内置默认值"
+              value={auth.config.supabaseUrl}
+              placeholder="https://xxxxx.supabase.co"
+              onChange={v => auth.updateConfig({ supabaseUrl: v })}
+            />
+            <FieldRow
+              icon={<KeyRound size={14} />}
+              label="Supabase anon key"
+              hint="Settings → API → Project API keys → anon public（不是 service_role）"
+              value={auth.config.supabaseAnonKey}
+              placeholder="eyJ..."
+              type="password"
+              onChange={v => auth.updateConfig({ supabaseAnonKey: v })}
+            />
+            <FieldRow
+              icon={<CloudCog size={14} />}
+              label="云后端 URL"
+              hint="部署在 Fly.io 等的 FastAPI cloud；不含末尾斜杠。"
+              value={auth.config.baseUrl}
+              placeholder="https://knowra-cloud.fly.dev"
+              onChange={v => auth.updateConfig({ baseUrl: v })}
+            />
+            {!auth.configured && (
+              <p className="text-xs text-amber-300/90">三项都填好后才能登录与同步。</p>
+            )}
+          </div>
         )}
       </div>
 

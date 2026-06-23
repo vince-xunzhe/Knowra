@@ -44,6 +44,18 @@ from services.paper_category_service import (
     sync_paper_category_fields,
     normalize_paper_category,
 )
+from services.paper_team_service import (
+    TEAM_OTHER,
+    DEFAULT_TEAMS,
+    derive_model_paper_team,
+    effective_paper_team,
+    get_active_teams,
+    get_active_team_names,
+    set_active_teams,
+    paper_team_source,
+    sync_paper_team_fields,
+    normalize_team,
+)
 from services.paper_record_service import (
     record_path_for_paper,
     record_relpath_for_paper,
@@ -103,6 +115,8 @@ def _hydrate_paper_metadata_from_raw(p: Paper) -> bool:
         p.authors = parsed_authors
         changed = True
     if sync_paper_category_fields(p, parsed):
+        changed = True
+    if sync_paper_team_fields(p, parsed):
         changed = True
     return changed
 
@@ -279,6 +293,10 @@ class CategoryUpdate(BaseModel):
     category: Optional[str] = None
 
 
+class TeamUpdate(BaseModel):
+    team: Optional[str] = None
+
+
 class ChatMessageInput(BaseModel):
     message: str
 
@@ -338,6 +356,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         and resolve_artifact_path(p.first_page_image_path).exists()
     )
     category = effective_paper_category(p, _safe_parse(p.raw_llm_response))
+    team = effective_paper_team(p, _safe_parse(p.raw_llm_response))
     return {
         "id": p.id,
         "filename": p.filename,
@@ -358,6 +377,10 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "paper_category_model": normalize_paper_category(p.paper_category_model),
         "paper_category_override": normalize_paper_category(p.paper_category_override),
         "paper_category_source": paper_category_source(p),
+        "paper_team": team,
+        "paper_team_model": normalize_team(p.paper_team_model),
+        "paper_team_override": normalize_team(p.paper_team_override),
+        "paper_team_source": paper_team_source(p),
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
@@ -490,6 +513,10 @@ def list_papers(db: Session = Depends(get_db)):
             "paper_category_model": normalize_paper_category(p.paper_category_model),
             "paper_category_override": normalize_paper_category(p.paper_category_override),
             "paper_category_source": paper_category_source(p),
+            "paper_team": effective_paper_team(p, _safe_parse(p.raw_llm_response)),
+            "paper_team_model": normalize_team(p.paper_team_model),
+            "paper_team_override": normalize_team(p.paper_team_override),
+            "paper_team_source": paper_team_source(p),
             "year": _paper_pub_year(p),
             "error": p.error,
             "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -749,6 +776,7 @@ def _process_single(paper_id: str):
                 p.title = (extraction.get("title") or p.filename)[:200]
                 p.authors = extraction.get("authors") or []
                 p.paper_category_model = derive_model_paper_category(p, extraction)
+                p.paper_team_model = derive_model_paper_team(p, extraction)
 
                 add_nodes_from_paper_extraction(
                     extraction,
@@ -891,6 +919,7 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.raw_llm_response = None
     p.extraction_model = None
     p.paper_category_model = None
+    p.paper_team_model = None
     p.error = None
     # Drop cached OpenAI handles so reprocess re-uploads the PDF and opens a
     # fresh thread. Reusing a stale file_id against a new per-thread vector
@@ -1041,6 +1070,7 @@ def update_paper_response(
     p.title = (extraction.get("title") or p.filename)[:200]
     p.authors = extraction.get("authors") or []
     sync_paper_category_fields(p, extraction, overwrite_model=True)
+    sync_paper_team_fields(p, extraction, overwrite_model=True)
     if body.rebuild_graph:
         # A full repair re-marks the paper as freshly processed.
         p.processed = True
@@ -1276,6 +1306,301 @@ def bulk_set_paper_category(body: BulkCategoryInput, db: Session = Depends(get_d
     for p in touched:
         sync_record_from_paper(p, event="bulk_category")
     return {"updated": updated, "category": normalized}
+
+
+# ── team override (per paper) ──────────────────────────────────────────
+
+
+@router.put("/papers/{paper_id}/team")
+def update_paper_team(paper_id: str, body: TeamUpdate, db: Session = Depends(get_db)):
+    """Save or clear a human override for the paper's team."""
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    _sync_paper_from_record_if_needed(db, p)
+
+    raw_value = (body.team or "").strip()
+    if raw_value and raw_value.lower() != TEAM_OTHER:
+        normalized = normalize_team(raw_value)
+        if not normalized:
+            raise HTTPException(
+                status_code=400,
+                detail=f"非法团队：{raw_value}。允许值：{', '.join(get_active_team_names())}",
+            )
+        p.paper_team_override = normalized
+    else:
+        p.paper_team_override = None
+
+    db.commit()
+    sync_record_from_paper(p, event="team_override_update")
+    db.refresh(p)
+    return _serialize_paper_detail(p, db)
+
+
+# ── paper-team registry management ─────────────────────────────────────
+#
+# Teams differ from categories: each carries a core-author list that drives
+# auto-assignment. Editing a team's authors re-derives existing papers, so the
+# mutating endpoints all call _recompute_team_models afterwards.
+
+
+class TeamInput(BaseModel):
+    name: str
+    authors: Optional[list] = None
+
+
+class TeamRenameInput(BaseModel):
+    new_name: Optional[str] = None
+    authors: Optional[list] = None
+
+
+class BulkTeamInput(BaseModel):
+    paper_ids: list
+    team: Optional[str] = None
+
+
+def _recompute_team_models(db: Session) -> int:
+    """Re-derive every paper's model-assigned team from its authors against the
+    current registry. Used after the team list / authors change."""
+    changed = 0
+    touched: list = []
+    for p in db.query(Paper).all():
+        if sync_paper_team_fields(p, _safe_parse(p.raw_llm_response), overwrite_model=True):
+            changed += 1
+            touched.append(p)
+    if touched:
+        db.commit()
+        for p in touched:
+            sync_record_from_paper(p, event="team_recompute")
+    return changed
+
+
+def _team_payload(db: Session) -> dict:
+    teams = get_active_teams()
+    counts: dict = {t["name"]: 0 for t in teams}
+    counts[TEAM_OTHER] = 0
+    for p in db.query(Paper).all():
+        t = effective_paper_team(p, _safe_parse(p.raw_llm_response))
+        counts[t] = counts.get(t, 0) + 1
+    seed_names = {t["name"] for t in DEFAULT_TEAMS}
+    return {
+        "teams": [
+            {
+                "name": t["name"],
+                "authors": list(t.get("authors") or []),
+                "builtin": t["name"] in seed_names,
+                "count": counts.get(t["name"], 0),
+            }
+            for t in teams
+        ],
+        "others_count": counts.get(TEAM_OTHER, 0),
+    }
+
+
+@router.get("/paper-teams")
+def list_paper_teams(db: Session = Depends(get_db)):
+    return _team_payload(db)
+
+
+@router.post("/paper-teams")
+def add_paper_team(body: TeamInput, db: Session = Depends(get_db)):
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="团队名不能为空")
+    if name.lower() == TEAM_OTHER:
+        raise HTTPException(status_code=400, detail="“others”是保留团队")
+    teams = get_active_teams()
+    if any(t["name"] == name for t in teams):
+        raise HTTPException(status_code=400, detail=f"团队已存在：{name}")
+    set_active_teams(teams + [{"name": name, "authors": body.authors or []}])
+    _recompute_team_models(db)  # new team may match existing papers
+    return _team_payload(db)
+
+
+@router.put("/paper-teams/{name}")
+def rename_paper_team(name: str, body: TeamRenameInput, db: Session = Depends(get_db)):
+    teams = get_active_teams()
+    target = next((t for t in teams if t["name"] == name), None)
+    if not target:
+        raise HTTPException(status_code=404, detail=f"团队不存在：{name}")
+    new_name = (body.new_name or name).strip() or name
+    if new_name.lower() == TEAM_OTHER:
+        raise HTTPException(status_code=400, detail="“others”是保留团队")
+    if new_name != name and any(t["name"] == new_name for t in teams):
+        raise HTTPException(status_code=400, detail=f"目标团队已存在：{new_name}")
+
+    new_authors = target.get("authors") if body.authors is None else body.authors
+    set_active_teams([
+        {
+            "name": new_name if t["name"] == name else t["name"],
+            "authors": new_authors if t["name"] == name else t.get("authors"),
+        }
+        for t in teams
+    ])
+    # Carry a rename through stored override/model values.
+    if new_name != name:
+        for p in db.query(Paper).all():
+            if (p.paper_team_override or "") == name:
+                p.paper_team_override = new_name
+            if (p.paper_team_model or "") == name:
+                p.paper_team_model = new_name
+        db.commit()
+    _recompute_team_models(db)  # author edits change who matches
+    return _team_payload(db)
+
+
+@router.delete("/paper-teams/{name}")
+def delete_paper_team(name: str, db: Session = Depends(get_db)):
+    teams = get_active_teams()
+    if not any(t["name"] == name for t in teams):
+        raise HTTPException(status_code=404, detail=f"团队不存在：{name}")
+    set_active_teams([t for t in teams if t["name"] != name])
+    for p in db.query(Paper).all():
+        if (p.paper_team_override or "") == name:
+            p.paper_team_override = None
+        if (p.paper_team_model or "") == name:
+            p.paper_team_model = None
+    db.commit()
+    _recompute_team_models(db)
+    return _team_payload(db)
+
+
+@router.post("/paper-teams/recompute")
+def recompute_paper_teams(db: Session = Depends(get_db)):
+    changed = _recompute_team_models(db)
+    return {**_team_payload(db), "recomputed": changed}
+
+
+@router.post("/papers/bulk-team")
+def bulk_set_paper_team(body: BulkTeamInput, db: Session = Depends(get_db)):
+    ids = [str(x) for x in (body.paper_ids or []) if str(x).strip()]
+    if not ids:
+        return {"updated": 0, "team": None}
+    raw = (body.team or "").strip()
+    normalized = None
+    if raw and raw.lower() != TEAM_OTHER:
+        normalized = normalize_team(raw)
+        if not normalized:
+            raise HTTPException(
+                status_code=400,
+                detail=f"非法团队：{raw}。允许值：{', '.join(get_active_team_names())}",
+            )
+    updated = 0
+    touched: list = []
+    for p in db.query(Paper).filter(Paper.id.in_(ids)).all():
+        p.paper_team_override = normalized  # None ⇒ follow model
+        updated += 1
+        touched.append(p)
+    db.commit()
+    for p in touched:
+        sync_record_from_paper(p, event="bulk_team")
+    return {"updated": updated, "team": normalized}
+
+
+# ── recommendations: download an arXiv PDF into the local papers dir ───
+
+
+class RecDownloadInput(BaseModel):
+    arxiv_id: str
+    pdf_url: Optional[str] = None
+    title: Optional[str] = None
+
+
+@router.post("/recommendations/download")
+def download_recommendation(body: RecDownloadInput, db: Session = Depends(get_db)):
+    """Fetch a recommended arXiv PDF into the local papers directory (PDFs only
+    ever land locally). Dedups by arXiv base id against files already on disk;
+    the user's next 扫描目录 ingests it into the normal pipeline."""
+    import urllib.request
+    from path_utils import PAPERS_DIR, resolve_papers_directory
+    from services.scanner_service import _arxiv_base_id
+
+    arxiv_id = (body.arxiv_id or "").strip()
+    if not arxiv_id:
+        raise HTTPException(status_code=400, detail="缺少 arxiv_id")
+    base = _arxiv_base_id(arxiv_id) or arxiv_id
+
+    cfg = load_config()
+    papers_dir = resolve_papers_directory(cfg.get("scan_directory") or str(PAPERS_DIR))
+    papers_dir.mkdir(parents=True, exist_ok=True)
+
+    # Dedup against PDFs already present (same arXiv base id, any version).
+    for existing in papers_dir.glob("*.pdf"):
+        if _arxiv_base_id(existing.name) == base:
+            return {"status": "duplicate", "filename": existing.name, "arxiv_id": base}
+
+    url = (body.pdf_url or f"https://arxiv.org/pdf/{arxiv_id}").strip()
+    if not url.startswith("https://"):
+        raise HTTPException(status_code=400, detail="非法 PDF URL")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Knowra/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310
+            data = resp.read()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"下载失败：{e}")
+    if not data.startswith(b"%PDF"):
+        raise HTTPException(status_code=502, detail="下载内容不是 PDF")
+
+    dest = papers_dir / f"arxiv_{base.replace('/', '_')}.pdf"
+    dest.write_bytes(data)
+    return {"status": "downloaded", "filename": dest.name, "arxiv_id": base, "bytes": len(data)}
+
+
+class RecSummaryInput(BaseModel):
+    arxiv_id: str
+    title: Optional[str] = None
+    abstract: Optional[str] = None
+
+
+@router.post("/recommendations/summarize")
+def summarize_recommendation(body: RecSummaryInput, db: Session = Depends(get_db)):
+    """Condense a recommended paper's abstract with the user's LOCAL model
+    (request-scoped key, never uploaded). Cached by arXiv base id so each paper
+    is summarized only once."""
+    from models import RecSummary
+    from services.scanner_service import _arxiv_base_id
+    from model_gateway import call_text_model
+
+    arxiv_id = (body.arxiv_id or "").strip()
+    if not arxiv_id:
+        raise HTTPException(status_code=400, detail="缺少 arxiv_id")
+    key = _arxiv_base_id(arxiv_id) or arxiv_id
+
+    cached = db.query(RecSummary).filter(RecSummary.arxiv_id == key).first()
+    if cached:
+        return {"summary": cached.summary, "cached": True}
+
+    abstract = (body.abstract or "").strip()
+    if not abstract:
+        raise HTTPException(status_code=400, detail="缺少摘要内容")
+
+    cfg = load_config()
+    model_id = task_model_name(cfg, "wiki_compile")
+    system = (
+        "你是一名严谨的科研助理。把给定论文的英文摘要浓缩成 2–3 句中文要点，"
+        "突出：要解决的问题、核心方法、关键结果或贡献。只输出要点本身，不要客套或复述标题。"
+    )
+    user = f"标题：{body.title or ''}\n\n摘要：{abstract}"
+    try:
+        summary = call_text_model(
+            cfg,
+            model_id=model_id,
+            system=system,
+            user=user,
+            max_tokens=320,
+            # Condensing one abstract is a light task — force low reasoning so
+            # it stays fast even when the main model is a slow reasoning model
+            # (e.g. local Codex gpt-5.x).
+            reasoning_effort="low",
+        ).strip()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"总结失败：{e}")
+    if not summary:
+        raise HTTPException(status_code=502, detail="模型未返回内容")
+
+    db.add(RecSummary(arxiv_id=key, summary=summary, model=model_id))
+    db.commit()
+    return {"summary": summary, "cached": False, "model": model_id}
 
 
 @router.get("/papers/{paper_id}/chat")

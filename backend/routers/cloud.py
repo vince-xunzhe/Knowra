@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from auth_deps import current_user
 from cloud_models import (
@@ -243,6 +244,8 @@ def snapshot(
                 extraction_model=r.extraction_model,
                 paper_category_model=r.paper_category_model,
                 paper_category_override=r.paper_category_override,
+                paper_team_model=r.paper_team_model,
+                paper_team_override=r.paper_team_override,
                 raw_llm_response=r.raw_llm_response,
                 notes=r.notes,
                 error=r.error,
@@ -423,3 +426,151 @@ def ask(
         tokens=result["tokens"],
         model=result["model"],
     )
+
+
+# ── recommendations (arXiv feed; global, read-only for clients) ───────
+
+
+@router.get("/rec-tags")
+def rec_tags_endpoint(user: AuthenticatedUser = Depends(current_user)):
+    """The system-maintained tag list the user can follow on the 推荐 page."""
+    from services.recommend_service import rec_tags
+
+    return {"tags": rec_tags()}
+
+
+@router.get("/recommendations")
+def recommendations_endpoint(
+    days: int = 7,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Recommendations from the last ``days`` (capped at the retention window),
+    newest paper first. The client groups by tag and filters to followed tags."""
+    from datetime import datetime, timedelta, timezone
+
+    from cloud_models import Recommendation
+    from services.recommend_service import rec_tags, RETENTION_DAYS
+
+    days = max(1, min(int(days or RETENTION_DAYS), RETENTION_DAYS))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    rows = (
+        db.query(Recommendation).filter(Recommendation.created_at >= cutoff).all()
+    )
+
+    def _key(r):
+        try:
+            return r.published.timestamp() if r.published else 0.0
+        except Exception:
+            return 0.0
+
+    rows.sort(key=_key, reverse=True)
+    items = [
+        {
+            "id": r.id,
+            "tag": r.tag,
+            "arxiv_id": r.arxiv_id,
+            "title": r.title,
+            "authors": r.authors or [],
+            "abstract": r.abstract,
+            "summary": r.summary,
+            "pdf_url": r.pdf_url,
+            "primary_category": r.primary_category,
+            "published": r.published.isoformat() if r.published else None,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+        for r in rows
+    ]
+    return {"tags": rec_tags(), "items": items, "days": days}
+
+
+@router.post("/recommendations/refresh")
+def recommendations_refresh(
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Force an arXiv search now (ignores the Mon/Wed/Fri schedule)."""
+    from services.recommend_service import run_search
+
+    return run_search(db, force=True)
+
+
+class RecSummaryPush(BaseModel):
+    arxiv_id: str
+    summary: str
+
+
+@router.post("/recommendations/summary")
+def push_recommendation_summary(
+    body: RecSummaryPush,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """Store a desktop-generated summary on the recommendation rows for this
+    arXiv id, so mobile (no local model) can display it. Updates every tag's
+    row for that paper."""
+    from cloud_models import Recommendation
+
+    aid = (body.arxiv_id or "").strip()
+    summary = (body.summary or "").strip()
+    if not aid or not summary:
+        raise _err(400, "bad_request", "缺少 arxiv_id 或 summary")
+    rows = db.query(Recommendation).filter(Recommendation.arxiv_id == aid).all()
+    for r in rows:
+        r.summary = summary
+    db.commit()
+    return {"updated": len(rows)}
+
+
+class RecMarkInput(BaseModel):
+    arxiv_id: str
+
+
+@router.get("/rec-marks")
+def list_rec_marks(
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    """arXiv ids the current user has saved/收藏 — synced across mobile/desktop."""
+    from cloud_models import RecMark
+
+    rows = db.query(RecMark).filter(RecMark.user_id == user.user_id).all()
+    return {"arxiv_ids": [r.arxiv_id for r in rows]}
+
+
+@router.post("/rec-marks")
+def add_rec_mark(
+    body: RecMarkInput,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    from cloud_models import RecMark
+
+    aid = (body.arxiv_id or "").strip()
+    if not aid:
+        raise _err(400, "bad_request", "缺少 arxiv_id")
+    existing = (
+        db.query(RecMark)
+        .filter(RecMark.user_id == user.user_id, RecMark.arxiv_id == aid)
+        .first()
+    )
+    if not existing:
+        db.add(RecMark(user_id=user.user_id, arxiv_id=aid))
+        db.commit()
+    return {"marked": True, "arxiv_id": aid}
+
+
+@router.delete("/rec-marks/{arxiv_id}")
+def remove_rec_mark(
+    arxiv_id: str,
+    db: Session = Depends(get_cloud_db),
+    user: AuthenticatedUser = Depends(current_user),
+):
+    from cloud_models import RecMark
+
+    db.query(RecMark).filter(
+        RecMark.user_id == user.user_id,
+        RecMark.arxiv_id == (arxiv_id or "").strip(),
+    ).delete()
+    db.commit()
+    return {"marked": False, "arxiv_id": arxiv_id}

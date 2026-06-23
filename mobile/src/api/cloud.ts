@@ -31,6 +31,21 @@ export interface CloudConfig {
   baseUrl: string
 }
 
+/**
+ * Baked-in production cloud config. These are PUBLIC values — the Supabase
+ * project URL, its anon/publishable key, and the Fly backend URL — and are
+ * safe to ship in the app bundle: per-user isolation is enforced by Supabase
+ * RLS + each user's own login, NOT by hiding these (same model as Firebase's
+ * apiKey). A fresh install therefore works with login only — no setup screen.
+ * Power users / self-hosters can override any field in Settings → 高级.
+ */
+export const CLOUD_DEFAULTS: CloudConfig = {
+  supabaseUrl: 'https://umflsxjvndppadtnfxke.supabase.co',
+  supabaseAnonKey:
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVtZmxzeGp2bmRwcGFkdG5meGtlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0MDkwMDEsImV4cCI6MjA5NTk4NTAwMX0.hClTx8Zt7nFCIMw62b710zx-uaFKcDHdfAkyw45pFJM',
+  baseUrl: 'https://knowra-cloud.fly.dev',
+}
+
 export interface CloudUser {
   id: string
   email: string | null
@@ -52,10 +67,29 @@ export async function getCloudConfig(): Promise<CloudConfig> {
     AsyncStorage.getItem(LS.supabaseAnonKey),
     AsyncStorage.getItem(LS.baseUrl),
   ])
+  // Effective config: an explicit user override (AsyncStorage) wins per-field;
+  // otherwise fall back to the baked-in CLOUD_DEFAULTS so a fresh install works
+  // with login only.
+  return {
+    supabaseUrl: (url ?? '').trim() || CLOUD_DEFAULTS.supabaseUrl,
+    supabaseAnonKey: (key ?? '').trim() || CLOUD_DEFAULTS.supabaseAnonKey,
+    baseUrl: ((base ?? '').trim() || CLOUD_DEFAULTS.baseUrl).replace(/\/+$/, ''),
+  }
+}
+
+/** Raw user overrides only (empty string = not set → the effective value comes
+ *  from CLOUD_DEFAULTS). The Settings UI reads this so a blank field means
+ *  "use the built-in default" rather than showing the default as if typed. */
+export async function getCloudConfigOverride(): Promise<CloudConfig> {
+  const [url, key, base] = await Promise.all([
+    AsyncStorage.getItem(LS.supabaseUrl),
+    AsyncStorage.getItem(LS.supabaseAnonKey),
+    AsyncStorage.getItem(LS.baseUrl),
+  ])
   return {
     supabaseUrl: (url ?? '').trim(),
     supabaseAnonKey: (key ?? '').trim(),
-    baseUrl: (base ?? '').trim().replace(/\/+$/, ''),
+    baseUrl: (base ?? '').trim(),
   }
 }
 
@@ -289,6 +323,8 @@ export interface PaperRow {
   processed_at?: string | null
   paper_category_model?: string | null
   paper_category_override?: string | null
+  paper_team_model?: string | null
+  paper_team_override?: string | null
   raw_llm_response?: string | null
   notes?: string | null
   updated_at?: string | null
@@ -438,4 +474,54 @@ export async function cloudAsk(
     { timeout: 600000 },
   )
   return data
+}
+
+// ── recommendations (read + 收藏 marks) ────────────────────────────────
+
+export interface RecTag {
+  name: string
+}
+
+export interface RecItem {
+  id: string
+  tag: string
+  arxiv_id: string
+  title: string
+  authors: string[]
+  abstract: string | null
+  summary: string | null // desktop-generated; mobile shows it if present
+  pdf_url: string | null
+  primary_category: string | null
+  published: string | null
+  created_at: string | null
+}
+
+export interface RecommendationsResponse {
+  tags: RecTag[]
+  items: RecItem[]
+  days: number
+}
+
+export async function cloudRecommendations(days = 7): Promise<RecommendationsResponse> {
+  const c = await cloudClient()
+  const { data } = await c.get<RecommendationsResponse>('/api/cloud/recommendations', {
+    params: { days },
+  })
+  return data
+}
+
+export async function cloudRecMarks(): Promise<string[]> {
+  const c = await cloudClient()
+  const { data } = await c.get<{ arxiv_ids: string[] }>('/api/cloud/rec-marks')
+  return data.arxiv_ids
+}
+
+export async function cloudAddRecMark(arxivId: string): Promise<void> {
+  const c = await cloudClient()
+  await c.post('/api/cloud/rec-marks', { arxiv_id: arxivId })
+}
+
+export async function cloudRemoveRecMark(arxivId: string): Promise<void> {
+  const c = await cloudClient()
+  await c.delete(`/api/cloud/rec-marks/${encodeURIComponent(arxivId)}`)
 }

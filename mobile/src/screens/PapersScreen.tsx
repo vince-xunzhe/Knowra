@@ -8,55 +8,17 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useSnapshot } from '../contexts/SnapshotContext'
 import type { RootStackParamList } from '../navigation/types'
 import type { PaperRow } from '../api/cloud'
+import { categoryOf, categoryRank, teamOf, teamRank, paperYear } from '../lib/paperMeta'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PapersList'>
 
-// Same lane order as the desktop 编译图谱
-// (backend paper_category_service.PAPER_CATEGORY_OPTIONS).
-const CATEGORY_ORDER = [
-  'LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他',
-]
-
-function categoryOf(p: PaperRow): string {
-  // Mirror backend effective_paper_category precedence:
-  // human override → model prediction → raw extraction → 其他.
-  const override = p.paper_category_override as string | undefined
-  const model = p.paper_category_model as string | undefined
-  if (override) return override
-  if (model) return model
-  const raw = p.raw_llm_response as string | undefined
-  if (raw) {
-    try {
-      const c = (JSON.parse(raw) as { paper_category?: string }).paper_category
-      if (c) return c
-    } catch { /* not JSON — fall through */ }
-  }
-  return '其他'
-}
-
-function categoryRank(name: string): number {
-  const i = CATEGORY_ORDER.indexOf(name)
-  return i === -1 ? CATEGORY_ORDER.length : i
-}
-
-// Publication year, read from the extraction JSON. 0 = unknown.
-function paperYear(p: PaperRow): number {
-  const raw = p.raw_llm_response as string | undefined
-  if (raw) {
-    try {
-      const y = (JSON.parse(raw) as { year?: string | number }).year
-      const n = parseInt(String(y ?? ''), 10)
-      if (!Number.isNaN(n) && n > 1900) return n
-    } catch { /* not JSON — fall through */ }
-  }
-  return 0
-}
-
-interface Section { title: string; data: PaperRow[] }
+interface Section { title: string; data: PaperRow[]; count: number }
 
 export default function PapersScreen({ navigation }: Props) {
   const snap = useSnapshot()
   const [q, setQ] = useState('')
+  const [groupMode, setGroupMode] = useState<'category' | 'team'>('category')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   const wikiByPaperId = useMemo(() => {
     const map = new Map<string, string>()
@@ -78,24 +40,42 @@ export default function PapersScreen({ navigation }: Props) {
     const yearById = new Map<string, number>()
     for (const p of filtered) yearById.set(p.id, paperYear(p))
 
-    const byCat = new Map<string, PaperRow[]>()
+    // Group by the active dimension: 大类 (category) or 团队 (team).
+    const keyOf = groupMode === 'team' ? teamOf : categoryOf
+    const rankOf = groupMode === 'team' ? teamRank : categoryRank
+
+    const byKey = new Map<string, PaperRow[]>()
     for (const p of filtered) {
-      const c = categoryOf(p)
-      if (!byCat.has(c)) byCat.set(c, [])
-      byCat.get(c)!.push(p)
+      const k = keyOf(p)
+      if (!byKey.has(k)) byKey.set(k, [])
+      byKey.get(k)!.push(p)
     }
     const result: Section[] = []
-    for (const cat of [...byCat.keys()].sort((a, b) => categoryRank(a) - categoryRank(b))) {
-      const rows = byCat.get(cat)!.sort((a, b) => {
+    const keys = [...byKey.keys()].sort((a, b) => rankOf(a) - rankOf(b) || a.localeCompare(b))
+    for (const key of keys) {
+      const rows = byKey.get(key)!.sort((a, b) => {
         const ya = yearById.get(a.id) || 9999
         const yb = yearById.get(b.id) || 9999
         if (ya !== yb) return ya - yb
         return String(a.processed_at || '').localeCompare(String(b.processed_at || ''))
       })
-      result.push({ title: cat, data: rows })
+      result.push({ title: key, data: rows, count: rows.length })
     }
     return result
-  }, [snap.data, q])
+  }, [snap.data, q, groupMode])
+
+  // Collapse hides a section's rows but keeps its (tappable) header + count.
+  const displaySections = useMemo<Section[]>(
+    () => sections.map(s => (collapsed.has(s.title) ? { ...s, data: [] } : s)),
+    [sections, collapsed],
+  )
+  const toggleCollapse = (title: string) =>
+    setCollapsed(prev => {
+      const n = new Set(prev)
+      if (n.has(title)) n.delete(title)
+      else n.add(title)
+      return n
+    })
 
   if (snap.loading && !snap.data) {
     return (
@@ -122,6 +102,19 @@ export default function PapersScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
+      <View style={styles.modeRow}>
+        {(['category', 'team'] as const).map(m => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.modeBtn, groupMode === m && styles.modeBtnOn]}
+            onPress={() => { setGroupMode(m); setCollapsed(new Set()) }}
+          >
+            <Text style={[styles.modeBtnText, groupMode === m && styles.modeBtnTextOn]}>
+              {m === 'category' ? '大类' : '团队'}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <TextInput
         style={styles.search}
         value={q}
@@ -130,7 +123,7 @@ export default function PapersScreen({ navigation }: Props) {
         placeholderTextColor="#475569"
       />
       <SectionList
-        sections={sections}
+        sections={displaySections}
         keyExtractor={p => p.id}
         stickySectionHeadersEnabled
         contentContainerStyle={{ paddingBottom: 24 }}
@@ -149,10 +142,15 @@ export default function PapersScreen({ navigation }: Props) {
           </Text>
         }
         renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
+          <TouchableOpacity
+            style={styles.sectionHeader}
+            activeOpacity={0.6}
+            onPress={() => toggleCollapse(section.title)}
+          >
+            <Text style={styles.sectionChevron}>{collapsed.has(section.title) ? '▸' : '▾'}</Text>
             <Text style={styles.sectionTitle}>{section.title}</Text>
-            <Text style={styles.sectionCount}>{section.data.length}</Text>
-          </View>
+            <Text style={styles.sectionCount}>{section.count}</Text>
+          </TouchableOpacity>
         )}
         renderItem={({ item }) => {
           const wikiFileId = wikiByPaperId.get(item.id) ?? null
@@ -207,12 +205,21 @@ const styles = StyleSheet.create({
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
     color: '#e2e8f0', marginBottom: 12, fontSize: 14,
   },
+  modeRow: {
+    flexDirection: 'row', backgroundColor: '#0f1117', borderWidth: 1,
+    borderColor: '#1e293b', borderRadius: 10, padding: 3, marginBottom: 10,
+  },
+  modeBtn: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: 8 },
+  modeBtnOn: { backgroundColor: '#312e81' },
+  modeBtnText: { color: '#94a3b8', fontSize: 13, fontWeight: '600' },
+  modeBtnTextOn: { color: '#e0e7ff' },
   empty: { color: '#64748b', textAlign: 'center', marginTop: 40, fontSize: 13 },
 
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: '#0b0d12', paddingTop: 12, paddingBottom: 8,
   },
+  sectionChevron: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   sectionTitle: {
     color: '#a5b4fc', fontSize: 13, fontWeight: '700',
     letterSpacing: 0.5, textTransform: 'uppercase',

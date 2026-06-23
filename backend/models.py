@@ -65,6 +65,12 @@ class Paper(Base):
     # Optional human override for the paper's lane/category. When present,
     # wiki graph grouping prefers this over the model-predicted value.
     paper_category_override = Column(String, nullable=True)
+    # Team/lab dimension — a second grouping axis parallel to paper_category.
+    # Auto-assigned by matching the paper's authors against the editable team
+    # registry (services.paper_team_service); manual override wins; papers with
+    # no matching team fall back to "others".
+    paper_team_model = Column(String, nullable=True)
+    paper_team_override = Column(String, nullable=True)
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)
@@ -164,3 +170,16 @@ class LLMCall(Base):
     # Exception class name on failure (no message — message can contain
     # tokens or PII; class is enough for grouping).
     error_class = Column(String, nullable=True)
+
+
+class RecSummary(Base):
+    """Local cache of LLM-generated summaries for recommended arXiv papers,
+    keyed by arXiv base id. Generated on-demand on the desktop using the user's
+    own model + key — never leaves the machine. Auto-created by create_all."""
+
+    __tablename__ = "rec_summaries"
+
+    arxiv_id = Column(String, primary_key=True)
+    summary = Column(Text, nullable=False)
+    model = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

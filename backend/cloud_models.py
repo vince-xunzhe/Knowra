@@ -119,6 +119,8 @@ class CloudPaper(CloudBase):
     authors = Column(JSON, default=list)
     paper_category_model = Column(String, nullable=True)
     paper_category_override = Column(String, nullable=True)
+    paper_team_model = Column(String, nullable=True)
+    paper_team_override = Column(String, nullable=True)
 
     processed = Column(Boolean, default=False)
     processed_at = Column(DateTime, nullable=True)
@@ -295,6 +297,58 @@ class CloudDeletion(CloudBase):
             name="cloud_deletions_user_table_row_uniq",
         ),
     )
+
+
+# ── recommendations (global arXiv feed; not per-user) ─────────────────
+
+
+class Recommendation(CloudBase):
+    """A recommended paper from arXiv for a system tag. Global (arXiv metadata
+    is public) — written only by the Mon/Wed/Fri scheduler, pruned to 30 days.
+    Per-user 'followed tags' is a client-side display filter, so no per-user
+    table is needed."""
+
+    __tablename__ = "recommendations"
+
+    id = Column(String, primary_key=True, default=_uuid)
+    tag = Column(String, nullable=False, index=True)
+    arxiv_id = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    authors = Column(JSON, default=list)
+    abstract = Column(Text, nullable=True)
+    pdf_url = Column(String, nullable=True)
+    primary_category = Column(String, nullable=True)
+    published = Column(DateTime, nullable=True)
+    # Desktop-generated local-LLM summary, pushed up so mobile (no local model)
+    # can show it. Global/single-user for now (see docs).
+    summary = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("tag", "arxiv_id", name="recommendations_tag_arxiv_uniq"),
+    )
+
+
+class RecSearchState(CloudBase):
+    """Per-tag last-search bookmark so 'new since last search' works and the
+    scheduler is catch-up friendly across machine restarts."""
+
+    __tablename__ = "rec_search_state"
+
+    tag = Column(String, primary_key=True)
+    last_searched_at = Column(DateTime, nullable=True)
+
+
+class RecMark(CloudBase):
+    """A user's 'saved / 收藏' mark on a recommended paper. Per-user, so the
+    mark syncs between mobile (where it's set) and desktop (where it prompts a
+    local download)."""
+
+    __tablename__ = "rec_marks"
+
+    user_id = Column(String, primary_key=True)
+    arxiv_id = Column(String, primary_key=True)
+    created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
 def init_cloud_schema(engine) -> None:

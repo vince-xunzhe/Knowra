@@ -51,25 +51,32 @@ function relTime(iso?: string | null) {
 }
 
 
-function laneData(graph: WikiGraphData): { lanes: Lane[]; maxColumns: number } {
-  const categoryOrder = graph.categories.map(category => category.name)
+function laneData(
+  graph: WikiGraphData,
+  groupBy: 'category' | 'team',
+): { lanes: Lane[]; maxColumns: number } {
+  const isTeam = groupBy === 'team'
+  const order = (isTeam ? graph.teams || [] : graph.categories).map(g => g.name)
+  const fallback = isTeam ? 'others' : '其他'
+  const keyOf = (node: WikiGraphNode) => (isTeam ? node.team : node.category) || fallback
+
   const paperNodes = graph.nodes.filter(node => node.kind === 'paper')
   const conceptNodes = graph.nodes.filter(node => node.kind === 'concept')
   const supportEdges = graph.edges.filter(edge => edge.relation_type === 'supports')
 
-  const papersByCategory = new Map<string, WikiGraphNode[]>()
-  for (const category of categoryOrder) papersByCategory.set(category, [])
+  const papersByLane = new Map<string, WikiGraphNode[]>()
+  for (const name of order) papersByLane.set(name, [])
   for (const paper of paperNodes) {
-    const category = paper.category || '其他'
-    if (!papersByCategory.has(category)) papersByCategory.set(category, [])
-    papersByCategory.get(category)!.push(paper)
+    const key = keyOf(paper)
+    if (!papersByLane.has(key)) papersByLane.set(key, [])
+    papersByLane.get(key)!.push(paper)
   }
 
   let maxColumns = 0
   const lanes: Lane[] = []
 
-  for (const category of papersByCategory.keys()) {
-    const papers = (papersByCategory.get(category) || []).sort((a, b) => {
+  for (const laneName of papersByLane.keys()) {
+    const papers = (papersByLane.get(laneName) || []).sort((a, b) => {
       if ((a.year || 0) !== (b.year || 0)) return (a.year || 0) - (b.year || 0)
       return a.x - b.x
     })
@@ -85,7 +92,13 @@ function laneData(graph: WikiGraphData): { lanes: Lane[]; maxColumns: number } {
     const paperNodeCounts: Record<string, number> = {}
     for (const nodeType of TYPE_SECTION_ORDER) nodesByType[nodeType] = []
 
-    for (const node of conceptNodes.filter(item => item.category === category)) {
+    // Category mode: a concept sits in its own category lane. Team mode:
+    // concepts have no team, so a concept shows in whichever team lane(s) its
+    // linked papers fall into — the linked-paper filter below handles that.
+    const candidates = isTeam
+      ? conceptNodes
+      : conceptNodes.filter(item => item.category === laneName)
+    for (const node of candidates) {
       const linkedPaperIds = supportEdges
         .filter(edge => edge.source === node.id)
         .map(edge => edge.target.replace('paper:', ''))
@@ -108,7 +121,7 @@ function laneData(graph: WikiGraphData): { lanes: Lane[]; maxColumns: number } {
       })
     }
 
-    lanes.push({ name: category, papers, nodesByType, paperNodeCounts })
+    lanes.push({ name: laneName, papers, nodesByType, paperNodeCounts })
   }
 
   return { lanes, maxColumns }
@@ -122,6 +135,7 @@ export default function WikiKnowledgeMap({
   onSuppressNode,
   suppressingNodeId,
   onCreateConcept,
+  groupBy = 'category',
 }: {
   data: WikiGraphData
   selectedId: string | null
@@ -129,8 +143,10 @@ export default function WikiKnowledgeMap({
   onSuppressNode?: (node: WikiGraphNode) => void
   suppressingNodeId?: string | null
   onCreateConcept?: (category: string, paperIds: string[]) => void
+  groupBy?: 'category' | 'team'
 }) {
-  const { lanes, maxColumns } = useMemo(() => laneData(data), [data])
+  const isTeam = groupBy === 'team'
+  const { lanes, maxColumns } = useMemo(() => laneData(data, groupBy), [data, groupBy])
   const minWidth = `${Math.max(3, maxColumns) * COLUMN_WIDTH_REM}rem`
 
   return (
@@ -146,13 +162,13 @@ export default function WikiKnowledgeMap({
               onPick={onPick}
               onSuppressNode={onSuppressNode}
               suppressingNodeId={suppressingNodeId}
-              onCreateConcept={onCreateConcept}
+              onCreateConcept={isTeam ? undefined : onCreateConcept}
             />
           ))}
         </div>
       </div>
       <div className="border-t border-slate-800/80 bg-slate-950/70 px-5 py-2 text-[11px] text-slate-500">
-        每条 lane 对应一个论文大类；论文按年份链式排列；下方小框是挂在这条论文链上的概念、技术、数据集与研究领域。
+        {isTeam ? '每条 lane 对应一个团队（按核心作者归队）' : '每条 lane 对应一个论文大类'}；论文按年份链式排列；下方小框是挂在这条论文链上的概念、技术、数据集与研究领域。
       </div>
     </div>
   )

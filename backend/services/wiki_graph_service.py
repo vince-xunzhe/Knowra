@@ -16,6 +16,11 @@ from services.paper_category_service import (
     get_active_categories,
     sync_paper_category_fields,
 )
+from services.paper_team_service import (
+    TEAM_OTHER,
+    effective_paper_team,
+    get_active_team_names,
+)
 from services.wiki_compiler import (
     list_concept_pages,
     list_paper_pages,
@@ -131,7 +136,7 @@ def build_wiki_graph(
     ]
 
     if not paper_pages and not concept_nodes:
-        return {"nodes": [], "edges": [], "categories": [], "updated_at": datetime.utcnow().isoformat()}
+        return {"nodes": [], "edges": [], "categories": [], "teams": [], "updated_at": datetime.utcnow().isoformat()}
 
     # Wiki .md frontmatter carries paper_id as it was at COMPILE time.
     # Pages compiled before the multitenant migration have a legacy INT
@@ -173,6 +178,7 @@ def build_wiki_graph(
             "compiled_at": item.get("compiled_at"),
             "year": _paper_year(paper, extraction),
             "category": effective_paper_category(paper, extraction),
+            "team": effective_paper_team(paper, extraction),
         })
     if changed and hasattr(db, "commit"):
         db.commit()
@@ -224,6 +230,7 @@ def build_wiki_graph(
                 "page_kind": "papers",
                 "paper_id": paper["paper_id"],
                 "category": category,
+                "team": paper["team"],
                 "compiled_at": paper["compiled_at"],
                 "x": x,
                 "y": y,
@@ -308,6 +315,11 @@ def build_wiki_graph(
                     "category": category,
                 })
 
+    teams_present = {paper["team"] for paper in compiled_papers}
+    teams_in_use = [t for t in get_active_team_names() if t in teams_present]
+    if TEAM_OTHER in teams_present:
+        teams_in_use.append(TEAM_OTHER)
+
     return {
         "updated_at": datetime.utcnow().isoformat(),
         "categories": [
@@ -319,6 +331,13 @@ def build_wiki_graph(
                 ),
             }
             for category in categories_in_use
+        ],
+        "teams": [
+            {
+                "name": team,
+                "paper_count": sum(1 for paper in compiled_papers if paper["team"] == team),
+            }
+            for team in teams_in_use
         ],
         "nodes": nodes,
         "edges": edges,
