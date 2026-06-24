@@ -9,10 +9,11 @@
 //   ④ 健检   run lint / open report
 //
 // The card whose `isNext` is true gets a glowing ring — driven by the
-// hook's nextStep state machine. Whole rail collapses to a thin 48-px
-// icon strip for users who don't need it.
+// hook's nextStep state machine — but stage bodies stay collapsed until
+// the user expands them. Whole rail collapses to a thin 48-px icon strip
+// for users who don't need it.
 
-import { useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Sparkles,
   ScanLine,
@@ -35,17 +36,40 @@ import {
   Bot,
   Hand,
   CloudUpload,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
+import {
+  getPromotionCounts,
+  getStatus,
+  getWikiFreshness,
+  getWikiStatus,
+  runWikiLint,
+  type WikiCompileState,
+} from '../api/client'
+import { getLastSyncAt } from '../api/cloud'
+import { useCloudAuth } from '../hooks/useCloudAuth'
 import type {
   PipelineActions,
   PipelineState,
   StageId,
   StageSnapshot,
 } from '../hooks/usePipelineState'
+import { gatherLocalSnapshot } from '../services/gatherLocalSnapshot'
+import { runSync } from '../services/syncAgent'
 import PromotionPromptEditor from './PromotionPromptEditor'
 import SyncStageCard from './SyncStageCard'
 
 type CandidateMode = 'off' | 'pending' | 'all'
+type ConsoleStageId = StageId | 'sync'
+type RunAllTone = 'idle' | 'running' | 'success' | 'warning'
+
+interface RunAllStatus {
+  running: boolean
+  label: string
+  detail?: string
+  tone: RunAllTone
+}
 
 interface Props {
   state: PipelineState & PipelineActions
@@ -69,11 +93,9 @@ export default function PipelineConsole({
   onOpenRescue,
   onOpenAsk,
 }: Props) {
+  const auth = useCloudAuth()
   const [collapsed, setCollapsed] = useState(false)
-  // Note: 'sync' is not in StageId since it lives outside usePipelineState
-  // — see SyncStageCard for why. We widen the local state's type so the
-  // user can still expand/collapse it like the other stages.
-  const [expanded, setExpanded] = useState<StageId | 'sync' | null>(null)
+  const [expandedStages, setExpandedStages] = useState<Set<ConsoleStageId>>(() => new Set())
   const [error, setError] = useState<string | null>(null)
   const [promptEditorOpen, setPromptEditorOpen] = useState(false)
   // Which pipeline action is currently in-flight (null = idle). Drives
@@ -85,6 +107,129 @@ export default function PipelineConsole({
   // re-renders within the page.
   const [useLlm, setUseLlm] = useState(true)
   const [forceAll, setForceAll] = useState(false)
+  const autoScanStartedRef = useRef(false)
+  const scanForDirectory = state.scan
+  const [runAllStatus, setRunAllStatus] = useState<RunAllStatus>({
+    running: false,
+    label: '全流程编排',
+    tone: 'idle',
+  })
+
+  useEffect(() => {
+    if (autoScanStartedRef.current) return
+    autoScanStartedRef.current = true
+    void scanForDirectory().catch(() => {})
+  }, [scanForDirectory])
+
+  const toggleStage = (id: ConsoleStageId) => {
+    setExpandedStages(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const openFromIconRail = (id: ConsoleStageId) => {
+    setCollapsed(false)
+    setExpandedStages(new Set([id]))
+  }
+
+  const setRunAllStep = (label: string, detail?: string) => {
+    setRunAllStatus({ running: true, label, detail, tone: 'running' })
+  }
+
+  const runAll = async () => {
+    if (runAllStatus.running || busyKey || state.processing?.running || state.compileStatus?.running) return
+    setError(null)
+    setRunAllStep('扫描论文目录')
+    try {
+      const scanResult = await state.scan()
+
+      if (scanResult.unprocessed > 0) {
+        setRunAllStep('处理论文', `${scanResult.unprocessed} 篇待处理`)
+        await state.process()
+        await waitForProcessingDone(s => {
+          if (s.running) setRunAllStep('处理论文', `${s.done}/${s.total}`)
+        })
+      }
+
+      setRunAllStep('自动筛选候选概念')
+      const beforePromotion = await getPromotionCounts()
+      if ((beforePromotion.summary.counts.pending ?? 0) > 0) {
+        await state.runPromotionRun({ use_llm: true, force_all: false })
+      }
+      const afterPromotion = await getPromotionCounts()
+      if ((afterPromotion.summary.by.llm ?? 0) > 0) {
+        setRunAllStep('确认 Agent 筛选结果', `${afterPromotion.summary.by.llm} 个判断`)
+        await state.acceptPromotion()
+      }
+
+      let freshness = await getWikiFreshness()
+      const paperIssues = freshness.papers.missing_count + freshness.papers.stale_count
+      if (paperIssues > 0) {
+        setRunAllStep('编译论文页', `${paperIssues} 个待处理`)
+        await state.recompilePapers()
+        await waitForWikiCompileDone(s => {
+          if (s.running) setRunAllStep('编译论文页', `${s.done}/${s.total}`)
+        })
+      }
+
+      freshness = await getWikiFreshness()
+      const conceptIssues = freshness.concepts.missing_count + freshness.concepts.stale_count
+      if (conceptIssues > 0) {
+        setRunAllStep('编译概念页', `${conceptIssues} 个待处理`)
+        await state.recompileConcepts()
+        await waitForWikiCompileDone(s => {
+          if (s.running) setRunAllStep('编译概念页', `${s.done}/${s.total}`)
+        })
+      }
+
+      freshness = await getWikiFreshness()
+      const compileTotalNodes =
+        (freshness.papers.total_processed ?? 0) +
+        (freshness.concepts.total_nodes ?? 0)
+      if (compileTotalNodes > 0) {
+        setRunAllStep('运行健康检查', '规则 + Agent')
+        await runWikiLint(true)
+      }
+
+      if (auth.configured && auth.user) {
+        setRunAllStep('同步到云端', '准备快照')
+        const snapshot = await gatherLocalSnapshot({ since: getLastSyncAt() })
+        await runSync(snapshot, progress => {
+          if (progress.stage === 'uploading' && progress.uploadsTotal > 0) {
+            setRunAllStep('同步到云端', `上传 ${progress.uploadsDone}/${progress.uploadsTotal}`)
+          } else if (progress.stage !== 'idle') {
+            setRunAllStep('同步到云端', syncStageLabel(progress.stage))
+          }
+        })
+        setRunAllStatus({
+          running: false,
+          label: '流水线已全部完成',
+          detail: '已同步到云端',
+          tone: 'success',
+        })
+      } else {
+        setRunAllStatus({
+          running: false,
+          label: '本地流水线已完成',
+          detail: '同步已跳过：请先登录云端账号',
+          tone: 'warning',
+        })
+      }
+      state.refresh()
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e)
+      setError(message)
+      setRunAllStatus({
+        running: false,
+        label: '全流程编排中断',
+        detail: message,
+        tone: 'warning',
+      })
+    }
+  }
 
   const safeRun = async (key: string, fn: () => Promise<unknown>) => {
     if (busyKey) return // already running something — ignore re-clicks
@@ -120,12 +265,6 @@ export default function PipelineConsole({
     }
   }
 
-  // Auto-expand the stage that nextStep is pointing at, so the user lands
-  // on the relevant CTA without an extra click. Manual expand/collapse
-  // overrides this.
-  const effectiveExpanded: StageId | 'sync' | null =
-    expanded != null ? expanded : state.nextStep?.stage ?? null
-
   if (collapsed) {
     return (
       <aside className="shrink-0 w-12 border-r border-slate-800/80 bg-[#0d1016] flex flex-col items-center py-3 gap-3">
@@ -140,10 +279,7 @@ export default function PipelineConsole({
         {state.stages.map(s => (
           <button
             key={s.id}
-            onClick={() => {
-              setCollapsed(false)
-              setExpanded(s.id)
-            }}
+            onClick={() => openFromIconRail(s.id)}
             className={`relative p-1.5 rounded-md hover:bg-slate-800/60 ${
               s.isNext ? 'ring-1 ring-indigo-400/50 bg-indigo-500/10' : ''
             }`}
@@ -156,10 +292,7 @@ export default function PipelineConsole({
           </button>
         ))}
         <button
-          onClick={() => {
-            setCollapsed(false)
-            setExpanded('sync')
-          }}
+          onClick={() => openFromIconRail('sync')}
           className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
           title="⑤ 同步 — 推送到云端"
         >
@@ -194,15 +327,36 @@ export default function PipelineConsole({
         </button>
       </header>
 
+      <div className="border-b border-slate-800/60 px-3 py-2">
+        <button
+          onClick={runAll}
+          disabled={runAllStatus.running || busyKey !== null || !!state.processing?.running || !!state.compileStatus?.running}
+          className={`w-full inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${runAllButtonClass(runAllStatus.tone)}`}
+          title="按顺序执行：扫描、处理、筛选、编译、健检，并在已登录时同步到云端"
+        >
+          {runAllStatus.running ? (
+            <Loader2 size={13} className="animate-spin" />
+          ) : runAllStatus.tone === 'success' ? (
+            <CheckCircle2 size={13} />
+          ) : (
+            <Sparkles size={13} />
+          )}
+          {runAllStatus.running ? runAllStatus.label : '全流程编排'}
+        </button>
+        {(runAllStatus.detail || runAllStatus.tone !== 'idle') && (
+          <p className={`mt-1 text-[11px] leading-relaxed ${runAllTextClass(runAllStatus.tone)}`}>
+            {runAllStatus.detail || runAllStatus.label}
+          </p>
+        )}
+      </div>
+
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2">
         {state.stages.map(stage => (
           <StageCard
             key={stage.id}
             stage={stage}
-            expanded={effectiveExpanded === stage.id}
-            onToggle={() =>
-              setExpanded(prev => (prev === stage.id ? null : stage.id))
-            }
+            expanded={expandedStages.has(stage.id)}
+            onToggle={() => toggleStage(stage.id)}
           >
             {stage.id === 'ingest' && (
               <IngestActions
@@ -250,10 +404,8 @@ export default function PipelineConsole({
         {/* ⑤ Sync — kept outside the StageId state machine; see
             SyncStageCard for the rationale. */}
         <SyncStageCard
-          expanded={effectiveExpanded === 'sync'}
-          onToggle={() =>
-            setExpanded(prev => (prev === 'sync' ? null : 'sync'))
-          }
+          expanded={expandedStages.has('sync')}
+          onToggle={() => toggleStage('sync')}
         />
 
         {error && (
@@ -293,7 +445,7 @@ function StageCard({
   stage: StageSnapshot
   expanded: boolean
   onToggle: () => void
-  children: React.ReactNode
+  children: ReactNode
 }) {
   const palette = stagePalette(stage.tone)
   return (
@@ -306,31 +458,45 @@ function StageCard({
     >
       <button
         onClick={onToggle}
-        className="w-full px-3 py-2 flex items-center gap-2 text-left"
+        aria-expanded={expanded}
+        title={expanded ? `收起${stage.label}` : `展开${stage.label}`}
+        className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
       >
-        <span className={`text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
-          {stage.index}
-        </span>
-        <StageIcon stage={stage.id} tone={stage.tone} />
-        <span className="text-[13px] font-semibold text-slate-100">
-          {stage.label}
-        </span>
-        {stage.isNext && (
-          <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-200 border border-indigo-400/40 uppercase tracking-wider">
-            建议
+        <span className="flex min-w-0 items-center gap-2">
+          {expanded ? (
+            <ChevronDown size={13} className="shrink-0 text-slate-500" />
+          ) : (
+            <ChevronRight size={13} className="shrink-0 text-slate-600" />
+          )}
+          <span className={`shrink-0 text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
+            {stage.index}
           </span>
-        )}
-        <span className="ml-auto text-[11.5px] tabular-nums text-slate-300">
+          <span className="shrink-0">
+            <StageIcon stage={stage.id} tone={stage.tone} />
+          </span>
+          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-100">
+            {stage.label}
+          </span>
+          {stage.isNext && (
+            <span className="shrink-0 rounded-full border border-indigo-400/40 bg-indigo-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-indigo-200">
+              建议
+            </span>
+          )}
+        </span>
+        <span
+          className="min-w-0 justify-self-end truncate whitespace-nowrap text-right text-[11.5px] tabular-nums text-slate-300"
+          title={stage.headline}
+        >
           {stage.headline}
         </span>
       </button>
-      {stage.sub && (
-        <div className="px-3 -mt-1 pb-2 text-[11px] text-slate-400 leading-relaxed">
-          {stage.sub}
-        </div>
-      )}
       {expanded && (
-        <div className="px-3 pb-3 pt-1 border-t border-slate-800/40">
+        <div className="px-3 pb-3 pt-2 border-t border-slate-800/40">
+          {stage.sub && (
+            <div className="mb-2 text-[11px] text-slate-400 leading-relaxed">
+              {stage.sub}
+            </div>
+          )}
           {children}
         </div>
       )}
@@ -648,7 +814,7 @@ function CompileRow({
   onClick,
   disabled,
 }: {
-  icon: React.ReactNode
+  icon: ReactNode
   label: string
   ok: number
   total: number
@@ -793,7 +959,7 @@ function ActionButton({
   children,
 }: {
   onClick: () => void
-  icon: React.ReactNode
+  icon: ReactNode
   variant: 'primary' | 'ghost'
   disabled?: boolean
   /** This button's own action is in-flight: swap icon → spinner and
@@ -802,7 +968,7 @@ function ActionButton({
   loadingLabel?: string
   title?: string
   className?: string
-  children: React.ReactNode
+  children: ReactNode
 }) {
   const cls =
     variant === 'primary'
@@ -830,7 +996,7 @@ function Stat({
   label: string
   value: number
   tone: 'amber' | 'emerald' | 'rose' | 'slate'
-  icon?: React.ReactNode
+  icon?: ReactNode
 }) {
   const palette = {
     amber: 'text-amber-300',
@@ -917,6 +1083,82 @@ function stagePalette(tone: StageSnapshot['tone']) {
         indexColor: 'text-slate-500',
       }
   }
+}
+
+type ProcessingPollStatus = NonNullable<PipelineState['processing']>
+
+const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
+
+async function waitForProcessingDone(onTick: (status: ProcessingPollStatus) => void) {
+  let sawRunning = false
+  let idlePolls = 0
+  for (;;) {
+    const raw = await getStatus()
+    const status: ProcessingPollStatus = {
+      running: !!raw.running,
+      total: raw.total ?? 0,
+      done: raw.done ?? 0,
+      errors: raw.errors ?? 0,
+      current: raw.current ?? '',
+    }
+    onTick(status)
+    if (status.running) {
+      sawRunning = true
+      idlePolls = 0
+    } else {
+      if (sawRunning || idlePolls >= 2) return status
+      idlePolls += 1
+    }
+    await sleep(1500)
+  }
+}
+
+async function waitForWikiCompileDone(onTick: (status: WikiCompileState) => void) {
+  let sawRunning = false
+  let idlePolls = 0
+  for (;;) {
+    const status = await getWikiStatus()
+    onTick(status)
+    if (status.running) {
+      sawRunning = true
+      idlePolls = 0
+    } else {
+      if (sawRunning || idlePolls >= 2) return status
+      idlePolls += 1
+    }
+    await sleep(1500)
+  }
+}
+
+function syncStageLabel(stage: string): string {
+  switch (stage) {
+    case 'preparing':
+      return '准备中'
+    case 'uploading':
+      return '上传中'
+    case 'committing':
+      return '提交中'
+    case 'done':
+      return '提交完成'
+    case 'error':
+      return '同步失败'
+    default:
+      return '同步中'
+  }
+}
+
+function runAllButtonClass(tone: RunAllTone): string {
+  if (tone === 'running') return 'border-indigo-400/60 bg-indigo-500/20 text-indigo-100'
+  if (tone === 'success') return 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200'
+  if (tone === 'warning') return 'border-amber-400/50 bg-amber-500/15 text-amber-200'
+  return 'border-indigo-500/40 bg-indigo-500/15 text-indigo-100 hover:bg-indigo-500/25'
+}
+
+function runAllTextClass(tone: RunAllTone): string {
+  if (tone === 'success') return 'text-emerald-300/90'
+  if (tone === 'warning') return 'text-amber-200/90'
+  if (tone === 'running') return 'text-indigo-200/90'
+  return 'text-slate-500'
 }
 
 // Type re-exports for the rare case a consumer needs them. Most consumers

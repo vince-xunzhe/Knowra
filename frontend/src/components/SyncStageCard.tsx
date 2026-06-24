@@ -21,6 +21,7 @@
 import { useMemo, useState } from 'react'
 import {
   CloudUpload, CloudOff, Loader2, CheckCircle2, AlertTriangle, RefreshCw, RotateCw,
+  ChevronDown, ChevronRight,
 } from 'lucide-react'
 
 import { useCloudAuth } from '../hooks/useCloudAuth'
@@ -107,14 +108,26 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
     >
       <button
         onClick={onToggle}
-        className="w-full px-3 py-2 flex items-center gap-2 text-left"
+        aria-expanded={expanded}
+        title={expanded ? '收起同步' : '展开同步'}
+        className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
       >
-        <span className={`text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
-          ⑤
+        <span className="flex min-w-0 items-center gap-2">
+          {expanded ? (
+            <ChevronDown size={13} className="shrink-0 text-slate-500" />
+          ) : (
+            <ChevronRight size={13} className="shrink-0 text-slate-600" />
+          )}
+          <span className={`shrink-0 text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
+            ⑤
+          </span>
+          <SyncIcon tone={tone} />
+          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-100">同步</span>
         </span>
-        <SyncIcon tone={tone} />
-        <span className="text-[13px] font-semibold text-slate-100">同步</span>
-        <span className="ml-auto text-[11.5px] tabular-nums text-slate-300 truncate max-w-[8rem]">
+        <span
+          className="min-w-0 justify-self-end truncate whitespace-nowrap text-right text-[11.5px] tabular-nums text-slate-300"
+          title={headline}
+        >
           {headline}
         </span>
       </button>

@@ -46,9 +46,9 @@ interface ActionNotice {
 
 const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
   { id: 'all', label: '全部', color: '' },
-  { id: 'paper', label: '论文', color: '#6366f1' },
-  { id: 'technique', label: '技术', color: '#22c55e' },
-  { id: 'dataset', label: '数据集', color: '#f59e0b' },
+  { id: 'paper', label: '论文', color: '#7A88C9' },
+  { id: 'technique', label: '技术', color: '#5BAEAA' },
+  { id: 'dataset', label: '数据集', color: '#B8A36A' },
 ]
 
 // Node types treated as "concepts" by the dedicated concept-list view.

@@ -3,13 +3,13 @@ import cytoscape from 'cytoscape'
 import type { GraphData, GraphNode } from '../api/client'
 
 const NODE_COLORS: Record<string, string> = {
-  paper: '#6366f1',
-  technique: '#22c55e',
-  dataset: '#f59e0b',
-  concept: '#14b8a6',
-  entity: '#ec4899',
-  topic: '#6366f1',
-  fact: '#f59e0b',
+  paper: '#7A88C9',
+  technique: '#5BAEAA',
+  dataset: '#B8A36A',
+  concept: '#A48BC7',
+  entity: '#B783A4',
+  topic: '#719BB8',
+  fact: '#B4A77C',
 }
 
 const NODE_LABELS: Record<string, string> = {
@@ -272,7 +272,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           style: {
             'border-style': 'dashed',
             'border-width': 2,
-            'border-color': '#fbbf24',
+            'border-color': '#B8A36A',
             'background-opacity': 0.55,
           },
         },
