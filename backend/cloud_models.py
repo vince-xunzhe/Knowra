@@ -121,6 +121,7 @@ class CloudPaper(CloudBase):
     paper_category_override = Column(String, nullable=True)
     paper_team_model = Column(String, nullable=True)
     paper_team_override = Column(String, nullable=True)
+    learning_status = Column(String, default="not_started")
 
     processed = Column(Boolean, default=False)
     processed_at = Column(DateTime, nullable=True)

@@ -110,7 +110,7 @@ def _make_app_with_seed():
     set_storage(storage)
 
     # Seed a wiki file: RoPE concept page
-    rope_path = f"wiki/{USER_A}/concepts/0001-rope.md"
+    rope_path = f"{USER_A}/concepts/0001-rope.md"
     rope_md = (
         "# RoPE (Rotary Position Embedding)\n\n"
         "Rotary 位置编码：把位置编码作为复数旋转应用到 query/key 上。"
@@ -252,7 +252,7 @@ class CloudAskTests(unittest.TestCase):
             db.add(WikiFile(
                 id="wf-attn", user_id=USER_A,
                 kind="concept", rel_path="concepts/0002-attn.md",
-                storage_path=f"wiki/{USER_A}/concepts/0002-attn.md",
+                storage_path=f"{USER_A}/concepts/0002-attn.md",
                 content_hash="sha256:attn-h", size_bytes=10,
                 title="Attention",
                 concept_id="concept-attn",
@@ -262,7 +262,7 @@ class CloudAskTests(unittest.TestCase):
         finally:
             db.close()
         self.storage.simulate_upload(
-            f"wiki/{USER_A}/concepts/0002-attn.md", b"# Attention"
+            f"{USER_A}/concepts/0002-attn.md", b"# Attention"
         )
 
         fake = _FakeLLM(

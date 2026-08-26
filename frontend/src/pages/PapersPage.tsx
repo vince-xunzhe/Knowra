@@ -30,7 +30,11 @@ interface ActionNotice {
   detail?: string
 }
 
-export default function PapersPage() {
+interface PapersPageProps {
+  onOpenReview: (paperId: number) => void
+}
+
+export default function PapersPage({ onOpenReview }: PapersPageProps) {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState<PaperRecord | null>(null)
@@ -327,6 +331,14 @@ export default function PapersPage() {
   const isPending = (p: PaperRecord) =>
     pendingIds.has(p.id) || !!(status?.running && status.current === p.filename)
 
+  const handlePaperClick = (paper: PaperRecord) => {
+    if (paper.processed) {
+      onOpenReview(paper.id)
+      return
+    }
+    setSelected(paper)
+  }
+
   const stats = useMemo(() => ({
     processed: papers.filter(p => p.processed).length,
     failed: papers.filter(p => p.error && !p.processed).length,
@@ -537,7 +549,7 @@ export default function PapersPage() {
                   paper={p}
                   active={selected?.id === p.id}
                   pending={isPending(p)}
-                  onClick={() => setSelected(p)}
+                  onClick={() => handlePaperClick(p)}
                 />
               ))}
             </div>
@@ -549,7 +561,7 @@ export default function PapersPage() {
                   paper={p}
                   active={selected?.id === p.id}
                   pending={isPending(p)}
-                  onClick={() => setSelected(p)}
+                  onClick={() => handlePaperClick(p)}
                 />
               ))}
             </div>
@@ -780,6 +792,7 @@ function PaperGridCard({
   return (
     <button
       onClick={onClick}
+      title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
       className={`text-left group bg-slate-900/40 rounded-2xl overflow-hidden border transition-all ${
         active
           ? 'border-indigo-500/60 shadow-lg shadow-indigo-500/10'
@@ -825,6 +838,7 @@ function PaperListRow({
   return (
     <button
       onClick={onClick}
+      title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
       className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
         active
           ? 'bg-indigo-500/5 border-indigo-500/40'

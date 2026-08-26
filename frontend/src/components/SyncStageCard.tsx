@@ -13,15 +13,13 @@
  *   - If a half-finished prepare/upload is parked in localStorage from
  *     a previous crash → offer a "继续提交" button that re-runs only
  *     commit.
- *   - Otherwise → "立即同步" button. v1 sends an empty snapshot
- *     (effectively a heartbeat) since the local snapshot builder isn't
- *     wired yet; the button label makes that clear so the user knows
- *     this is a wiring check, not real data movement.
+ *   - Otherwise → "立即同步" button. It snapshots the local SQLite/wiki
+ *     state and pushes it to the cloud.
  */
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   CloudUpload, CloudOff, Loader2, CheckCircle2, AlertTriangle, RefreshCw, RotateCw,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Database, HardDrive, Server,
 } from 'lucide-react'
 
 import { useCloudAuth } from '../hooks/useCloudAuth'
@@ -31,8 +29,8 @@ import {
   runSync,
   type SyncProgress,
 } from '../services/syncAgent'
-import { gatherLocalSnapshot } from '../services/gatherLocalSnapshot'
-import { getLastSyncAt } from '../api/cloud'
+import { gatherLocalSnapshot, previewSnapshotCounts } from '../services/gatherLocalSnapshot'
+import { cloudMe, getLastSyncAt, type MeResponse } from '../api/cloud'
 
 interface Props {
   expanded: boolean
@@ -44,6 +42,18 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
   const [progress, setProgress] = useState<SyncProgress>({
     stage: 'idle', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0,
   })
+  const [localPreview, setLocalPreview] = useState<{
+    loading: boolean
+    data: SnapshotCounts | null
+    error: string | null
+    checkedAt: number | null
+  }>({ loading: false, data: null, error: null, checkedAt: null })
+  const [cloudStatus, setCloudStatus] = useState<{
+    loading: boolean
+    data: MeResponse | null
+    error: string | null
+    checkedAt: number | null
+  }>({ loading: false, data: null, error: null, checkedAt: null })
   // Read straight from localStorage every render — both are sub-µs and
   // the component is small. Storing them in useState + syncing through
   // useEffect tripped react-hooks/set-state-in-effect; useMemo also
@@ -64,11 +74,46 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
         ? 'running'
         : progress.stage === 'done'
           ? 'ok'
-          : pending
+    : pending
             ? 'warning'
             : 'idle'
 
   const palette = paletteFor(tone)
+
+  const refreshCloudStatus = useCallback(async () => {
+    if (!auth.user) return
+    setCloudStatus(s => ({ ...s, loading: true, error: null }))
+    try {
+      const data = await cloudMe()
+      setCloudStatus({ loading: false, data, error: null, checkedAt: Date.now() })
+    } catch (err) {
+      const message = (err as Error).message || '读取云端状态失败'
+      setCloudStatus(s => ({ ...s, loading: false, error: message, checkedAt: Date.now() }))
+    }
+  }, [auth.user])
+
+  const refreshLocalPreview = useCallback(async () => {
+    setLocalPreview(s => ({ ...s, loading: true, error: null }))
+    try {
+      const data = await previewSnapshotCounts()
+      setLocalPreview({ loading: false, data, error: null, checkedAt: Date.now() })
+    } catch (err) {
+      const message = (err as Error).message || '读取本机快照失败'
+      setLocalPreview(s => ({ ...s, loading: false, error: message, checkedAt: Date.now() }))
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!expanded || !auth.user || cloudStatus.data || cloudStatus.loading) return
+    const timer = window.setTimeout(() => void refreshCloudStatus(), 0)
+    return () => window.clearTimeout(timer)
+  }, [expanded, auth.user, cloudStatus.data, cloudStatus.loading, refreshCloudStatus])
+
+  useEffect(() => {
+    if (!expanded || localPreview.data || localPreview.loading) return
+    const timer = window.setTimeout(() => void refreshLocalPreview(), 0)
+    return () => window.clearTimeout(timer)
+  }, [expanded, localPreview.data, localPreview.loading, refreshLocalPreview])
 
   const headline = useMemo(() => {
     if (!auth.configured) return '未配置'
@@ -87,7 +132,19 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
     try {
       setProgress({ stage: 'preparing', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0 })
       const snapshot = await gatherLocalSnapshot({ since: lastSyncAt })
+      setLocalPreview({
+        loading: false,
+        error: null,
+        checkedAt: Date.now(),
+        data: {
+          papers: snapshot.papers.length,
+          knowledge_nodes: snapshot.knowledge_nodes.length,
+          knowledge_edges: snapshot.knowledge_edges.length,
+          wiki_files: snapshot.wiki_files.length,
+        },
+      })
       await runSync(snapshot, setProgress)
+      await refreshCloudStatus()
     } catch (err) {
       const message = (err as Error).message || '同步失败'
       setProgress(p => ({ ...p, stage: 'error', error: message }))
@@ -97,6 +154,7 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
   const handleResume = async () => {
     try {
       await resumeCommit(setProgress)
+      await refreshCloudStatus()
     } catch {
       // progress already carries it
     }
@@ -149,6 +207,16 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                 PDF 永远只在本机；OpenAI key 也不上传。
               </p>
 
+              <SnapshotStatusPanel
+                status={localPreview}
+                onRefresh={refreshLocalPreview}
+              />
+
+              <CloudStatusPanel
+                status={cloudStatus}
+                onRefresh={refreshCloudStatus}
+              />
+
               {progress.stage === 'error' && progress.error && (
                 <div className="px-2 py-1.5 rounded-md border border-rose-500/40 bg-rose-500/10 text-[11px] text-rose-200">
                   {progress.error}
@@ -159,10 +227,10 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                 progress.commit.rejected && progress.commit.rejected.length > 0 ? (
                   <div className="px-2 py-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-200 space-y-1">
                     <div>
-                      ⚠ 已同步 revision {progress.commit.revision} · papers{' '}
-                      {progress.commit.accepted.papers} / nodes{' '}
-                      {progress.commit.accepted.knowledge_nodes} / edges{' '}
-                      {progress.commit.accepted.knowledge_edges} / wiki{' '}
+                      ⚠ 本次写入/更新 · revision {progress.commit.revision} · 论文{' '}
+                      {progress.commit.accepted.papers} / 节点{' '}
+                      {progress.commit.accepted.knowledge_nodes} / 关系{' '}
+                      {progress.commit.accepted.knowledge_edges} / Wiki{' '}
                       {progress.commit.accepted.wiki_files}
                     </div>
                     <div className="text-amber-300/90">
@@ -181,11 +249,11 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                   </div>
                 ) : (
                   <div className="px-2 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-[11px] text-emerald-200">
-                    ✓ 已同步 · revision {progress.commit.revision} ·
-                    {' '}papers {progress.commit.accepted.papers}
-                    {' '}/ nodes {progress.commit.accepted.knowledge_nodes}
-                    {' '}/ edges {progress.commit.accepted.knowledge_edges}
-                    {' '}/ wiki {progress.commit.accepted.wiki_files}
+                    ✓ 本次写入/更新 · revision {progress.commit.revision} ·
+                    {' '}论文 {progress.commit.accepted.papers}
+                    {' '}/ 节点 {progress.commit.accepted.knowledge_nodes}
+                    {' '}/ 关系 {progress.commit.accepted.knowledge_edges}
+                    {' '}/ Wiki {progress.commit.accepted.wiki_files}
                   </div>
                 )
               )}
@@ -234,6 +302,178 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
       )}
     </section>
   )
+}
+
+type SnapshotCounts = {
+  papers: number
+  knowledge_nodes: number
+  knowledge_edges: number
+  wiki_files: number
+}
+
+function SnapshotStatusPanel({
+  status,
+  onRefresh,
+}: {
+  status: {
+    loading: boolean
+    data: SnapshotCounts | null
+    error: string | null
+    checkedAt: number | null
+  }
+  onRefresh: () => Promise<void>
+}) {
+  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString() : null
+
+  return (
+    <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 px-2.5 py-2 space-y-2">
+      <PanelHeader
+        icon={<HardDrive size={11} className={status.error ? 'text-rose-300' : 'text-indigo-300'} />}
+        title={status.loading ? '正在读取本机快照' : status.error ? '本机快照读取失败' : '本机待提交快照'}
+        checkedAt={checkedAt}
+        loading={status.loading}
+        onRefresh={onRefresh}
+        refreshTitle="刷新本机快照"
+      />
+
+      {status.error ? (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10.5px] text-rose-200">
+          {status.error}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-1.5">
+          <CloudMetric icon={<Database size={11} />} label="论文行" value={status.data ? String(status.data.papers) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label="节点" value={status.data ? String(status.data.knowledge_nodes) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label="关系" value={status.data ? String(status.data.knowledge_edges) : '...'} />
+          <CloudMetric icon={<HardDrive size={11} />} label="Wiki 文件" value={status.data ? String(status.data.wiki_files) : '...'} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CloudStatusPanel({
+  status,
+  onRefresh,
+}: {
+  status: {
+    loading: boolean
+    data: MeResponse | null
+    error: string | null
+    checkedAt: number | null
+  }
+  onRefresh: () => Promise<void>
+}) {
+  const stats = status.data?.stats
+  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString() : null
+  const lastCloudSync = stats?.last_desktop_sync_at
+    ? new Date(stats.last_desktop_sync_at).toLocaleString()
+    : '暂无'
+
+  return (
+    <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 px-2.5 py-2 space-y-2">
+      <PanelHeader
+        icon={<Server size={11} className={status.error ? 'text-rose-300' : 'text-emerald-300'} />}
+        title={status.loading ? '正在读取云端总量' : status.error ? '云端状态读取失败' : '云端总量'}
+        checkedAt={checkedAt}
+        loading={status.loading}
+        onRefresh={onRefresh}
+        refreshTitle="刷新云端状态"
+      />
+
+      {status.error ? (
+        <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10.5px] text-rose-200">
+          {status.error}
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-1.5">
+          <CloudMetric icon={<Database size={11} />} label="去重论文" value={stats ? String(stats.papers) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label="节点" value={stats ? String(stats.nodes ?? stats.concepts) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label="关系" value={stats ? String(stats.edges) : '...'} />
+          <CloudMetric icon={<HardDrive size={11} />} label="Wiki 文件" value={stats ? `${stats.wiki_files} · ${formatBytes(stats.wiki_size_bytes)}` : '...'} />
+        </div>
+      )}
+
+      <div className="flex items-center justify-between gap-2 text-[10.5px] text-slate-500">
+        <span className="truncate" title={status.data?.email || undefined}>
+          {status.data?.email || status.data?.user_id || '已登录账号'}
+        </span>
+        <span className="shrink-0 tabular-nums" title={lastCloudSync}>
+          云端记录：{lastCloudSync}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function PanelHeader({
+  icon,
+  title,
+  checkedAt,
+  loading,
+  onRefresh,
+  refreshTitle,
+}: {
+  icon: ReactNode
+  title: string
+  checkedAt: string | null
+  loading: boolean
+  onRefresh: () => Promise<void>
+  refreshTitle: string
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-300">
+        {icon}
+        <span className="truncate">{title}</span>
+        {checkedAt && <span className="shrink-0 text-slate-600">· {checkedAt}</span>}
+      </div>
+      <button
+        onClick={() => void onRefresh()}
+        disabled={loading}
+        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-700/80 px-1.5 py-0.5 text-[10.5px] text-slate-400 hover:border-slate-500 hover:text-slate-200 disabled:opacity-50"
+        title={refreshTitle}
+      >
+        <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+        刷新
+      </button>
+    </div>
+  )
+}
+
+function CloudMetric({
+  icon,
+  label,
+  value,
+}: {
+  icon: ReactNode
+  label: string
+  value: string
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-slate-800/70 bg-slate-900/45 px-2 py-1.5">
+      <div className="flex items-center gap-1 text-[10px] text-slate-500">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div className="mt-0.5 truncate text-[12px] font-medium tabular-nums text-slate-200" title={value}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  const digits = value >= 10 || unitIndex === 0 ? 0 : 1
+  return `${value.toFixed(digits)} ${units[unitIndex]}`
 }
 
 function stageLabel(stage: SyncProgress['stage']): string {

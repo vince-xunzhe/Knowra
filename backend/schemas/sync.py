@@ -49,6 +49,7 @@ class PaperRow(_Row):
     paper_category_override: Optional[str] = None
     paper_team_model: Optional[str] = None
     paper_team_override: Optional[str] = None
+    learning_status: Optional[str] = None
     raw_llm_response: Optional[str] = None
     notes: Optional[str] = None
     error: Optional[str] = None

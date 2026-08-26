@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from models import Paper
 from path_utils import DATA_DIR, portable_data_path, resolve_paper_path
+from services.paper_learning_service import normalize_learning_status
 
 
 RECORDS_DIR = DATA_DIR / "paper_records"
@@ -167,6 +168,9 @@ def _payload_from_paper(
             "extraction_model": paper.extraction_model,
             "paper_category_model": paper.paper_category_model,
             "paper_category_override": paper.paper_category_override,
+            "paper_team_model": paper.paper_team_model,
+            "paper_team_override": paper.paper_team_override,
+            "learning_status": normalize_learning_status(paper.learning_status),
             "processing_status": paper.processing_status,
             "retry_count": paper.retry_count,
             "last_error_stage": paper.last_error_stage,
@@ -258,6 +262,9 @@ def render_record_markdown(payload: dict[str, Any]) -> str:
         f"- Extraction model: `{paper.get('extraction_model') or ''}`",
         f"- Model category: `{paper.get('paper_category_model') or ''}`",
         f"- Manual category override: `{paper.get('paper_category_override') or ''}`",
+        f"- Model team: `{paper.get('paper_team_model') or ''}`",
+        f"- Manual team override: `{paper.get('paper_team_override') or ''}`",
+        f"- Learning status: `{paper.get('learning_status') or 'not_started'}`",
         f"- Processing status: `{paper.get('processing_status') or ''}`",
         f"- Retry count: `{paper.get('retry_count') if paper.get('retry_count') is not None else 0}`",
         f"- Last error stage: `{paper.get('last_error_stage') or ''}`",
@@ -333,6 +340,11 @@ def sync_paper_from_record(paper: Paper) -> bool:
         "extraction_model": paper_block.get("extraction_model"),
         "paper_category_model": paper_block.get("paper_category_model", paper.paper_category_model),
         "paper_category_override": paper_block.get("paper_category_override", paper.paper_category_override),
+        "paper_team_model": paper_block.get("paper_team_model", paper.paper_team_model),
+        "paper_team_override": paper_block.get("paper_team_override", paper.paper_team_override),
+        "learning_status": normalize_learning_status(
+            paper_block.get("learning_status", paper.learning_status)
+        ),
         "processing_status": paper_block.get("processing_status", paper.processing_status),
         "retry_count": paper_block.get("retry_count", paper.retry_count),
         "last_error_stage": paper_block.get("last_error_stage"),

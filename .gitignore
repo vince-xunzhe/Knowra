@@ -68,4 +68,5 @@ pnpm-debug.log*
 
 # session: local-only artifacts
 data/*.bak
+data/backups/
 supabase/.temp/

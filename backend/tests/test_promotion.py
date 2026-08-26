@@ -99,5 +99,52 @@ class ParseDecisionsTests(unittest.TestCase):
         self.assertNotIn("u2", d)  # "maybe" isn't promote/reject → dropped
 
 
+class PromotionRunStateTests(unittest.TestCase):
+    def setUp(self):
+        from routers import promotion
+
+        self.router = promotion
+        self.original_state = dict(promotion.promotion_run_state)
+        promotion._set_run_state(
+            running=False,
+            phase="idle",
+            total=0,
+            done=0,
+            started_at=None,
+            finished_at=None,
+            error=None,
+            result=None,
+            use_llm=False,
+            force_all=False,
+        )
+
+    def tearDown(self):
+        with self.router._run_state_lock:
+            self.router.promotion_run_state.clear()
+            self.router.promotion_run_state.update(self.original_state)
+
+    def test_begin_is_atomic_and_second_start_reuses_active_job(self):
+        body = self.router.RunRequest(force_all=True, use_llm=True)
+
+        self.assertTrue(self.router._try_begin_run(body))
+        self.assertFalse(self.router._try_begin_run(body))
+
+        state = self.router._run_state_snapshot()
+        self.assertTrue(state["running"])
+        self.assertEqual(state["phase"], "heuristic")
+        self.assertTrue(state["force_all"])
+        self.assertTrue(state["use_llm"])
+
+    def test_progress_callback_failure_does_not_abort_model_work(self):
+        from services.promotion_llm import _report_progress
+
+        def broken_callback(_done, _total):
+            raise RuntimeError("UI observer failed")
+
+        # This helper is deliberately best-effort; model decisions must not
+        # fail merely because progress reporting failed.
+        _report_progress(broken_callback, 1, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

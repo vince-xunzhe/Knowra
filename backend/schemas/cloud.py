@@ -21,11 +21,15 @@ from schemas.sync import (
 
 class MeStats(BaseModel):
     papers: int = 0
+    nodes: int = 0
     concepts: int = 0
     edges: int = 0
     wiki_files: int = 0
     last_desktop_sync_at: Optional[datetime] = None
     wiki_size_bytes: int = 0
+    learning_not_started: int = 0
+    learning: int = 0
+    learning_completed: int = 0
 
 
 class MeResponse(BaseModel):

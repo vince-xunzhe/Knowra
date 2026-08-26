@@ -90,12 +90,14 @@ def _make_app_with_seed():
             id="paper-1", user_id=USER_A,
             filepath="/a/foo.pdf", filename="foo.pdf", file_hash="h1",
             title="Paper Foo", processed=True,
+            learning_status="learning",
             updated_at=now - timedelta(hours=2),
         ))
         db.add(CloudPaper(
             id="paper-2", user_id=USER_A,
             filepath="/a/bar.pdf", filename="bar.pdf", file_hash="h2",
             title="Paper Bar", processed=True,
+            learning_status="completed",
             updated_at=now - timedelta(minutes=10),
         ))
         # 2 concept nodes + 1 paper-node
@@ -209,6 +211,9 @@ class CloudRouterTests(unittest.TestCase):
         self.assertEqual(body["stats"]["edges"], 1)
         self.assertEqual(body["stats"]["wiki_files"], 2)
         self.assertEqual(body["stats"]["wiki_size_bytes"], 300)
+        self.assertEqual(body["stats"]["learning"], 1)
+        self.assertEqual(body["stats"]["learning_completed"], 1)
+        self.assertEqual(body["stats"]["learning_not_started"], 0)
         self.assertIsNotNone(body["stats"]["last_desktop_sync_at"])
 
     def test_me_for_fresh_user_returns_zeros(self):
@@ -230,6 +235,9 @@ class CloudRouterTests(unittest.TestCase):
         body = resp.json()
         self.assertEqual(body["revision"], 3)
         self.assertEqual(len(body["papers"]), 2)
+        statuses = {p["id"]: p["learning_status"] for p in body["papers"]}
+        self.assertEqual(statuses["paper-1"], "learning")
+        self.assertEqual(statuses["paper-2"], "completed")
         self.assertEqual(len(body["knowledge_nodes"]), 3)  # incl node-paper-1
         self.assertEqual(len(body["knowledge_edges"]), 1)
         self.assertEqual(len(body["wiki_files"]), 2)

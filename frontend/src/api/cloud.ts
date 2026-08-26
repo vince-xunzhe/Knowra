@@ -335,6 +335,7 @@ export interface PaperRow {
   paper_category_override?: string | null
   paper_team_model?: string | null
   paper_team_override?: string | null
+  learning_status?: 'not_started' | 'learning' | 'completed' | string | null
   raw_llm_response?: string | null
   notes?: string | null
   error?: string | null
@@ -480,11 +481,15 @@ export interface CommitResponse {
 
 export interface MeStats {
   papers: number
+  nodes?: number
   concepts: number
   edges: number
   wiki_files: number
   last_desktop_sync_at?: string | null
   wiki_size_bytes: number
+  learning_not_started?: number
+  learning?: number
+  learning_completed?: number
 }
 
 export interface MeResponse {
@@ -495,6 +500,16 @@ export interface MeResponse {
 }
 
 // ── transient-failure retry ─────────────────────────────────────────────
+
+interface CloudApiErrorBody {
+  detail?: string | {
+    error?: string
+    message?: string
+    details?: Record<string, unknown>
+  }
+  error?: string
+  message?: string
+}
 
 /** A call failed in a way that's worth retrying: no HTTP response at
  *  all (network reset / cold-start 503 from the Fly proxy with no CORS
@@ -510,6 +525,23 @@ function isRetriable(err: unknown): boolean {
   if (ax?.isAxiosError && !ax.response) return true
   const status = ax?.response?.status
   return status === 502 || status === 503 || status === 504
+}
+
+function cloudErrorMessage(err: unknown, label: string): string {
+  const ax = err as AxiosError<CloudApiErrorBody>
+  if (!ax?.isAxiosError) return err instanceof Error ? err.message : String(err)
+
+  const status = ax.response?.status
+  const detail = ax.response?.data?.detail
+  const bodyMessage = typeof detail === 'string'
+    ? detail
+    : detail?.message || ax.response?.data?.message || ax.response?.data?.error
+  const detailError = typeof detail === 'object' && detail?.details
+    ? String(detail.details.error || detail.details.reason || '').trim()
+    : ''
+  const prefix = status ? `${label} 失败（HTTP ${status}）` : `${label} 失败`
+  const message = bodyMessage || ax.message || '请求失败'
+  return detailError ? `${prefix}: ${message}；${detailError}` : `${prefix}: ${message}`
 }
 
 /**
@@ -539,12 +571,11 @@ async function withRetry<T>(
       lastErr = err
       if (i === attempts - 1 || !isRetriable(err)) break
       const delay = baseDelayMs * 2 ** i
-      // eslint-disable-next-line no-console
       console.warn(`[cloud] ${label} failed (attempt ${i + 1}/${attempts}), retrying in ${delay}ms`, err)
       await new Promise(res => setTimeout(res, delay))
     }
   }
-  throw lastErr
+  throw new Error(cloudErrorMessage(lastErr, label))
 }
 
 // ── endpoint wrappers ──────────────────────────────────────────────────

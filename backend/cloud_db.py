@@ -30,7 +30,7 @@ from __future__ import annotations
 import os
 from typing import Generator, Optional
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -144,6 +144,27 @@ def ensure_cloud_schema() -> None:
     without an external Postgres."""
     engine = init_cloud_engine()
     init_cloud_schema(engine)
+    with engine.begin() as conn:
+        if engine.dialect.name == "sqlite":
+            cols = conn.execute(text("PRAGMA table_info(papers)")).fetchall()
+            existing = {row[1] for row in cols}
+            if "learning_status" not in existing:
+                conn.execute(text("ALTER TABLE papers ADD COLUMN learning_status VARCHAR"))
+        else:
+            conn.execute(
+                text(
+                    "ALTER TABLE papers "
+                    "ADD COLUMN IF NOT EXISTS learning_status TEXT"
+                )
+            )
+        conn.execute(
+            text(
+                "UPDATE papers "
+                "SET learning_status = 'not_started' "
+                "WHERE COALESCE(learning_status, '') NOT IN "
+                "('not_started', 'learning', 'completed')"
+            )
+        )
 
 
 def get_cloud_db() -> Generator[Session, None, None]:

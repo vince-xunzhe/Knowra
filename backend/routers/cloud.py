@@ -64,6 +64,12 @@ from services.cloud_ask import (
     UpstreamFailure,
     run_cloud_ask,
 )
+from services.paper_learning_service import (
+    PAPER_LEARNING_COMPLETED,
+    PAPER_LEARNING_IN_PROGRESS,
+    PAPER_LEARNING_NOT_STARTED,
+    normalize_learning_status,
+)
 from services.storage import get_storage
 
 router = APIRouter(prefix="/api/cloud", tags=["cloud"])
@@ -104,6 +110,9 @@ def me(
     papers = db.query(func.count(CloudPaper.id)).filter(
         CloudPaper.user_id == user.user_id
     ).scalar() or 0
+    nodes = db.query(func.count(CloudKnowledgeNode.id)).filter(
+        CloudKnowledgeNode.user_id == user.user_id,
+    ).scalar() or 0
     concepts = db.query(func.count(CloudKnowledgeNode.id)).filter(
         CloudKnowledgeNode.user_id == user.user_id,
         CloudKnowledgeNode.node_type != "paper",
@@ -117,6 +126,19 @@ def me(
     wiki_size = db.query(func.coalesce(func.sum(WikiFile.size_bytes), 0)).filter(
         WikiFile.user_id == user.user_id
     ).scalar() or 0
+    learning_not_started = db.query(func.count(CloudPaper.id)).filter(
+        CloudPaper.user_id == user.user_id,
+        func.coalesce(CloudPaper.learning_status, PAPER_LEARNING_NOT_STARTED)
+        == PAPER_LEARNING_NOT_STARTED,
+    ).scalar() or 0
+    learning = db.query(func.count(CloudPaper.id)).filter(
+        CloudPaper.user_id == user.user_id,
+        CloudPaper.learning_status == PAPER_LEARNING_IN_PROGRESS,
+    ).scalar() or 0
+    learning_completed = db.query(func.count(CloudPaper.id)).filter(
+        CloudPaper.user_id == user.user_id,
+        CloudPaper.learning_status == PAPER_LEARNING_COMPLETED,
+    ).scalar() or 0
 
     return MeResponse(
         user_id=user.user_id,
@@ -124,11 +146,15 @@ def me(
         display_name=profile.display_name if profile else None,
         stats=MeStats(
             papers=int(papers),
+            nodes=int(nodes),
             concepts=int(concepts),
             edges=int(edges),
             wiki_files=int(wiki_count),
             last_desktop_sync_at=profile.last_desktop_sync_at if profile else None,
             wiki_size_bytes=int(wiki_size),
+            learning_not_started=int(learning_not_started),
+            learning=int(learning),
+            learning_completed=int(learning_completed),
         ),
     )
 
@@ -246,6 +272,7 @@ def snapshot(
                 paper_category_override=r.paper_category_override,
                 paper_team_model=r.paper_team_model,
                 paper_team_override=r.paper_team_override,
+                learning_status=normalize_learning_status(r.learning_status),
                 raw_llm_response=r.raw_llm_response,
                 notes=r.notes,
                 error=r.error,

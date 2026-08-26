@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -62,6 +64,10 @@ from services.paper_record_service import (
     record_url_for_paper,
     sync_paper_from_record,
     sync_record_from_paper,
+)
+from services.paper_learning_service import (
+    is_learning_status,
+    normalize_learning_status,
 )
 from services.paper_pipeline_service import (
     PIPELINE_STATUS_DONE,
@@ -297,6 +303,14 @@ class TeamUpdate(BaseModel):
     team: Optional[str] = None
 
 
+class LearningStatusUpdate(BaseModel):
+    learning_status: str
+
+
+class RevealScannedFileInput(BaseModel):
+    path: str
+
+
 class ChatMessageInput(BaseModel):
     message: str
 
@@ -381,6 +395,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "paper_team_model": normalize_team(p.paper_team_model),
         "paper_team_override": normalize_team(p.paper_team_override),
         "paper_team_source": paper_team_source(p),
+        "learning_status": normalize_learning_status(p.learning_status),
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
         "notes": p.notes or "",
@@ -409,6 +424,51 @@ def scan_papers(db: Session = Depends(get_db)):
         return scan_directory(cfg["scan_directory"], db)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/papers/reveal-scanned-file")
+def reveal_scanned_file(body: RevealScannedFileInput):
+    """Reveal a scanned PDF in the host file manager.
+
+    The requested file must resolve beneath the configured scan directory;
+    this endpoint cannot be used as a general-purpose local path opener.
+    """
+    cfg = load_config()
+    scan_root = resolve_papers_directory(
+        cfg.get("scan_directory") or "data/papers"
+    ).resolve()
+    requested = Path(body.path).expanduser().resolve()
+    try:
+        requested.relative_to(scan_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="文件不在当前扫描目录内")
+    if not requested.is_file() or requested.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=404, detail="重复 PDF 已不存在")
+
+    try:
+        if sys.platform == "darwin":
+            command = ["open", "-R", str(requested)]
+            selected = True
+        elif sys.platform.startswith("win"):
+            command = ["explorer", f"/select,{requested}"]
+            selected = True
+        else:
+            command = ["xdg-open", str(requested.parent)]
+            selected = False
+        subprocess.run(
+            command,
+            check=True,
+            timeout=5,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=500, detail="无法打开系统文件管理器") from exc
+    return {
+        "path": str(requested),
+        "selected": selected,
+        "file_manager": "Finder" if sys.platform == "darwin" else "系统文件管理器",
+    }
 
 
 @router.post("/papers/upload")
@@ -468,6 +528,7 @@ async def upload_papers(
         scan_result = {
             "new_found": 0,
             "duplicates": 0,
+            "duplicate_files": [],
             "total": db.query(Paper).count(),
             "unprocessed": db.query(Paper).filter(Paper.processed == False).count(),
         }
@@ -517,6 +578,7 @@ def list_papers(db: Session = Depends(get_db)):
             "paper_team_model": normalize_team(p.paper_team_model),
             "paper_team_override": normalize_team(p.paper_team_override),
             "paper_team_source": paper_team_source(p),
+            "learning_status": normalize_learning_status(p.learning_status),
             "year": _paper_pub_year(p),
             "error": p.error,
             "created_at": p.created_at.isoformat() if p.created_at else None,
@@ -539,6 +601,24 @@ def get_paper(paper_id: str, db: Session = Depends(get_db)):
     if _reconcile_processed_paper(p):
         db.commit()
         sync_record_from_paper(p, event="auto_repair")
+    return _serialize_paper_detail(p, db)
+
+
+@router.put("/papers/{paper_id}/learning-status")
+def update_paper_learning_status(
+    paper_id: str,
+    payload: LearningStatusUpdate,
+    db: Session = Depends(get_db),
+):
+    if not is_learning_status(payload.learning_status):
+        raise HTTPException(status_code=400, detail="Invalid learning status")
+    p = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    p.learning_status = normalize_learning_status(payload.learning_status)
+    db.commit()
+    db.refresh(p)
+    sync_record_from_paper(p, event="learning_status")
     return _serialize_paper_detail(p, db)
 
 
@@ -907,6 +987,17 @@ def _process_many_background(paper_ids: list[int]):
         processing_state["current"] = ""
 
 
+def _mark_processing_started(paper_ids: list[int]) -> None:
+    processing_state["total"] = len(paper_ids)
+    processing_state["done"] = 0
+    processing_state["succeeded"] = 0
+    processing_state["errors"] = 0
+    processing_state["failed_papers"] = []
+    processing_state["max_retries"] = 0
+    processing_state["current"] = ""
+    processing_state["running"] = bool(paper_ids)
+
+
 def _prepare_reprocess(db: Session, p: Paper):
     remove_nodes_for_paper(db, p.id)
     p.processed = False
@@ -959,10 +1050,17 @@ def _reconcile_failed_papers(db: Session) -> list[Paper]:
 
 
 @router.post("/process")
-def process_all(background_tasks: BackgroundTasks):
+def process_all(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
-    background_tasks.add_task(_process_all_background)
+    pending = db.query(Paper).filter(
+        Paper.processed == False, Paper.error == None
+    ).all()
+    ids = [p.id for p in pending]
+    _mark_processing_started(ids)
+    if not ids:
+        return {"message": "No pending papers to process", **processing_state}
+    background_tasks.add_task(_process_many_background, ids)
     return {"message": "Processing started", **processing_state}
 
 
@@ -973,6 +1071,7 @@ def process_one(paper_id: str, background_tasks: BackgroundTasks, db: Session = 
         raise HTTPException(status_code=404, detail="Paper not found")
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
+    _mark_processing_started([p.id])
     background_tasks.add_task(_process_one_background, paper_id)
     return {"message": f"Processing started for {p.filename}", **processing_state}
 
@@ -986,6 +1085,7 @@ def retry_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = 
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     _prepare_reprocess(db, p)
+    _mark_processing_started([p.id])
     background_tasks.add_task(_process_one_background, paper_id)
     return {"message": f"Retry started for {p.filename}", **processing_state}
 
@@ -1012,6 +1112,7 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
         _prepare_reprocess(db, paper)
         ids.append(paper.id)
 
+    _mark_processing_started(ids)
     background_tasks.add_task(_process_many_background, ids)
     return {
         "message": f"Retry started for {len(ids)} failed papers",
@@ -1030,6 +1131,7 @@ def reprocess_paper(paper_id: str, background_tasks: BackgroundTasks, db: Sessio
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     _prepare_reprocess(db, p)
+    _mark_processing_started([p.id])
     background_tasks.add_task(_process_one_background, paper_id)
     return {"message": f"Reprocessing started for {p.filename}"}
 

@@ -50,6 +50,7 @@ class WikiGraphServiceTests(unittest.TestCase):
             "problem_area": "autonomous driving world model",
             "techniques": [{"name": "JEPA World Model"}],
             "keywords": ["world model"],
+            "paper_category": "世界模型",
             "year": 2025,
         })
         self.assertEqual(classify_paper_category(paper, json.loads(paper.raw_llm_response)), "世界模型")

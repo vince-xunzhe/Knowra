@@ -8,7 +8,16 @@ import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 import { useSnapshot } from '../contexts/SnapshotContext'
 import type { RootStackParamList } from '../navigation/types'
 import type { PaperRow } from '../api/cloud'
-import { categoryOf, categoryRank, teamOf, teamRank, paperYear } from '../lib/paperMeta'
+import {
+  categoryOf,
+  categoryRank,
+  learningStatusLabel,
+  learningStatusOf,
+  teamOf,
+  teamRank,
+  paperYear,
+  type LearningStatus,
+} from '../lib/paperMeta'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PapersList'>
 
@@ -170,6 +179,7 @@ export default function PapersScreen({ navigation }: Props) {
                 {item.title || item.filename || '(未提取标题)'}
               </Text>
               <View style={styles.rowMeta}>
+                <LearningBadge status={learningStatusOf(item)} />
                 {yr ? <Text style={styles.rowYear}>{yr}</Text> : null}
                 <Text style={styles.rowMetaText}>
                   {Array.isArray(item.authors) && item.authors.length > 0
@@ -186,6 +196,18 @@ export default function PapersScreen({ navigation }: Props) {
         }}
       />
     </View>
+  )
+}
+
+function LearningBadge({ status }: { status: LearningStatus }) {
+  const style =
+    status === 'completed'
+      ? styles.learningDone
+      : status === 'learning'
+        ? styles.learningActive
+        : styles.learningIdle
+  return (
+    <Text style={[styles.learningBadge, style]}>{learningStatusLabel(status)}</Text>
   )
 }
 
@@ -236,6 +258,14 @@ const styles = StyleSheet.create({
   },
   rowTitle: { color: '#f1f5f9', fontSize: 14.5, lineHeight: 20, fontWeight: '500' },
   rowMeta: { flexDirection: 'row', alignItems: 'center', marginTop: 6, flexWrap: 'wrap' },
+  learningBadge: {
+    fontSize: 10.5, fontWeight: '700', marginRight: 6,
+    borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1,
+    overflow: 'hidden',
+  },
+  learningIdle: { color: '#94a3b8', backgroundColor: '#172033' },
+  learningActive: { color: '#67e8f9', backgroundColor: '#083344' },
+  learningDone: { color: '#6ee7b7', backgroundColor: '#064e3b' },
   rowYear: {
     color: '#a5b4fc', fontSize: 10.5, fontWeight: '700', marginRight: 6,
     backgroundColor: '#1e293b', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1,

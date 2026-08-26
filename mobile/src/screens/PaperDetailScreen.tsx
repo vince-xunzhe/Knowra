@@ -4,10 +4,15 @@ import {
 } from 'react-native'
 import type { NativeStackScreenProps } from '@react-navigation/native-stack'
 
-import { fetchWikiById } from '../api/cloud'
+import { fetchWikiById, type PaperRow } from '../api/cloud'
 import { useSnapshot } from '../contexts/SnapshotContext'
 import MarkdownMathView from '../components/MarkdownMathView'
 import type { RootStackParamList } from '../navigation/types'
+import {
+  learningStatusLabel,
+  learningStatusOf,
+  type LearningStatus,
+} from '../lib/paperMeta'
 
 type Props = NativeStackScreenProps<RootStackParamList, 'PaperDetail'>
 
@@ -243,13 +248,14 @@ export default function PaperDetailScreen({ route }: Props) {
 function StructuredView({
   paper, extraction, markdown,
 }: {
-  paper: { error?: unknown; raw_llm_response?: unknown } | undefined
+  paper: PaperRow | undefined
   extraction: PaperExtraction | null
   markdown: string
 }) {
   if (paper?.error) {
     return (
       <ScrollView contentContainerStyle={styles.centeredPad}>
+        <LearningBadge status={learningStatusOf(paper)} />
         <Text style={styles.errTitle}>处理失败</Text>
         <Text style={styles.errMsg} selectable>{String(paper.error)}</Text>
       </ScrollView>
@@ -257,9 +263,10 @@ function StructuredView({
   }
   if (!paper?.raw_llm_response) {
     return (
-      <View style={styles.centered}>
+      <ScrollView contentContainerStyle={styles.centeredPad}>
+        <LearningBadge status={learningStatusOf(paper)} />
         <Text style={styles.muted}>这篇论文还没有模型解读。{'\n'}在桌面端处理后再同步。</Text>
-      </View>
+      </ScrollView>
     )
   }
   if (!extraction) {
@@ -267,14 +274,34 @@ function StructuredView({
     // (still readable, no crash).
     return (
       <ScrollView style={styles.scroll}>
+        <View style={styles.statusWrap}>
+          <LearningBadge status={learningStatusOf(paper)} />
+        </View>
         <MarkdownMathView markdown={'```\n' + String(paper.raw_llm_response) + '\n```'} />
       </ScrollView>
     )
   }
   return (
     <ScrollView style={styles.scroll}>
+      <View style={styles.statusWrap}>
+        <LearningBadge status={learningStatusOf(paper)} />
+      </View>
       <MarkdownMathView markdown={markdown} />
     </ScrollView>
+  )
+}
+
+function LearningBadge({ status }: { status: LearningStatus }) {
+  const style =
+    status === 'completed'
+      ? styles.learningDone
+      : status === 'learning'
+        ? styles.learningActive
+        : styles.learningIdle
+  return (
+    <Text style={[styles.learningBadge, style]}>
+      {learningStatusLabel(status)}
+    </Text>
   )
 }
 
@@ -349,6 +376,15 @@ const styles = StyleSheet.create({
   segmentDisabled: { opacity: 0.4 },
   segmentText: { color: '#94a3b8', fontSize: 13, fontWeight: '500' },
   segmentTextActive: { color: '#e0e7ff', fontWeight: '700' },
+  statusWrap: { paddingHorizontal: 16, paddingTop: 14, alignItems: 'flex-start' },
+  learningBadge: {
+    fontSize: 11.5, fontWeight: '700',
+    borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  learningIdle: { color: '#94a3b8', backgroundColor: '#172033' },
+  learningActive: { color: '#67e8f9', backgroundColor: '#083344' },
+  learningDone: { color: '#6ee7b7', backgroundColor: '#064e3b' },
 
   errTitle: { color: '#fda4af', fontSize: 16, fontWeight: '700' },
   errMsg: { color: '#fda4af', fontSize: 13, marginTop: 8, lineHeight: 20, textAlign: 'center' },

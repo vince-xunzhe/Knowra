@@ -15,7 +15,7 @@ import json
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from sqlalchemy.orm import Session
 
@@ -167,7 +167,25 @@ def _parse_decisions(raw: str) -> dict[str, dict]:
     return out
 
 
-def run_llm_pass(db: Session) -> LLMRunResult:
+def _report_progress(
+    callback: Optional[Callable[[int, int], None]],
+    done: int,
+    total: int,
+) -> None:
+    if callback is None:
+        return
+    try:
+        callback(done, total)
+    except Exception:
+        # Progress is observational only. A UI/status failure must never
+        # invalidate model decisions that were already produced.
+        log.exception("Promotion progress callback failed")
+
+
+def run_llm_pass(
+    db: Session,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+) -> LLMRunResult:
     cfg = load_config()
     user_prompt_template = (cfg.get("promotion_prompt") or "").strip()
     if not user_prompt_template:
@@ -178,6 +196,7 @@ def run_llm_pass(db: Session) -> LLMRunResult:
     model = task_model_id(cfg, "promotion_judge")
 
     candidates = _candidates_for_llm(db)
+    _report_progress(progress_callback, 0, len(candidates))
     if not candidates:
         return LLMRunResult(0, 0, 0, 0, model)
 
@@ -205,6 +224,11 @@ def run_llm_pass(db: Session) -> LLMRunResult:
         except Exception as exc:
             log.warning("LLM batch failed (%s); leaving %d nodes pending", exc, len(batch_nodes))
             still_ambiguous += len(batch_nodes)
+            _report_progress(
+                progress_callback,
+                min(batch_start + len(batch_nodes), len(candidates)),
+                len(candidates),
+            )
             continue
 
         decisions = _parse_decisions(raw)
@@ -227,6 +251,12 @@ def run_llm_pass(db: Session) -> LLMRunResult:
                     when=now,
                 )
                 rejected += 1
+
+        _report_progress(
+            progress_callback,
+            min(batch_start + len(batch_nodes), len(candidates)),
+            len(candidates),
+        )
 
     db.commit()
     return LLMRunResult(

@@ -298,11 +298,15 @@ async function cloudClient(): Promise<AxiosInstance> {
 
 export interface MeStats {
   papers: number
+  nodes?: number
   concepts: number
   edges: number
   wiki_files: number
   last_desktop_sync_at?: string | null
   wiki_size_bytes: number
+  learning_not_started?: number
+  learning?: number
+  learning_completed?: number
 }
 
 export interface MeResponse {
@@ -325,6 +329,7 @@ export interface PaperRow {
   paper_category_override?: string | null
   paper_team_model?: string | null
   paper_team_override?: string | null
+  learning_status?: 'not_started' | 'learning' | 'completed' | string | null
   raw_llm_response?: string | null
   notes?: string | null
   updated_at?: string | null

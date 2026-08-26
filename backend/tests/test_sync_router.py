@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -37,6 +38,7 @@ sys.path.insert(0, str(BACKEND))
 
 import auth_deps  # noqa: E402
 from cloud_models import (  # noqa: E402
+    CloudDeletion,
     CloudKnowledgeEdge,
     CloudKnowledgeNode,
     CloudPaper,
@@ -115,6 +117,18 @@ class SyncRouterTests(unittest.TestCase):
         os.environ.pop("KNOWRA_STORAGE_BACKEND", None)
 
     # ---- happy path ----------------------------------------------------
+
+    def test_conflict_key_normalizes_uuid_user_id(self):
+        user_uuid = uuid.UUID(USER_A)
+        payload_key = sync_router._conflict_key(
+            {"user_id": USER_A, "file_hash": "hash1"},
+            ("user_id", "file_hash"),
+        )
+        row_key = sync_router._row_conflict_key(
+            type("Row", (), {"user_id": user_uuid, "file_hash": "hash1"})(),
+            ("user_id", "file_hash"),
+        )
+        self.assertEqual(row_key, payload_key)
 
     def _basic_payload(self, *, paper_id="paper-a", wiki_path="papers/foo.md"):
         return {
@@ -292,6 +306,174 @@ class SyncRouterTests(unittest.TestCase):
         self.assertEqual(resp["accepted"]["wiki_files"], 0)
         self.assertEqual(resp["rejected"][0]["code"], "UPLOAD_MISSING_AT_STORAGE")
 
+    def test_full_snapshot_prunes_stale_cloud_rows(self):
+        db = self.SessionLocal()
+        try:
+            db.add_all([
+                CloudPaper(
+                    id="paper-stale",
+                    user_id=USER_A,
+                    filepath="/tmp/old.pdf",
+                    filename="old.pdf",
+                    file_hash="old-hash",
+                ),
+                CloudKnowledgeNode(
+                    id="node-stale",
+                    user_id=USER_A,
+                    title="Old node",
+                    content="Old content",
+                    node_type="concept",
+                ),
+                CloudKnowledgeEdge(
+                    id="edge-stale",
+                    user_id=USER_A,
+                    source_id="node-stale",
+                    target_id="node-stale",
+                    relation_type="related",
+                ),
+                WikiFile(
+                    id="wiki-stale",
+                    user_id=USER_A,
+                    kind="concept",
+                    rel_path="concepts/old.md",
+                    storage_path=f"{USER_A}/concepts/old.md",
+                    content_hash="sha256:old",
+                    size_bytes=10,
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        payload = self._basic_payload(paper_id="paper-live")
+        payload["tables"]["knowledge_nodes"] = [{
+            "id": "node-live",
+            "user_id": USER_A,
+            "title": "Live node",
+            "content": "Live content",
+            "node_type": "concept",
+            "updated_at": "2026-05-29T10:00:00Z",
+        }]
+        payload["tables"]["knowledge_edges"] = []
+        payload["tables"]["wiki_files"] = []
+
+        prep = self.client.post("/api/sync/prepare", json=payload).json()
+        resp = self.client.post("/api/sync/commit", json={
+            "api_version": "1",
+            "sync_session_id": prep["sync_session_id"],
+            "uploaded": [],
+        })
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        db = self.SessionLocal()
+        try:
+            self.assertEqual(
+                {p.file_hash for p in db.query(CloudPaper).all()},
+                {"hash1"},
+            )
+            self.assertEqual(
+                {n.id for n in db.query(CloudKnowledgeNode).all()},
+                {"node-live"},
+            )
+            self.assertEqual(db.query(CloudKnowledgeEdge).count(), 0)
+            self.assertEqual(db.query(WikiFile).count(), 0)
+            tombstones = {
+                (d.table_name, d.row_id)
+                for d in db.query(CloudDeletion).all()
+            }
+            self.assertIn(("papers", "paper-stale"), tombstones)
+            self.assertIn(("knowledge_nodes", "node-stale"), tombstones)
+            self.assertIn(("knowledge_edges", "edge-stale"), tombstones)
+            self.assertIn(("wiki_files", "wiki-stale"), tombstones)
+        finally:
+            db.close()
+
+    def test_retained_edge_is_not_tombstoned_during_replacement(self):
+        db = self.SessionLocal()
+        try:
+            db.add_all([
+                CloudKnowledgeNode(
+                    id="node-a",
+                    user_id=USER_A,
+                    title="A",
+                    content="A",
+                    node_type="concept",
+                ),
+                CloudKnowledgeNode(
+                    id="node-b",
+                    user_id=USER_A,
+                    title="B",
+                    content="B",
+                    node_type="concept",
+                ),
+                CloudKnowledgeEdge(
+                    id="edge-keep",
+                    user_id=USER_A,
+                    source_id="node-a",
+                    target_id="node-b",
+                    relation_type="related",
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        payload = {
+            "api_version": "1",
+            "device_id": "dev-1",
+            "tables": {
+                "papers": [],
+                "knowledge_nodes": [
+                    {
+                        "id": "node-a",
+                        "user_id": USER_A,
+                        "title": "A",
+                        "content": "A",
+                        "node_type": "concept",
+                    },
+                    {
+                        "id": "node-b",
+                        "user_id": USER_A,
+                        "title": "B",
+                        "content": "B",
+                        "node_type": "concept",
+                    },
+                ],
+                "knowledge_edges": [
+                    {
+                        "id": "edge-keep",
+                        "user_id": USER_A,
+                        "source_id": "node-a",
+                        "target_id": "node-b",
+                        "relation_type": "related",
+                    },
+                ],
+                "wiki_files": [],
+            },
+        }
+        prep = self.client.post("/api/sync/prepare", json=payload).json()
+        resp = self.client.post("/api/sync/commit", json={
+            "api_version": "1",
+            "sync_session_id": prep["sync_session_id"],
+            "uploaded": [],
+        })
+        self.assertEqual(resp.status_code, 200, resp.text)
+
+        db = self.SessionLocal()
+        try:
+            self.assertEqual(
+                {e.id for e in db.query(CloudKnowledgeEdge).all()},
+                {"edge-keep"},
+            )
+            self.assertFalse(
+                db.query(CloudDeletion).filter(
+                    CloudDeletion.table_name == "knowledge_edges",
+                    CloudDeletion.row_id == "edge-keep",
+                ).first()
+            )
+        finally:
+            db.close()
+
     # ---- session lifecycle ---------------------------------------------
 
     def test_commit_unknown_session_returns_404(self):
@@ -402,6 +584,116 @@ class SyncRouterTests(unittest.TestCase):
         # changed (helps clients tell "the server has acked").
         self.assertGreaterEqual(body["revision"], 2)
 
+    def test_wiki_upsert_matches_existing_row_by_rel_path(self):
+        """Older cloud rows may have a different wiki id for the same path.
+
+        The schema's real identity for wiki metadata is (user_id, rel_path).
+        If the desktop later switches to deterministic path-based UUIDs, a
+        naive id-only upsert would INSERT the new id and violate
+        wiki_files_user_path_uniq. Commit should instead update the existing
+        path row in place.
+        """
+        from services.storage import StoredObject
+
+        db = self.SessionLocal()
+        try:
+            db.add(WikiFile(
+                id="wf-old",
+                user_id=USER_A,
+                kind="paper",
+                rel_path="papers/foo.md",
+                storage_path=f"{USER_A}/papers/foo.md",
+                content_hash="sha256:old",
+                size_bytes=9,
+                title="Old title",
+                updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        payload = self._basic_payload()
+        payload["tables"]["wiki_files"][0]["id"] = "wf-new"
+        payload["tables"]["wiki_files"][0]["content_hash"] = "sha256:new"
+        payload["tables"]["wiki_files"][0]["updated_at"] = "2026-06-01T10:00:00Z"
+
+        prep = self.client.post("/api/sync/prepare", json=payload).json()
+        with self.storage._lock:
+            self.storage._objects[f"{USER_A}/papers/foo.md"] = StoredObject(
+                content_hash="sha256:new", size_bytes=12,
+            )
+        resp = self.client.post("/api/sync/commit", json={
+            "api_version": "1",
+            "sync_session_id": prep["sync_session_id"],
+            "uploaded": [{"rel_path": "papers/foo.md", "content_hash": "sha256:new"}],
+        })
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["accepted"]["wiki_files"], 1)
+
+        db = self.SessionLocal()
+        try:
+            rows = db.query(WikiFile).all()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0].id, "wf-old")
+            self.assertEqual(rows[0].content_hash, "sha256:new")
+            self.assertEqual(rows[0].title, "Foo md")
+        finally:
+            db.close()
+
+    def test_paper_upsert_matches_existing_row_by_file_hash(self):
+        """A local paper UUID can change while the PDF hash stays stable.
+
+        Cloud identity for papers is (user_id, file_hash). A re-sync should
+        update the existing cloud paper row and rewrite dependent wiki paper_id
+        references to that persisted id instead of inserting a duplicate paper.
+        """
+        from services.storage import StoredObject
+
+        db = self.SessionLocal()
+        try:
+            db.add(CloudPaper(
+                id="paper-old",
+                user_id=USER_A,
+                filepath="/old/foo.pdf",
+                filename="old-foo.pdf",
+                file_hash="hash1",
+                title="Old Foo",
+                updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        payload = self._basic_payload(paper_id="paper-new")
+        payload["tables"]["papers"][0]["title"] = "Fresh Foo"
+        payload["tables"]["papers"][0]["updated_at"] = "2026-06-01T10:00:00Z"
+        payload["tables"]["wiki_files"][0]["paper_id"] = "paper-new"
+
+        prep = self.client.post("/api/sync/prepare", json=payload).json()
+        with self.storage._lock:
+            self.storage._objects[f"{USER_A}/papers/foo.md"] = StoredObject(
+                content_hash="sha256:abc", size_bytes=12,
+            )
+        resp = self.client.post("/api/sync/commit", json={
+            "api_version": "1",
+            "sync_session_id": prep["sync_session_id"],
+            "uploaded": [{"rel_path": "papers/foo.md", "content_hash": "sha256:abc"}],
+        })
+        self.assertEqual(resp.status_code, 200, resp.text)
+        self.assertEqual(resp.json()["accepted"]["papers"], 1)
+
+        db = self.SessionLocal()
+        try:
+            papers = db.query(CloudPaper).all()
+            self.assertEqual(len(papers), 1)
+            self.assertEqual(papers[0].id, "paper-old")
+            self.assertEqual(papers[0].title, "Fresh Foo")
+            wiki = db.query(WikiFile).one()
+            self.assertEqual(wiki.paper_id, "paper-old")
+        finally:
+            db.close()
+
     def test_older_paper_payload_backfills_empty_team_metadata(self):
         """Team/category fields may be derived after the original sync.
 
@@ -420,6 +712,7 @@ class SyncRouterTests(unittest.TestCase):
                 filename="foo.pdf",
                 file_hash="hash1",
                 title="Foo",
+                learning_status="not_started",
                 updated_at=server_ts,
                 created_at=server_ts,
             ))
@@ -432,6 +725,7 @@ class SyncRouterTests(unittest.TestCase):
         payload["tables"]["papers"][0]["updated_at"] = "2020-01-01T10:00:00Z"
         payload["tables"]["papers"][0]["paper_team_model"] = "Kaiming He"
         payload["tables"]["papers"][0]["paper_category_model"] = "VLM"
+        payload["tables"]["papers"][0]["learning_status"] = "learning"
 
         prep = self.client.post("/api/sync/prepare", json=payload).json()
         resp = self.client.post("/api/sync/commit", json={
@@ -447,6 +741,7 @@ class SyncRouterTests(unittest.TestCase):
             paper = db.query(CloudPaper).filter(CloudPaper.id == "paper-a").one()
             self.assertEqual(paper.paper_team_model, "Kaiming He")
             self.assertEqual(paper.paper_category_model, "VLM")
+            self.assertEqual(paper.learning_status, "learning")
             updated_at = paper.updated_at
             if updated_at.tzinfo is None:
                 updated_at = updated_at.replace(tzinfo=timezone.utc)

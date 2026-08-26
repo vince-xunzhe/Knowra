@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,6 +29,55 @@ class ProviderCapabilityError(ModelGatewayError):
 
 _CODEX_REASONING_SUFFIX_RE = re.compile(r"^(?P<base>gpt-[0-9][^\s]*)-(high|medium|low)$")
 VALID_REASONING_EFFORTS = {"low", "medium", "high"}
+
+
+def _default_codex_cli_candidates() -> list[Path]:
+    home = Path.home()
+    candidates = [
+        home / ".local/bin/codex",
+        home / ".npm-global/bin/codex",
+        home / ".volta/bin/codex",
+        home / ".asdf/shims/codex",
+        home / "bin/codex",
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
+        Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
+        home / "Applications/Codex.app/Contents/Resources/codex",
+        home / "Applications/ChatGPT.app/Contents/Resources/codex",
+    ]
+    nvm_root = home / ".nvm/versions/node"
+    if nvm_root.is_dir():
+        candidates.extend(sorted(nvm_root.glob("*/bin/codex"), reverse=True))
+    return candidates
+
+
+def _is_executable_file(path: Path) -> bool:
+    return path.is_file() and os.access(path, os.X_OK)
+
+
+def _resolve_codex_cli_command(command: str) -> str:
+    raw = str(command or "codex").strip() or "codex"
+    expanded = Path(raw).expanduser()
+    if expanded != Path(raw) or expanded.is_absolute() or expanded.parent != Path("."):
+        if _is_executable_file(expanded):
+            return str(expanded)
+        return raw
+
+    resolved = shutil.which(raw)
+    if resolved:
+        return resolved
+    if raw != "codex":
+        return raw
+
+    env_path = str(os.environ.get("CODEX_CLI_PATH") or "").strip()
+    candidates = (
+        [Path(env_path).expanduser()] if env_path else []
+    ) + _default_codex_cli_candidates()
+    for candidate in candidates:
+        if _is_executable_file(candidate):
+            return str(candidate)
+    return raw
 
 
 def _provider_api_key(cfg: dict[str, Any], provider: dict[str, Any], api_key_override: str | None = None) -> str:
@@ -109,7 +160,8 @@ def _run_codex_cli(
 ) -> str:
     import time
 
-    command = str(provider.get("command") or "codex").strip() or "codex"
+    configured_command = str(provider.get("command") or "codex").strip() or "codex"
+    command = _resolve_codex_cli_command(configured_command)
     _validate_codex_cli_model(upstream_model)
     with tempfile.NamedTemporaryFile(prefix="codex-last-message-", suffix=".txt", delete=False) as handle:
         output_path = Path(handle.name)
@@ -154,7 +206,10 @@ def _run_codex_cli(
                 success=False,
                 error_class="FileNotFoundError",
             )
-            raise ModelGatewayError(f"Codex CLI not found: {command}") from exc
+            raise ModelGatewayError(
+                f"Codex CLI not found: {configured_command}. "
+                "请在 Provider 中配置可执行文件的绝对路径，或设置 CODEX_CLI_PATH。"
+            ) from exc
         except subprocess.TimeoutExpired as exc:
             log_codex_cli_call(
                 provider="codex_cli",

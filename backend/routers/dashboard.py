@@ -27,6 +27,12 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, LLMCall, Paper
 from services.paper_category_service import PAPER_CATEGORY_OTHER, effective_paper_category
+from services.paper_learning_service import (
+    PAPER_LEARNING_COMPLETED,
+    PAPER_LEARNING_IN_PROGRESS,
+    PAPER_LEARNING_NOT_STARTED,
+    normalize_learning_status,
+)
 from services.wiki_compiler import compute_freshness_summary
 
 
@@ -204,6 +210,18 @@ def get_summary(db: Session = Depends(get_db)) -> DashboardSummary:
         "papers_unprocessed": sum(1 for p in papers if not p.processed),
         "papers_failed": sum(
             1 for p in papers if (p.processing_status or "").lower() == "failed"
+        ),
+        "learning_not_started": sum(
+            1 for p in papers
+            if normalize_learning_status(p.learning_status) == PAPER_LEARNING_NOT_STARTED
+        ),
+        "learning": sum(
+            1 for p in papers
+            if normalize_learning_status(p.learning_status) == PAPER_LEARNING_IN_PROGRESS
+        ),
+        "learning_completed": sum(
+            1 for p in papers
+            if normalize_learning_status(p.learning_status) == PAPER_LEARNING_COMPLETED
         ),
         "nodes": len(nodes),
         "concepts_promoted": promoted_count,

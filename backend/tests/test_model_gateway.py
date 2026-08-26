@@ -1,4 +1,5 @@
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,11 @@ sys.path.insert(0, str(BACKEND))
 
 from model_gateway import ensure_model_gateway_config, run_provider_healthcheck
 from model_gateway.catalog import BUILTIN_MODEL_REGISTRY
-from model_gateway.runtime import _run_codex_cli, _summarize_codex_cli_failure
+from model_gateway.runtime import (
+    _resolve_codex_cli_command,
+    _run_codex_cli,
+    _summarize_codex_cli_failure,
+)
 
 
 class ModelGatewayConfigTests(unittest.TestCase):
@@ -142,6 +147,25 @@ class ModelGatewayHealthcheckTests(unittest.TestCase):
 
 
 class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
+    @patch("model_gateway.runtime.shutil.which", return_value=None)
+    @patch("model_gateway.runtime._default_codex_cli_candidates")
+    def test_codex_cli_falls_back_to_desktop_app_binary(
+        self,
+        mock_candidates,
+        _mock_which,
+    ):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            executable = Path(tmp_dir) / "codex"
+            executable.write_text("#!/bin/sh\n", encoding="utf-8")
+            executable.chmod(0o755)
+            mock_candidates.return_value = [executable]
+
+            self.assertEqual(_resolve_codex_cli_command("codex"), str(executable))
+
+    @patch("model_gateway.runtime.shutil.which", return_value="/custom/bin/codex")
+    def test_codex_cli_prefers_path_lookup(self, _mock_which):
+        self.assertEqual(_resolve_codex_cli_command("codex"), "/custom/bin/codex")
+
     @patch("model_gateway.runtime.subprocess.run")
     def test_codex_cli_uses_current_exec_flags(self, mock_run):
         output_path_holder = {}

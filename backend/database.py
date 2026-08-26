@@ -90,6 +90,31 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+def _create_unique_index_if_clean(
+    conn,
+    index_name: str,
+    table_name: str,
+    columns: tuple[str, ...],
+) -> None:
+    """Install a uniqueness guard once legacy duplicates have been repaired.
+
+    Older local DBs may already contain duplicate rows. Failing startup would
+    block the repair tool, so we skip index creation until the table is clean.
+    """
+    cols = ", ".join(columns)
+    duplicate = conn.execute(
+        text(
+            f"SELECT {cols}, COUNT(*) AS c FROM {table_name} "
+            f"GROUP BY {cols} HAVING COUNT(*) > 1 LIMIT 1"
+        )
+    ).fetchone()
+    if duplicate is not None:
+        return
+    conn.execute(
+        text(f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({cols})")
+    )
+
+
 def _migrate():
     """Idempotent ALTER TABLE migrations for SQLite.
 
@@ -131,6 +156,8 @@ def _migrate():
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_team_model VARCHAR"))
         if "paper_team_override" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN paper_team_override VARCHAR"))
+        if "learning_status" not in existing:
+            conn.execute(text("ALTER TABLE papers ADD COLUMN learning_status VARCHAR"))
         if "processing_status" not in existing:
             conn.execute(text("ALTER TABLE papers ADD COLUMN processing_status VARCHAR"))
         if "retry_count" not in existing:
@@ -155,6 +182,14 @@ def _migrate():
         )
         conn.execute(
             text(
+                "UPDATE papers "
+                "SET learning_status = 'not_started' "
+                "WHERE COALESCE(learning_status, '') NOT IN "
+                "('not_started', 'learning', 'completed')"
+            )
+        )
+        conn.execute(
+            text(
                 "UPDATE papers SET retry_count = COALESCE(retry_count, 0)"
             )
         )
@@ -171,6 +206,12 @@ def _migrate():
                 "SET last_error_stage = COALESCE(NULLIF(last_error_stage, ''), 'extracting') "
                 "WHERE processing_status = 'failed' AND COALESCE(error, '') != ''"
             )
+        )
+        _create_unique_index_if_clean(
+            conn, "papers_filepath_uniq", "papers", ("filepath",)
+        )
+        _create_unique_index_if_clean(
+            conn, "papers_file_hash_uniq", "papers", ("file_hash",)
         )
 
         node_cols = conn.execute(text("PRAGMA table_info(knowledge_nodes)")).fetchall()

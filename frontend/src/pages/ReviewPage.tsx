@@ -11,14 +11,17 @@ import {
   Copy, Check, ArrowRight, Plus, Trash2,
   MessageCircle, Maximize2, Send, RefreshCw, Timer,
   ZoomIn, ZoomOut, Minimize, ChevronDown, ChevronRight,
+  Circle, PlayCircle, CheckCircle2, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react'
 import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperCategory, updatePaperNotes,
+  updatePaperLearningStatus,
   getStatus,
   pdfFileUrl, firstPageUrl,
   sendPaperChat, resetPaperChat, uploadNoteImage,
   listPaperCategories,
   type PaperRecord, type PaperDetail, type PaperCategoryItem,
+  type PaperLearningStatus,
   type ChatState, type ChatMessage,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
@@ -94,7 +97,11 @@ interface ActionNotice {
   detail?: string
 }
 
-export default function ReviewPage() {
+interface ReviewPageProps {
+  initialPaperId?: number | null
+}
+
+export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<PaperDetail | null>(null)
@@ -109,6 +116,8 @@ export default function ReviewPage() {
   const [categoryDraft, setCategoryDraft] = useState<string>(CATEGORY_INHERIT)
   const [categorySaving, setCategorySaving] = useState(false)
   const [categoryError, setCategoryError] = useState<string | null>(null)
+  const [learningSaving, setLearningSaving] = useState(false)
+  const [learningError, setLearningError] = useState<string | null>(null)
   // User-editable taxonomy (loaded from /paper-categories). Falls back to
   // the built-in defaults until the first fetch resolves.
   const [categoryItems, setCategoryItems] = useState<PaperCategoryItem[]>([])
@@ -119,6 +128,7 @@ export default function ReviewPage() {
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [processStatus, setProcessStatus] = useState<ProcessStatusHint | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [paperListCollapsed, setPaperListCollapsed] = useState(false)
 
   // ── In-page PDF reader ─────────────────────────────────────────
   // The right-side PDF panel is opened from the 首页预览 block in the
@@ -154,8 +164,20 @@ export default function ReviewPage() {
     listPapers()
       .then(ps => {
         setPapers(ps)
-        const first = ps.find(p => p.processed)
-        if (first) setSelectedId(first.id)
+        const requested = initialPaperId === null
+          ? null
+          : ps.find(p => p.id === initialPaperId)
+        const initial = requested || ps.find(p => p.processed) || ps[0]
+        if (initial) {
+          setSelectedId(initial.id)
+          setFilter(
+            initial.processed
+              ? 'processed'
+              : initial.error
+                ? 'failed'
+                : 'pending',
+          )
+        }
       })
       .catch(err => {
         // Without this we'd sit at "加载中…" forever on any axios reject
@@ -165,7 +187,7 @@ export default function ReviewPage() {
         console.error('[ReviewPage] listPapers failed:', err)
       })
       .finally(() => setLoading(false))
-  }, [])
+  }, [initialPaperId])
 
   const reloadCategories = useCallback(
     () =>
@@ -306,6 +328,7 @@ export default function ReviewPage() {
     setRawDraft('')
     setRawError(null)
     setCategoryError(null)
+    setLearningError(null)
     setActionNotice(null)
   }
 
@@ -397,27 +420,68 @@ export default function ReviewPage() {
     }
   }
 
+  const saveLearningStatus = async (status: PaperLearningStatus) => {
+    if (!visibleDetail || status === normalizeLearningStatus(visibleDetail.learning_status)) return
+    setLearningSaving(true)
+    setLearningError(null)
+    try {
+      const updated = await updatePaperLearningStatus(visibleDetail.id, status)
+      setDetail(updated)
+      setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
+    } catch (error) {
+      setLearningError(getApiErrorMessage(error))
+    } finally {
+      setLearningSaving(false)
+    }
+  }
+
   return (
     <LightboxProvider>
     <div className="flex h-full min-h-0 flex-col text-slate-200 lg:flex-row">
-      {/* Left list — collapses to zero width when the PDF side panel is
-          open so the structured extraction column has more room. The
-          width transition is what gives the visual "向左收缩" effect the
-          user asked for. */}
+      {/* The paper navigator can be collapsed manually to a narrow rail.
+          Opening the PDF still hides it completely until the PDF closes. */}
       <aside
         className={`flex shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:border-b-0 lg:border-r transition-[width,height,border] duration-200 ease-out ${
           pdfOpenPaperId != null
             ? 'h-0 w-full lg:h-auto lg:w-0 lg:border-r-0'
-            : 'h-[17.5rem] w-full lg:h-auto lg:w-72 xl:w-80'
+            : paperListCollapsed
+              ? 'h-12 w-full lg:h-auto lg:w-12'
+              : 'h-[17.5rem] w-full lg:h-auto lg:w-72 xl:w-80'
         }`}
       >
+        {paperListCollapsed ? (
+          <div className="flex h-full w-full items-center justify-center lg:flex-col lg:justify-start lg:py-4">
+            <button
+              type="button"
+              onClick={() => setPaperListCollapsed(false)}
+              title="展开论文导航"
+              aria-label="展开论文导航"
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800/70 hover:text-white"
+            >
+              <PanelLeftOpen size={17} />
+            </button>
+            <BookOpen size={15} className="mt-4 hidden text-slate-600 lg:block" />
+          </div>
+        ) : (
+          <>
         <div className="p-4 border-b border-slate-800/80 space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <div>
               <h2 className="text-lg font-semibold text-white tracking-tight">论文回顾</h2>
               <p className="text-sm text-slate-500 mt-1">按结构化字段阅读论文摘要、方法与结论。</p>
             </div>
-            <span className="text-xs text-slate-500 tabular-nums">{filtered.length} / {papers.length}</span>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <span className="text-xs text-slate-500 tabular-nums">{filtered.length} / {papers.length}</span>
+              <button
+                type="button"
+                onClick={() => setPaperListCollapsed(true)}
+                title="收起论文导航"
+                aria-label="收起论文导航"
+                className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-800/70 hover:text-white"
+              >
+                <PanelLeftClose size={15} />
+              </button>
+            </div>
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
@@ -497,17 +561,14 @@ export default function ReviewPage() {
                       <ul>
                         {ps.map(p => {
                           const active = selectedId === p.id
+                          const learningStatus = normalizeLearningStatus(p.learning_status)
                           return (
                             <li key={p.id}>
                               <button
                                 onClick={() => selectPaper(p.id)}
-                                className={`w-full flex flex-col gap-1.5 py-3 pl-7 pr-4 text-left border-l-2 transition-colors ${
-                                  active
-                                    ? 'bg-indigo-500/10 border-l-indigo-400'
-                                    : 'border-l-transparent hover:bg-slate-900/60'
-                                }`}
+                                className={`w-full flex flex-col gap-1.5 py-3 pl-7 pr-4 text-left border-l-2 transition-colors ${learningStatusRowClass(learningStatus, active)}`}
                               >
-                                <p className={`text-sm leading-snug line-clamp-3 text-safe-wrap ${active ? 'text-white font-medium' : 'text-slate-300'}`}>
+                                <p className={`text-sm leading-snug line-clamp-3 text-safe-wrap ${learningStatusTitleClass(learningStatus, active)}`}>
                                   {p.title || p.filename}
                                 </p>
                                 {p.authors.length > 0 && (
@@ -516,6 +577,7 @@ export default function ReviewPage() {
                                   </p>
                                 )}
                                 <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <LearningStatusBadge status={p.learning_status} compact />
                                   <PaperProcessBadge paper={p} status={processStatus} />
                                   {p.year && <span className="text-slate-500">{p.year}</span>}
                                   {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
@@ -537,6 +599,8 @@ export default function ReviewPage() {
             </div>
           )}
         </div>
+          </>
+        )}
       </aside>
 
       {/* Main reading area */}
@@ -552,6 +616,7 @@ export default function ReviewPage() {
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex flex-wrap items-center gap-2">
                   <PaperProcessBadge paper={visibleDetail} status={processStatus} pending={reprocessing} large />
+                  <LearningStatusBadge status={visibleDetail.learning_status} />
                   {visibleDetail.processed_at && (
                     <span className="text-xs text-slate-500">
                       于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
@@ -626,6 +691,18 @@ export default function ReviewPage() {
                     <FileText size={13} className="text-slate-500" />
                     {visibleDetail.num_pages} 页
                   </span>
+                )}
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="text-slate-500">学习状态</span>
+                <LearningStatusControl
+                  status={visibleDetail.learning_status}
+                  saving={learningSaving}
+                  onChange={saveLearningStatus}
+                />
+                {learningError && (
+                  <span className="basis-full text-[11px] text-red-300">{learningError}</span>
                 )}
               </div>
 
@@ -816,6 +893,127 @@ export default function ReviewPage() {
 
     </div>
     </LightboxProvider>
+  )
+}
+
+const LEARNING_STATUS_OPTIONS: {
+  value: PaperLearningStatus
+  label: string
+  short: string
+  className: string
+  activeClassName: string
+}[] = [
+  {
+    value: 'not_started',
+    label: '未学习',
+    short: '未学',
+    className: 'border-slate-700/70 bg-slate-900/70 text-slate-400',
+    activeClassName: 'border-slate-500/50 bg-slate-700/50 text-slate-100',
+  },
+  {
+    value: 'learning',
+    label: '正在学习',
+    short: '学习中',
+    className: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
+    activeClassName: 'border-cyan-400/60 bg-cyan-500/20 text-cyan-100',
+  },
+  {
+    value: 'completed',
+    label: '学习完成',
+    short: '完成',
+    className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    activeClassName: 'border-emerald-400/60 bg-emerald-500/20 text-emerald-100',
+  },
+]
+
+function normalizeLearningStatus(status?: string | null): PaperLearningStatus {
+  if (status === 'learning' || status === 'completed') return status
+  return 'not_started'
+}
+
+function learningStatusMeta(status?: string | null) {
+  const normalized = normalizeLearningStatus(status)
+  return LEARNING_STATUS_OPTIONS.find(o => o.value === normalized) || LEARNING_STATUS_OPTIONS[0]
+}
+
+function learningStatusRowClass(status: PaperLearningStatus, active: boolean): string {
+  if (status === 'learning') {
+    return active
+      ? 'border-l-cyan-300 bg-cyan-500/[0.14] shadow-[inset_0_0_0_1px_rgba(34,211,238,0.16)]'
+      : 'border-l-cyan-400/80 bg-cyan-500/[0.055] hover:bg-cyan-500/[0.10]'
+  }
+  if (status === 'completed') {
+    return active
+      ? 'border-l-emerald-300 bg-emerald-500/[0.14] shadow-[inset_0_0_0_1px_rgba(52,211,153,0.16)]'
+      : 'border-l-emerald-400/80 bg-emerald-500/[0.055] hover:bg-emerald-500/[0.10]'
+  }
+  return active
+    ? 'bg-indigo-500/10 border-l-indigo-400'
+    : 'border-l-transparent hover:bg-slate-900/60'
+}
+
+function learningStatusTitleClass(status: PaperLearningStatus, active: boolean): string {
+  if (active) return 'text-white font-medium'
+  if (status === 'learning') return 'text-cyan-50 font-medium'
+  if (status === 'completed') return 'text-emerald-50 font-medium'
+  return 'text-slate-300'
+}
+
+function LearningStatusIcon({ status, size = 11 }: { status?: string | null; size?: number }) {
+  const normalized = normalizeLearningStatus(status)
+  if (normalized === 'completed') return <CheckCircle2 size={size} />
+  if (normalized === 'learning') return <PlayCircle size={size} />
+  return <Circle size={size} />
+}
+
+function LearningStatusBadge({
+  status,
+  compact = false,
+}: {
+  status?: string | null
+  compact?: boolean
+}) {
+  const meta = learningStatusMeta(status)
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${meta.className}`}>
+      <LearningStatusIcon status={meta.value} size={10} />
+      {compact ? meta.short : meta.label}
+    </span>
+  )
+}
+
+function LearningStatusControl({
+  status,
+  saving,
+  onChange,
+}: {
+  status?: string | null
+  saving: boolean
+  onChange: (status: PaperLearningStatus) => void
+}) {
+  const current = normalizeLearningStatus(status)
+  return (
+    <div className="inline-flex items-center rounded-lg border border-slate-800 bg-slate-950/50 p-0.5">
+      {LEARNING_STATUS_OPTIONS.map(option => {
+        const active = current === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            disabled={saving || active}
+            className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] transition-colors disabled:cursor-default ${
+              active
+                ? option.activeClassName
+                : 'border border-transparent text-slate-500 hover:bg-slate-900 hover:text-slate-200'
+            }`}
+          >
+            {saving && active ? <Loader2 size={10} className="animate-spin" /> : <LearningStatusIcon status={option.value} size={10} />}
+            {option.label}
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

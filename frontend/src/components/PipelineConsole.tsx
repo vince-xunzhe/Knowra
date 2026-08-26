@@ -44,7 +44,9 @@ import {
   getStatus,
   getWikiFreshness,
   getWikiStatus,
+  revealScannedFile,
   runWikiLint,
+  type DuplicatePaperFile,
   type WikiCompileState,
 } from '../api/client'
 import { getLastSyncAt } from '../api/cloud'
@@ -57,6 +59,7 @@ import type {
 } from '../hooks/usePipelineState'
 import { gatherLocalSnapshot } from '../services/gatherLocalSnapshot'
 import { runSync } from '../services/syncAgent'
+import DuplicateFilesModal from './DuplicateFilesModal'
 import PromotionPromptEditor from './PromotionPromptEditor'
 import SyncStageCard from './SyncStageCard'
 
@@ -98,6 +101,8 @@ export default function PipelineConsole({
   const [expandedStages, setExpandedStages] = useState<Set<ConsoleStageId>>(() => new Set())
   const [error, setError] = useState<string | null>(null)
   const [promptEditorOpen, setPromptEditorOpen] = useState(false)
+  const [duplicateFiles, setDuplicateFiles] = useState<DuplicatePaperFile[]>([])
+  const [selectedDuplicatePath, setSelectedDuplicatePath] = useState<string | null>(null)
   // Which pipeline action is currently in-flight (null = idle). Drives
   // the grey/disabled + spinner state on the action buttons so the user
   // gets feedback and can't double-fire a long-running job (e.g. 自动剔除
@@ -139,12 +144,43 @@ export default function PipelineConsole({
     setRunAllStatus({ running: true, label, detail, tone: 'running' })
   }
 
+  const showDuplicateFiles = (items: DuplicatePaperFile[]) => {
+    if (items.length === 0) return
+    const first = items[0]
+    setDuplicateFiles(items)
+    setSelectedDuplicatePath(first.path)
+    // The scan click explicitly asks the app to inspect this local folder.
+    // Reveal the deterministic first duplicate immediately; the modal also
+    // lets the user switch items and reveal them again.
+    void revealScannedFile(first.path).catch(() => {})
+  }
+
+  const duplicateModal = duplicateFiles.length > 0 ? (
+    <DuplicateFilesModal
+      items={duplicateFiles}
+      selectedPath={selectedDuplicatePath}
+      onSelect={setSelectedDuplicatePath}
+      onReveal={revealScannedFile}
+      onClose={() => {
+        setDuplicateFiles([])
+        setSelectedDuplicatePath(null)
+      }}
+    />
+  ) : null
+
   const runAll = async () => {
-    if (runAllStatus.running || busyKey || state.processing?.running || state.compileStatus?.running) return
+    if (
+      runAllStatus.running ||
+      busyKey ||
+      state.processing?.running ||
+      state.compileStatus?.running ||
+      state.promotionRunStatus?.running
+    ) return
     setError(null)
     setRunAllStep('扫描论文目录')
     try {
       const scanResult = await state.scan()
+      showDuplicateFiles(scanResult.duplicate_files || [])
 
       if (scanResult.unprocessed > 0) {
         setRunAllStep('处理论文', `${scanResult.unprocessed} 篇待处理`)
@@ -157,7 +193,23 @@ export default function PipelineConsole({
       setRunAllStep('自动筛选候选概念')
       const beforePromotion = await getPromotionCounts()
       if ((beforePromotion.summary.counts.pending ?? 0) > 0) {
-        await state.runPromotionRun({ use_llm: true, force_all: false })
+        await state.runPromotionRun(
+          { use_llm: true, force_all: false },
+          status => {
+            if (status.phase === 'heuristic') {
+              setRunAllStep('自动筛选候选概念', '启发式预筛选')
+            } else if (status.phase === 'llm') {
+              setRunAllStep(
+                '自动筛选候选概念',
+                status.total > 0
+                  ? `Agent 判断 ${status.done}/${status.total}`
+                  : '准备 Agent 判断',
+              )
+            } else if (status.phase === 'reconcile') {
+              setRunAllStep('自动筛选候选概念', '同步概念页与搜索索引')
+            }
+          },
+        )
       }
       const afterPromotion = await getPromotionCounts()
       if ((afterPromotion.summary.by.llm ?? 0) > 0) {
@@ -253,6 +305,7 @@ export default function PipelineConsole({
     setBusyKey('scan')
     try {
       const r = await state.scan()
+      showDuplicateFiles(r.duplicate_files || [])
       setScanNotice(
         `扫描完成：新增 ${r.new_found} 篇` +
           (r.duplicates > 0 ? ` · 跳过重复 ${r.duplicates} 篇` : '') +
@@ -267,46 +320,49 @@ export default function PipelineConsole({
 
   if (collapsed) {
     return (
-      <aside className="shrink-0 w-12 border-r border-slate-800/80 bg-[#0d1016] flex flex-col items-center py-3 gap-3">
-        <button
-          onClick={() => setCollapsed(false)}
-          className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800/60"
-          title="展开流水线控制台"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-        <div className="w-full border-t border-slate-800/80" />
-        {state.stages.map(s => (
+      <>
+        <aside className="shrink-0 w-12 border-r border-slate-800/80 bg-[#0d1016] flex flex-col items-center py-3 gap-3">
           <button
-            key={s.id}
-            onClick={() => openFromIconRail(s.id)}
-            className={`relative p-1.5 rounded-md hover:bg-slate-800/60 ${
-              s.isNext ? 'ring-1 ring-indigo-400/50 bg-indigo-500/10' : ''
-            }`}
-            title={`${s.index} ${s.label} — ${s.headline}`}
+            onClick={() => setCollapsed(false)}
+            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800/60"
+            title="展开流水线控制台"
           >
-            <StageIcon stage={s.id} tone={s.tone} />
-            {s.isNext && (
-              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-indigo-400 animate-pulse" />
-            )}
+            <PanelLeftOpen size={16} />
           </button>
-        ))}
-        <button
-          onClick={() => openFromIconRail('sync')}
-          className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
-          title="⑤ 同步 — 推送到云端"
-        >
-          <CloudUpload size={14} />
-        </button>
-        <div className="mt-auto" />
-        <button
-          onClick={onOpenAsk}
-          className="p-1.5 text-indigo-300 hover:text-white rounded-md hover:bg-indigo-500/20"
-          title="向知识库提问"
-        >
-          <Sparkles size={16} />
-        </button>
-      </aside>
+          <div className="w-full border-t border-slate-800/80" />
+          {state.stages.map(s => (
+            <button
+              key={s.id}
+              onClick={() => openFromIconRail(s.id)}
+              className={`relative p-1.5 rounded-md hover:bg-slate-800/60 ${
+                s.isNext ? 'ring-1 ring-indigo-400/50 bg-indigo-500/10' : ''
+              }`}
+              title={`${s.index} ${s.label} — ${s.headline}`}
+            >
+              <StageIcon stage={s.id} tone={s.tone} />
+              {s.isNext && (
+                <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-indigo-400 animate-pulse" />
+              )}
+            </button>
+          ))}
+          <button
+            onClick={() => openFromIconRail('sync')}
+            className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
+            title="⑤ 同步 — 推送到云端"
+          >
+            <CloudUpload size={14} />
+          </button>
+          <div className="mt-auto" />
+          <button
+            onClick={onOpenAsk}
+            className="p-1.5 text-indigo-300 hover:text-white rounded-md hover:bg-indigo-500/20"
+            title="向知识库提问"
+          >
+            <Sparkles size={16} />
+          </button>
+        </aside>
+        {duplicateModal}
+      </>
     )
   }
 
@@ -430,6 +486,7 @@ export default function PipelineConsole({
         open={promptEditorOpen}
         onClose={() => setPromptEditorOpen(false)}
       />
+      {duplicateModal}
     </aside>
   )
 }
@@ -521,6 +578,7 @@ function IngestActions({
 }) {
   const running = !!state.processing?.running
   const anyBusy = busyKey !== null
+  const submitting = busyKey === 'process'
   const remaining = running
     ? Math.max(0, (state.processing?.total ?? 0) - (state.processing?.done ?? 0))
     : state.unprocessedHint
@@ -543,9 +601,11 @@ function IngestActions({
         </ActionButton>
         <ActionButton
           onClick={onProcess}
-          icon={running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+          icon={running || submitting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
           variant="primary"
           disabled={running || anyBusy}
+          loading={submitting}
+          loadingLabel="提交中"
           title={state.processing?.current || '处理所有未入库论文'}
         >
           {running ? '处理中' : remaining > 0 ? `处理 ${remaining} 篇` : '处理论文'}
@@ -602,7 +662,8 @@ function CurateActions({
   const rejected = state.promotion?.counts.rejected ?? 0
   const userPinned = state.promotion?.by.user ?? 0
   const promptEmpty = state.promotionPromptConfigured === false
-  const anyBusy = busyKey !== null
+  const promotionRunning = !!state.promotionRunStatus?.running
+  const anyBusy = busyKey !== null || promotionRunning
 
   return (
     <div className="space-y-2.5">
@@ -620,6 +681,12 @@ function CurateActions({
         <Stat label="agent" value={llmDecided} tone="slate" icon={<Bot size={9} />} />
       </div>
 
+      {state.promotionRunStatus?.phase === 'error' && (
+        <p className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10.5px] text-rose-200 break-words">
+          {state.promotionRunStatus.error || '概念筛选后台任务失败，请重试。'}
+        </p>
+      )}
+
       {/* Primary action: run promotion */}
       <div className="grid grid-cols-2 gap-2">
         <ActionButton
@@ -627,8 +694,12 @@ function CurateActions({
           icon={<Zap size={12} />}
           variant="primary"
           disabled={anyBusy}
-          loading={busyKey === 'curate-run'}
-          loadingLabel="剔除中"
+          loading={busyKey === 'curate-run' || promotionRunning}
+          loadingLabel={
+            promotionRunning && state.promotionRunStatus?.phase === 'llm' && state.promotionRunStatus.total > 0
+              ? `${state.promotionRunStatus.done}/${state.promotionRunStatus.total}`
+              : '剔除中'
+          }
           title="对所有候选节点跑启发式 + Agent 剔除"
         >
           自动剔除

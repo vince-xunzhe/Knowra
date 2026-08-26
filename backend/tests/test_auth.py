@@ -282,7 +282,12 @@ class TestVerifyJwtHeader(unittest.TestCase):
     def tearDown(self) -> None:
         reset_verifier_cache()
         # Drop env vars left over from individual tests.
-        for k in ("KNOWRA_DEPLOY_MODE", "SUPABASE_JWT_SECRET", "SUPABASE_PROJECT_URL"):
+        for k in (
+            "KNOWRA_DEPLOY_MODE",
+            "KNOWRA_LOCAL_USER_ID",
+            "SUPABASE_JWT_SECRET",
+            "SUPABASE_PROJECT_URL",
+        ):
             os.environ.pop(k, None)
 
     def test_missing_header_raises_token_missing(self):
@@ -366,12 +371,22 @@ class TestFastAPIDependency(unittest.TestCase):
 
     def setUp(self) -> None:
         # Force-import the dependency after env vars are settled.
-        for k in ("KNOWRA_DEPLOY_MODE", "SUPABASE_JWT_SECRET", "SUPABASE_PROJECT_URL"):
+        for k in (
+            "KNOWRA_DEPLOY_MODE",
+            "KNOWRA_LOCAL_USER_ID",
+            "SUPABASE_JWT_SECRET",
+            "SUPABASE_PROJECT_URL",
+        ):
             os.environ.pop(k, None)
         reset_verifier_cache()
 
     def tearDown(self) -> None:
-        for k in ("KNOWRA_DEPLOY_MODE", "SUPABASE_JWT_SECRET", "SUPABASE_PROJECT_URL"):
+        for k in (
+            "KNOWRA_DEPLOY_MODE",
+            "KNOWRA_LOCAL_USER_ID",
+            "SUPABASE_JWT_SECRET",
+            "SUPABASE_PROJECT_URL",
+        ):
             os.environ.pop(k, None)
         reset_verifier_cache()
 

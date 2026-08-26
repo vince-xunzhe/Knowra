@@ -19,7 +19,14 @@ import { Ionicons } from '@expo/vector-icons'
 
 import { useAuth } from '../contexts/AuthContext'
 import { useSnapshot } from '../contexts/SnapshotContext'
-import { categoryOf, categoryRank, paperYear } from '../lib/paperMeta'
+import {
+  categoryOf,
+  categoryRank,
+  learningStatusLabel,
+  learningStatusOf,
+  paperYear,
+  type LearningStatus,
+} from '../lib/paperMeta'
 import type { KnowledgeNodeRow, PaperRow } from '../api/cloud'
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
@@ -65,6 +72,19 @@ export default function HomeScreen() {
     return [...counts.entries()]
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => categoryRank(a.name) - categoryRank(b.name))
+  }, [papers])
+
+  const learningData = useMemo(() => {
+    const order: LearningStatus[] = ['learning', 'not_started', 'completed']
+    const counts = new Map<LearningStatus, number>(order.map(status => [status, 0]))
+    for (const p of papers) {
+      const status = learningStatusOf(p)
+      counts.set(status, (counts.get(status) || 0) + 1)
+    }
+    return order.map(status => ({
+      name: learningStatusLabel(status),
+      count: counts.get(status) || 0,
+    }))
   }, [papers])
 
   const yearData = useMemo(() => {
@@ -158,6 +178,12 @@ export default function HomeScreen() {
           {categoryData.length > 0 && (
             <Section title="按大类分布" hint={`${papers.length} 篇论文`}>
               <BarList data={categoryData.map(d => ({ label: d.name, value: d.count }))} />
+            </Section>
+          )}
+
+          {papers.length > 0 && (
+            <Section title="学习状态" hint={`${papers.length} 篇论文`}>
+              <BarList data={learningData.map(d => ({ label: d.name, value: d.count }))} offset={2} />
             </Section>
           )}
 

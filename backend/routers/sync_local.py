@@ -42,6 +42,7 @@ from config import is_cloud_mode
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
 from path_utils import resolve_paper_path
+from services.paper_learning_service import normalize_learning_status
 from services.wiki_compiler import WIKI_CONCEPTS_DIR, WIKI_DIR, WIKI_PAPERS_DIR
 
 
@@ -137,6 +138,7 @@ def _paper_row(paper: Paper, snapshot_at: datetime) -> dict[str, Any]:
         "paper_category_override": paper.paper_category_override,
         "paper_team_model": paper.paper_team_model,
         "paper_team_override": paper.paper_team_override,
+        "learning_status": normalize_learning_status(paper.learning_status),
         "raw_llm_response": paper.raw_llm_response,
         "notes": paper.notes,
         "error": paper.error,

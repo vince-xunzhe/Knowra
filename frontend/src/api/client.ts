@@ -2,6 +2,8 @@ import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
 
+export type PaperLearningStatus = 'not_started' | 'learning' | 'completed'
+
 export interface PaperRecord {
   id: number
   filename: string
@@ -19,6 +21,7 @@ export interface PaperRecord {
   paper_team_model: string | null
   paper_team_override: string | null
   paper_team_source: 'manual' | 'model' | 'none'
+  learning_status: PaperLearningStatus
   year: number | null
   error: string | null
   created_at: string | null
@@ -224,19 +227,56 @@ export const updatePrompt = (extraction_prompt: string) =>
 export const resetPrompt = () => api.post<PromptData>('/prompt/reset').then(r => r.data)
 
 // Papers
+export interface DuplicatePaperFile {
+  filename: string
+  path: string
+  relative_path: string
+  reason: 'same_arxiv_id' | 'same_content'
+  matched_paper: {
+    id: string | number | null
+    title: string | null
+    filename: string
+    filepath: string
+  }
+}
+
+export interface PaperScanResult {
+  new_found: number
+  duplicates: number
+  duplicate_files: DuplicatePaperFile[]
+  total: number
+  unprocessed: number
+}
+
 export const scanPapers = () =>
   api
-    .post<{ new_found: number; duplicates: number; total: number; unprocessed: number }>('/scan')
+    .post<PaperScanResult>('/scan')
     .then(r => r.data)
 
-export interface UploadResult {
+export const revealScannedFile = (path: string) =>
+  api
+    .post<{ path: string; selected: boolean; file_manager: string }>(
+      '/papers/reveal-scanned-file',
+      { path },
+    )
+    .then(r => r.data)
+
+export interface ProcessStartResponse {
+  message: string
+  running: boolean
+  total: number
+  done: number
+  errors: number
+  current: string
+  succeeded?: number
+  failed_papers?: unknown[]
+  max_retries?: number
+}
+
+export interface UploadResult extends PaperScanResult {
   saved: number
   skipped_existing: number
   rejected: string[]
-  new_found: number
-  duplicates: number
-  total: number
-  unprocessed: number
 }
 // Multipart upload of local PDFs → copied into ./papers, then registered.
 // Don't set Content-Type: axios derives the multipart boundary from FormData.
@@ -245,7 +285,7 @@ export const uploadPapers = (files: File[]) => {
   for (const f of files) fd.append('files', f)
   return api.post<UploadResult>('/papers/upload', fd, { timeout: 180000 }).then(r => r.data)
 }
-export const processAll = () => api.post('/process').then(r => r.data)
+export const processAll = () => api.post<ProcessStartResponse>('/process').then(r => r.data)
 export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
 export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
 export const retryFailedPapers = () =>
@@ -304,6 +344,9 @@ export const bulkSetPaperCategory = (paperIds: (string | number)[], category: st
 // ── paper-team dimension (parallel to category) ────────────────────────
 export const updatePaperTeam = (id: string | number, team: string | null) =>
   api.put<PaperDetail>(`/papers/${id}/team`, { team }).then(r => r.data)
+
+export const updatePaperLearningStatus = (id: string | number, learning_status: PaperLearningStatus) =>
+  api.put<PaperDetail>(`/papers/${id}/learning-status`, { learning_status }).then(r => r.data)
 
 export interface PaperTeamItem {
   name: string
@@ -908,9 +951,35 @@ export interface PromotionRunResponse {
   summary: PromotionSummary
 }
 
+export type PromotionRunPhase =
+  | 'idle'
+  | 'heuristic'
+  | 'llm'
+  | 'reconcile'
+  | 'done'
+  | 'error'
+
+export interface PromotionRunStatus {
+  running: boolean
+  phase: PromotionRunPhase
+  total: number
+  done: number
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  result: PromotionRunResponse | null
+  use_llm: boolean
+  force_all: boolean
+}
+
 export const runPromotion = (params: { force_all?: boolean; use_llm?: boolean } = {}) =>
   api
-    .post<PromotionRunResponse>('/promotion/run', params, { timeout: 600000 })
+    .post<PromotionRunStatus>('/promotion/run', params, { timeout: 15000 })
+    .then(r => r.data)
+
+export const getPromotionRunStatus = () =>
+  api
+    .get<PromotionRunStatus>('/promotion/run/status', { timeout: 8000 })
     .then(r => r.data)
 
 export const listPromotionCandidates = (status?: PromotionStatus, limit = 500) =>
@@ -978,6 +1047,9 @@ export interface DashboardOverview {
   papers_processed: number
   papers_unprocessed: number
   papers_failed: number
+  learning_not_started: number
+  learning: number
+  learning_completed: number
   nodes: number
   concepts_promoted: number
   edges: number

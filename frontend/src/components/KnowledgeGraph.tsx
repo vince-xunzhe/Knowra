@@ -30,18 +30,93 @@ interface Props {
 
 const IDLE_AUTOPLAY_DELAY_MS = 2600
 const IDLE_AUTOPLAY_STEP_MS = 1800
+const FALLBACK_CANVAS = { width: 960, height: 640 }
+
+interface GraphCanvas {
+  width: number
+  height: number
+}
+
+interface GraphVisuals {
+  activeLabelWidth: number
+  componentSpacing: number
+  degreeBoost: number
+  edgeLength: number
+  fitPadding: number
+  fontSize: number
+  gravity: number
+  hoverExtra: number
+  labelChars: number
+  labelWidth: number
+  maxZoom: number
+  minZoom: number
+  nodeOverlap: number
+  nodeSize: number
+  paperBoost: number
+  repulsion: number
+  selectedExtra: number
+  similarEdgeLength: number
+}
+
+interface DensityNode {
+  node: cytoscape.NodeSingular
+  x: number
+  y: number
+  degree: number
+  density: number
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max)
+}
+
+function measureCanvas(container: HTMLElement | null): GraphCanvas {
+  if (!container) return FALLBACK_CANVAS
+  const rect = container.getBoundingClientRect()
+  const width = Math.max(rect.width || container.clientWidth || FALLBACK_CANVAS.width, 320)
+  const height = Math.max(rect.height || container.clientHeight || FALLBACK_CANVAS.height, 320)
+  return { width, height }
+}
+
+function graphVisuals(nodeCount: number, canvas: GraphCanvas): GraphVisuals {
+  const count = Math.max(nodeCount, 1)
+  const width = Math.max(canvas.width, 320)
+  const height = Math.max(canvas.height, 320)
+  const shortSide = Math.min(width, height)
+  const areaPerNode = (width * height) / count
+  const spaciousness = clamp(Math.sqrt(areaPerNode) / 92, 0.68, 1.52)
+  const crowding = clamp((count - 36) / 96, 0, 1)
+  const narrowness = clamp((680 - shortSide) / 360, 0, 1)
+  const nodeScale = clamp(spaciousness * (1 - crowding * 0.16), 0.72, 1.28)
+  const edgeScale = clamp(spaciousness * (1 - crowding * 0.08), 0.72, 1.58)
+  const edgeLength = Math.round(clamp(178 * edgeScale + shortSide * 0.045, 128, 330))
+
+  return {
+    activeLabelWidth: Math.round(clamp(122 * nodeScale + shortSide * 0.025, 96, 168)),
+    componentSpacing: Math.round(clamp(edgeLength * 1.08, 148, 380)),
+    degreeBoost: Math.round(clamp(13 * nodeScale, 7, 20)),
+    edgeLength,
+    fitPadding: Math.round(clamp(shortSide * (0.09 - crowding * 0.025), 34, 120)),
+    fontSize: Number(clamp(10.8 * nodeScale, 9.2, 12.5).toFixed(1)),
+    gravity: Number(clamp(0.11 / edgeScale + narrowness * 0.026, 0.055, 0.16).toFixed(3)),
+    hoverExtra: Math.round(clamp(18 * nodeScale, 11, 22)),
+    labelChars: Math.round(clamp(20 * nodeScale - crowding * 3, 12, 28)),
+    labelWidth: Math.round(clamp(98 * nodeScale + shortSide * 0.018, 72, 132)),
+    maxZoom: Number(clamp(2.9 - crowding * 0.25, 2.35, 3).toFixed(2)),
+    minZoom: Number(clamp(0.16 + crowding * 0.08 - spaciousness * 0.025, 0.14, 0.28).toFixed(2)),
+    nodeOverlap: Math.round(clamp(13 - spaciousness * 2 + crowding * 4, 7, 16)),
+    nodeSize: Math.round(clamp(44 * nodeScale, 32, 58)),
+    paperBoost: Math.round(clamp(8 * nodeScale, 5, 12)),
+    repulsion: Math.round(clamp(34000 * edgeScale * edgeScale * (1 + count / 120), 24000, 92000)),
+    selectedExtra: Math.round(clamp(14 * nodeScale, 9, 18)),
+    similarEdgeLength: Math.round(clamp(edgeLength + 52 * edgeScale, 170, 410)),
+  }
+}
 
 function compactLabel(title: string, maxChars: number) {
   const normalized = title.replace(/\s+/g, ' ').trim()
   if (normalized.length <= maxChars) return normalized
   return `${normalized.slice(0, maxChars - 1)}…`
-}
-
-function graphRepulsion(nodeCount: number) {
-  if (nodeCount >= 90) return 56000
-  if (nodeCount >= 50) return 48000
-  if (nodeCount >= 24) return 39000
-  return 32000
 }
 
 function shuffleIds(ids: string[]) {
@@ -55,7 +130,7 @@ function shuffleIds(ids: string[]) {
   return next
 }
 
-function graphLayout(nodeCount: number, { fit, animate, numIter }: {
+function graphLayout(visuals: GraphVisuals, { fit, animate, numIter }: {
   fit: boolean
   animate: boolean
   numIter: number
@@ -64,22 +139,33 @@ function graphLayout(nodeCount: number, { fit, animate, numIter }: {
     name: 'cose',
     animate,
     animationDuration: animate ? (fit ? 900 : 520) : 0,
-    fit,
-    nodeRepulsion: () => graphRepulsion(nodeCount),
-    idealEdgeLength: edge => edge.data('relation_type') === 'similar' ? 270 : 215,
-    edgeElasticity: edge => edge.data('relation_type') === 'similar' ? 48 : 132,
-    nodeOverlap: 12,
-    componentSpacing: 230,
-    gravity: 0.1,
+    fit: false,
+    nodeRepulsion: () => visuals.repulsion,
+    idealEdgeLength: edge => edge.data('relation_type') === 'similar'
+      ? visuals.similarEdgeLength
+      : visuals.edgeLength,
+    edgeElasticity: edge => edge.data('relation_type') === 'similar' ? 44 : 118,
+    nodeOverlap: visuals.nodeOverlap,
+    componentSpacing: visuals.componentSpacing,
+    gravity: visuals.gravity,
     nestingFactor: 0.9,
     initialTemp: 120,
     coolingFactor: 0.96,
     minTemp: 1.0,
     numIter,
-    padding: fit ? 112 : 56,
+    padding: fit ? visuals.fitPadding : Math.round(visuals.fitPadding * 0.52),
     nodeDimensionsIncludeLabels: true,
     randomize: false,
   }
+}
+
+function quantile(sortedValues: number[], q: number) {
+  if (sortedValues.length === 0) return 0
+  const index = clamp((sortedValues.length - 1) * q, 0, sortedValues.length - 1)
+  const lo = Math.floor(index)
+  const hi = Math.ceil(index)
+  if (lo === hi) return sortedValues[lo]
+  return sortedValues[lo] + (sortedValues[hi] - sortedValues[lo]) * (index - lo)
 }
 
 function applyGraphEmphasis(
@@ -104,19 +190,49 @@ function applyGraphEmphasis(
   target.addClass(hoveredNodeId ? 'hovered' : 'highlighted')
 }
 
-function graphElements(data: GraphData) {
+function nodeVisualData(data: GraphData, visuals: GraphVisuals) {
+  const degree = new Map<string, number>()
+  for (const edge of data.edges) {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1)
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1)
+  }
+  const maxDegree = Math.max(1, ...degree.values())
+
+  return data.nodes.map(n => {
+    const d = degree.get(n.id) ?? 0
+    const degreeRatio = Math.sqrt(d / maxDegree)
+    const typeBoost = n.node_type === 'paper'
+      ? visuals.paperBoost
+      : n.node_type === 'concept'
+        ? Math.round(visuals.paperBoost * 0.35)
+        : 0
+    const size = Math.round(visuals.nodeSize + typeBoost + visuals.degreeBoost * degreeRatio)
+    const labelChars = n.node_type === 'paper'
+      ? Math.round(visuals.labelChars * 1.45)
+      : visuals.labelChars
+
+    return {
+      id: n.id,
+      label: compactLabel(n.title, labelChars),
+      fullTitle: n.title,
+      node_type: n.node_type,
+      promotion_status: n.promotion_status || 'promoted',
+      promoted_by: n.promoted_by || '',
+      color: NODE_COLORS[n.node_type] || '#94a3b8',
+      degree: d,
+      fontSize: visuals.fontSize,
+      hoverSize: size + visuals.hoverExtra,
+      labelWidth: visuals.labelWidth,
+      selectedSize: size + visuals.selectedExtra,
+      size,
+      activeLabelWidth: visuals.activeLabelWidth,
+    }
+  })
+}
+
+function graphElements(data: GraphData, visuals: GraphVisuals) {
   return [
-    ...data.nodes.map(n => ({
-      data: {
-        id: n.id,
-        label: compactLabel(n.title, n.node_type === 'paper' ? 28 : 18),
-        fullTitle: n.title,
-        node_type: n.node_type,
-        promotion_status: n.promotion_status || 'promoted',
-        promoted_by: n.promoted_by || '',
-        color: NODE_COLORS[n.node_type] || '#94a3b8',
-      },
-    })),
+    ...nodeVisualData(data, visuals).map(data => ({ data })),
     ...data.edges.map(e => ({
       data: {
         id: e.id,
@@ -130,10 +246,159 @@ function graphElements(data: GraphData) {
   ]
 }
 
+function applyResponsiveVisuals(cy: cytoscape.Core, data: GraphData) {
+  const visuals = graphVisuals(data.nodes.length, measureCanvas(cy.container()))
+  cy.minZoom(visuals.minZoom)
+  cy.maxZoom(visuals.maxZoom)
+  const visualNodes = nodeVisualData(data, visuals)
+  cy.batch(() => {
+    for (const visualNode of visualNodes) {
+      const node = cy.getElementById(visualNode.id)
+      if (!node.empty()) node.data(visualNode)
+    }
+  })
+  return visuals
+}
+
+function largestUsefulComponent(cy: cytoscape.Core) {
+  const allNodes = cy.nodes().toArray()
+  if (allNodes.length === 0) return allNodes
+
+  let largest: cytoscape.NodeSingular[] = []
+  for (const component of cy.elements().components()) {
+    const nodes = component.nodes().toArray()
+    if (nodes.length > largest.length) largest = nodes
+  }
+
+  return largest.length >= Math.max(12, allNodes.length * 0.48)
+    ? largest
+    : allNodes
+}
+
+function densityRankedNodes(nodes: cytoscape.NodeSingular[]): DensityNode[] {
+  const positioned = nodes.map(node => {
+    const p = node.position()
+    return {
+      node,
+      x: p.x,
+      y: p.y,
+      degree: node.connectedEdges().length,
+      density: 1,
+    }
+  })
+  if (positioned.length <= 2) return positioned
+
+  const neighborCount = Math.round(clamp(Math.sqrt(positioned.length) * 1.45, 5, 18))
+  return positioned
+    .map((item, index) => {
+      const distances = positioned
+        .map((other, otherIndex) => (
+          otherIndex === index ? Infinity : Math.hypot(item.x - other.x, item.y - other.y)
+        ))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b)
+      const localRadius = distances[Math.min(neighborCount - 1, distances.length - 1)] || 1
+      const density = (neighborCount / Math.max(localRadius, 1)) * (1 + Math.log1p(item.degree) * 0.18)
+      return { ...item, density }
+    })
+    .sort((a, b) => b.density - a.density)
+}
+
+function densityCore(cy: cytoscape.Core) {
+  const allNodeCount = cy.nodes().length
+  const candidates = largestUsefulComponent(cy)
+  const ranked = densityRankedNodes(candidates)
+  if (ranked.length === 0) return { core: ranked, center: { x: 0, y: 0 } }
+
+  const usingMainComponent = candidates.length < allNodeCount
+  const keepRatio = usingMainComponent
+    ? (ranked.length >= 120 ? 0.84 : ranked.length >= 60 ? 0.88 : 1)
+    : (ranked.length >= 120 ? 0.68 : ranked.length >= 60 ? 0.76 : 0.88)
+  const minCore = Math.min(ranked.length, Math.max(10, Math.round(Math.sqrt(allNodeCount) * 2.2)))
+  let core = ranked.slice(0, Math.max(minCore, Math.round(ranked.length * keepRatio)))
+
+  const weighted = core.reduce(
+    (acc, item) => ({
+      x: acc.x + item.x * item.density,
+      y: acc.y + item.y * item.density,
+      weight: acc.weight + item.density,
+    }),
+    { x: 0, y: 0, weight: 0 },
+  )
+  const center = weighted.weight > 0
+    ? { x: weighted.x / weighted.weight, y: weighted.y / weighted.weight }
+    : { x: core[0].x, y: core[0].y }
+
+  if (core.length > minCore) {
+    const distances = core
+      .map(item => Math.hypot(item.x - center.x, item.y - center.y))
+      .sort((a, b) => a - b)
+    const distanceLimit = quantile(distances, 0.9) * 1.12
+    core = core.filter(item => Math.hypot(item.x - center.x, item.y - center.y) <= distanceLimit)
+    if (core.length < minCore) core = ranked.slice(0, minCore)
+  }
+
+  const finalWeighted = core.reduce(
+    (acc, item) => ({
+      x: acc.x + item.x * item.density,
+      y: acc.y + item.y * item.density,
+      weight: acc.weight + item.density,
+    }),
+    { x: 0, y: 0, weight: 0 },
+  )
+  const finalCenter = finalWeighted.weight > 0
+    ? { x: finalWeighted.x / finalWeighted.weight, y: finalWeighted.y / finalWeighted.weight }
+    : center
+
+  return { core, center: finalCenter }
+}
+
+function applyDensityViewport(cy: cytoscape.Core, visuals: GraphVisuals, animate: boolean) {
+  if (cy.destroyed()) return
+  const nodes = cy.nodes()
+  if (nodes.length === 0) return
+  if (nodes.length <= 8) {
+    if (animate) cy.animate({ fit: { eles: nodes, padding: visuals.fitPadding } }, { duration: 260 })
+    else cy.fit(nodes, visuals.fitPadding)
+    return
+  }
+
+  const canvas = measureCanvas(cy.container())
+  const { core, center } = densityCore(cy)
+  if (core.length === 0) return
+
+  const xs = core.map(item => item.x).sort((a, b) => a - b)
+  const ys = core.map(item => item.y).sort((a, b) => a - b)
+  const coreWidth = Math.max(quantile(xs, 0.96) - quantile(xs, 0.04), visuals.nodeSize * 4)
+  const coreHeight = Math.max(quantile(ys, 0.96) - quantile(ys, 0.04), visuals.nodeSize * 4)
+  const padding = clamp(visuals.fitPadding * 1.34, 58, 168)
+  const availableWidth = Math.max(canvas.width - padding * 2, canvas.width * 0.48)
+  const availableHeight = Math.max(canvas.height - padding * 2, canvas.height * 0.48)
+  const densityMaxZoom = clamp(1.02 - nodes.length / 920, 0.74, 1)
+  const breathingScale = nodes.length >= 120 ? 0.74 : nodes.length >= 60 ? 0.78 : 0.84
+  const zoom = clamp(
+    Math.min(availableWidth / coreWidth, availableHeight / coreHeight, densityMaxZoom) * breathingScale,
+    cy.minZoom(),
+    cy.maxZoom(),
+  )
+  const pan = {
+    x: canvas.width / 2 - center.x * zoom,
+    y: canvas.height / 2 - center.y * zoom,
+  }
+
+  if (animate) {
+    cy.animate({ zoom, pan }, { duration: 320 })
+  } else {
+    cy.zoom(zoom)
+    cy.pan(pan)
+  }
+}
+
 export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const activeLayoutRef = useRef<cytoscape.Layouts | null>(null)
+  const graphDataRef = useRef<GraphData>(data)
   const dataNodesRef = useRef<GraphNode[]>(data.nodes)
   const onNodeClickRef = useRef(onNodeClick)
   const focusedNodeIdRef = useRef<string | null>(null)
@@ -155,8 +420,9 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   }, [])
 
   useEffect(() => {
+    graphDataRef.current = data
     dataNodesRef.current = data.nodes
-  }, [data.nodes])
+  }, [data])
 
   useEffect(() => {
     onNodeClickRef.current = onNodeClick
@@ -190,10 +456,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
 
   const startLayout = useCallback((
     cy: cytoscape.Core,
-    nodeCount: number,
+    dataForLayout: GraphData,
     options: { fit: boolean; animate: boolean; numIter: number },
   ) => {
     if (cy.destroyed()) return
+    const visuals = applyResponsiveVisuals(cy, dataForLayout)
     stopRuntimeMotion(cy)
     // Defer the new layout by one animation frame. Cytoscape's old
     // layout schedules its refresh() via requestAnimationFrame; even
@@ -205,11 +472,14 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     // before we kick the new layout.
     requestAnimationFrame(() => {
       if (cy.destroyed()) return
-      const layout = cy.layout(graphLayout(nodeCount, options))
+      const layout = cy.layout(graphLayout(visuals, options))
       activeLayoutRef.current = layout
       layout.one('layoutstop', () => {
         if (activeLayoutRef.current === layout) {
           activeLayoutRef.current = null
+        }
+        if (options.fit && !cy.destroyed()) {
+          applyDensityViewport(cy, visuals, options.animate)
         }
       })
       layout.run()
@@ -218,15 +488,16 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
 
   useEffect(() => {
     if (!containerRef.current) return
+    const initialVisuals = graphVisuals(data.nodes.length, measureCanvas(containerRef.current))
 
     const cy = cytoscape({
       container: containerRef.current,
-      minZoom: 0.28,
-      maxZoom: 2.4,
+      minZoom: initialVisuals.minZoom,
+      maxZoom: initialVisuals.maxZoom,
       motionBlur: true,
       pixelRatio: 'auto',
       textureOnViewport: false,
-      elements: graphElements(data),
+      elements: graphElements(data, initialVisuals),
       style: [
         {
           selector: 'node',
@@ -234,16 +505,17 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             'background-color': 'data(color)',
             label: 'data(label)',
             color: '#f1f5f9',
-            'font-size': '11px',
+            'font-size': 'data(fontSize)',
             'font-weight': 500,
             'text-valign': 'bottom',
             'text-halign': 'center',
             'text-margin-y': 12,
             opacity: 0.96,
-            width: 52,
-            height: 52,
+            width: 'data(size)',
+            height: 'data(size)',
             'text-wrap': 'wrap',
-            'text-max-width': '112px',
+            'text-max-width': 'data(labelWidth)',
+            'text-opacity': 0.88,
             'border-width': 2,
             'border-color': '#0b0d12',
             'text-outline-width': 0,
@@ -260,8 +532,6 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
         {
           selector: 'node[node_type = "paper"]',
           style: {
-            width: 60,
-            height: 60,
             'font-weight': 600,
           },
         },
@@ -295,10 +565,10 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             'border-color': '#ffffff',
             'border-style': 'solid',
             'background-opacity': 1,
-            width: 70,
-            height: 70,
+            width: 'data(selectedSize)',
+            height: 'data(selectedSize)',
             'font-size': '13px',
-            'text-max-width': '132px',
+            'text-max-width': 'data(activeLabelWidth)',
           },
         },
         {
@@ -309,10 +579,10 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
             'border-color': '#c4b5fd',
             'border-style': 'solid',
             'background-opacity': 1,
-            width: 74,
-            height: 74,
+            width: 'data(hoverSize)',
+            height: 'data(hoverSize)',
             'font-size': '13px',
-            'text-max-width': '136px',
+            'text-max-width': 'data(activeLabelWidth)',
             'text-background-opacity': 0.96,
             'z-index': 999,
           },
@@ -477,6 +747,29 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     pauseIdleAutoplayRef.current = pauseIdleAutoplay
     scheduleIdleAutoplayRef.current = scheduleIdleAutoplay
 
+    const scheduleResponsiveRelayout = (delay = 180) => {
+      if (relayoutTimerRef.current != null) {
+        window.clearTimeout(relayoutTimerRef.current)
+      }
+      relayoutTimerRef.current = window.setTimeout(() => {
+        const currentCy = cyRef.current
+        if (!currentCy || currentCy.destroyed()) return
+        currentCy.resize()
+        startLayout(
+          currentCy,
+          graphDataRef.current,
+          { fit: true, animate: true, numIter: 820 },
+        )
+        applyGraphEmphasis(currentCy, selectedNodeIdRef.current, hoveredNodeIdRef.current)
+      }, delay)
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      if (!cyRef.current || cyRef.current.destroyed()) return
+      scheduleResponsiveRelayout()
+    })
+    resizeObserver.observe(containerRef.current)
+
     cy.on('tap', 'node', evt => {
       pauseIdleAutoplay()
       hoveredNodeIdRef.current = null
@@ -510,7 +803,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
         if (!cyRef.current) return
         startLayout(
           cyRef.current,
-          cyRef.current.nodes().length,
+          graphDataRef.current,
           { fit: false, animate: true, numIter: 520 },
         )
         applyGraphEmphasis(cyRef.current, selectedNodeIdRef.current, hoveredNodeIdRef.current)
@@ -529,7 +822,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     selectedNodeIdRef.current = selectedNodeId
     applyGraphEmphasis(cy, selectedNodeId, null)
     scheduleIdleAutoplay()
-    startLayout(cy, data.nodes.length, { fit: true, animate: true, numIter: 2200 })
+    startLayout(cy, data, { fit: true, animate: true, numIter: 2200 })
 
     return () => {
       if (relayoutTimerRef.current != null) {
@@ -537,6 +830,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
         relayoutTimerRef.current = null
       }
       clearIdleAutoplayTimers()
+      resizeObserver.disconnect()
       pauseIdleAutoplayRef.current = null
       scheduleIdleAutoplayRef.current = null
       didInitialDataSyncRef.current = false
@@ -573,10 +867,13 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
 
     cy.batch(() => {
       cy.elements().remove()
-      cy.add(graphElements(data))
+      const visuals = graphVisuals(data.nodes.length, measureCanvas(cy.container()))
+      cy.minZoom(visuals.minZoom)
+      cy.maxZoom(visuals.maxZoom)
+      cy.add(graphElements(data, visuals))
     })
     cy.resize()
-    startLayout(cy, data.nodes.length, { fit: true, animate: true, numIter: 2200 })
+    startLayout(cy, data, { fit: true, animate: true, numIter: 2200 })
     applyGraphEmphasis(cy, selectedNodeIdRef.current, null)
     if (!selectedNodeIdRef.current) {
       scheduleIdleAutoplayRef.current?.()

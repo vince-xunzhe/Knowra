@@ -71,6 +71,9 @@ class Paper(Base):
     # no matching team fall back to "others".
     paper_team_model = Column(String, nullable=True)
     paper_team_override = Column(String, nullable=True)
+    # User-controlled reading lifecycle for the Review page:
+    # not_started / learning / completed.
+    learning_status = Column(String, default="not_started")
     raw_llm_response = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)  # user-authored markdown notes
     error = Column(Text, nullable=True)

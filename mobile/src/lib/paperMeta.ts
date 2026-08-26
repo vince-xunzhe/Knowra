@@ -62,3 +62,17 @@ export function paperYear(p: PaperRow): number {
   }
   return 0
 }
+
+export type LearningStatus = 'not_started' | 'learning' | 'completed'
+
+export function learningStatusOf(p?: PaperRow | null): LearningStatus {
+  const status = p?.learning_status
+  if (status === 'learning' || status === 'completed') return status
+  return 'not_started'
+}
+
+export function learningStatusLabel(status: LearningStatus): string {
+  if (status === 'completed') return '学习完成'
+  if (status === 'learning') return '正在学习'
+  return '未学习'
+}

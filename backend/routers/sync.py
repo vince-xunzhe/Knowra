@@ -45,7 +45,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
+from sqlalchemy import func, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -77,6 +77,10 @@ from schemas.sync import (
     UploadInstruction,
     ValidationError,
     WikiFileRow,
+)
+from services.paper_learning_service import (
+    PAPER_LEARNING_STATUSES,
+    normalize_learning_status,
 )
 from services.storage import ascii_storage_key, get_storage
 
@@ -321,7 +325,31 @@ def _upsert(db: Session, model, payload: dict, *, conflict_cols: tuple[str, ...]
     return "updated"
 
 
-def _bulk_upsert(db: Session, model, payloads: list[dict]) -> int:
+def _conflict_key(payload: dict, cols: tuple[str, ...]) -> tuple | None:
+    if not cols:
+        return None
+    values = tuple(payload.get(col) for col in cols)
+    if any(value is None for value in values):
+        return None
+    return tuple(str(value) for value in values)
+
+
+def _row_conflict_key(row: Any, cols: tuple[str, ...]) -> tuple | None:
+    if not cols:
+        return None
+    values = tuple(getattr(row, col, None) for col in cols)
+    if any(value is None for value in values):
+        return None
+    return tuple(str(value) for value in values)
+
+
+def _bulk_upsert(
+    db: Session,
+    model,
+    payloads: list[dict],
+    *,
+    conflict_cols: tuple[str, ...] = (),
+) -> int:
     """Same semantics as ``_upsert`` but with ONE pre-fetch SELECT for
     the whole batch, then in-memory partitioning into insert / update /
     skip.
@@ -352,10 +380,29 @@ def _bulk_upsert(db: Session, model, payloads: list[dict]) -> int:
             str(row.id): row
             for row in db.query(model).filter(model.id.in_(ids)).all()
         }
+    existing_by_conflict: dict[tuple, Any] = {}
+    conflict_keys = [
+        key for key in (_conflict_key(payload, conflict_cols) for payload in payloads)
+        if key is not None
+    ]
+    if conflict_cols and conflict_keys:
+        columns = [getattr(model, col) for col in conflict_cols]
+        if len(columns) == 1:
+            rows = db.query(model).filter(columns[0].in_([key[0] for key in conflict_keys])).all()
+        else:
+            rows = db.query(model).filter(tuple_(*columns).in_(conflict_keys)).all()
+        existing_by_conflict = {
+            key: row
+            for row in rows
+            if (key := _row_conflict_key(row, conflict_cols)) is not None
+        }
     accepted = 0
     for payload in payloads:
         pid = payload.get("id")
+        conflict_key = _conflict_key(payload, conflict_cols)
         ex = existing.get(str(pid)) if pid is not None else None
+        if ex is None and conflict_key is not None:
+            ex = existing_by_conflict.get(conflict_key)
         if ex is None:
             clean = {k: v for k, v in payload.items() if v is not None}
             obj = model(**clean)
@@ -365,6 +412,8 @@ def _bulk_upsert(db: Session, model, payloads: list[dict]) -> int:
             # incomplete) doesn't try to INSERT the same PK twice.
             if pid is not None:
                 existing[str(pid)] = obj
+            if conflict_key is not None:
+                existing_by_conflict[conflict_key] = obj
             accepted += 1
             continue
         incoming_ts = payload.get("updated_at")
@@ -410,6 +459,13 @@ def _backfill_empty_paper_metadata(existing: CloudPaper, payload: dict) -> bool:
         if incoming not in (None, "") and current in (None, ""):
             setattr(existing, field, incoming)
             changed = True
+    incoming_learning_status = payload.get("learning_status")
+    if (
+        incoming_learning_status in PAPER_LEARNING_STATUSES
+        and getattr(existing, "learning_status", None) != incoming_learning_status
+    ):
+        existing.learning_status = incoming_learning_status
+        changed = True
     if changed:
         existing.updated_at = datetime.now(timezone.utc)
     return changed
@@ -417,6 +473,10 @@ def _backfill_empty_paper_metadata(existing: CloudPaper, payload: dict) -> bool:
 
 def _to_paper_dict(row: PaperRow) -> dict:
     d = row.model_dump()
+    if "learning_status" in getattr(row, "model_fields_set", set()):
+        d["learning_status"] = normalize_learning_status(d.get("learning_status"))
+    else:
+        d.pop("learning_status", None)
     d.pop("api_version", None)
     return d
 
@@ -438,6 +498,122 @@ def _to_wiki_dict(row: WikiFileRow, *, storage_path: str) -> dict:
     d["storage_path"] = storage_path
     d.pop("api_version", None)
     return d
+
+
+def _paper_id_aliases(db: Session, payloads: list[dict]) -> dict[str, str]:
+    """Map incoming desktop paper ids to the ids that exist in cloud DB.
+
+    A user can end up with the same PDF under a different UUID after a local
+    migration/rebuild. The cloud schema treats (user_id, file_hash) as the
+    paper's durable identity, so commits update the existing cloud row instead
+    of inserting a duplicate. Dependent wiki rows still arrive with the
+    desktop's current paper_id; translate those ids to the persisted cloud id.
+    """
+    if not payloads:
+        return {}
+
+    ids = [str(p["id"]) for p in payloads if p.get("id") is not None]
+    hash_keys = [
+        key for key in (_conflict_key(p, ("user_id", "file_hash")) for p in payloads)
+        if key is not None
+    ]
+
+    rows_by_id = {}
+    if ids:
+        rows_by_id = {
+            str(row.id): row
+            for row in db.query(CloudPaper).filter(CloudPaper.id.in_(ids)).all()
+        }
+
+    rows_by_hash = {}
+    if hash_keys:
+        rows = (
+            db.query(CloudPaper)
+            .filter(tuple_(CloudPaper.user_id, CloudPaper.file_hash).in_(hash_keys))
+            .all()
+        )
+        rows_by_hash = {
+            (str(row.user_id), row.file_hash): row
+            for row in rows
+        }
+
+    aliases: dict[str, str] = {}
+    for payload in payloads:
+        incoming_id = payload.get("id")
+        if incoming_id is None:
+            continue
+        row = rows_by_id.get(str(incoming_id))
+        if row is None:
+            key = _conflict_key(payload, ("user_id", "file_hash"))
+            if key is not None:
+                row = rows_by_hash.get((str(key[0]), key[1]))
+        if row is not None:
+            aliases[str(incoming_id)] = str(row.id)
+    return aliases
+
+
+def _rewrite_paper_refs(value: Any, aliases: dict[str, str]) -> Any:
+    if not aliases:
+        return value
+    if isinstance(value, list):
+        return [aliases.get(str(item), item) for item in value]
+    if value is None:
+        return None
+    return aliases.get(str(value), value)
+
+
+def _delete_rows_by_ids(
+    db: Session,
+    model,
+    *,
+    user_id: str,
+    row_ids: list[str],
+) -> None:
+    if not row_ids:
+        return
+    db.query(model).filter(
+        model.user_id == user_id,
+        model.id.in_(row_ids),
+    ).delete(synchronize_session=False)
+
+
+def _stale_ids_by_id(
+    db: Session,
+    model,
+    *,
+    user_id: str,
+    keep_ids: set[str],
+) -> list[str]:
+    rows = db.query(model.id).filter(model.user_id == user_id).all()
+    return [str(row_id) for (row_id,) in rows if str(row_id) not in keep_ids]
+
+
+def _stale_paper_ids_by_hash(
+    db: Session,
+    *,
+    user_id: str,
+    keep_hashes: set[str],
+) -> list[str]:
+    rows = (
+        db.query(CloudPaper.id, CloudPaper.file_hash)
+        .filter(CloudPaper.user_id == user_id)
+        .all()
+    )
+    return [str(row_id) for row_id, file_hash in rows if file_hash not in keep_hashes]
+
+
+def _stale_wiki_ids_by_rel_path(
+    db: Session,
+    *,
+    user_id: str,
+    keep_rel_paths: set[str],
+) -> list[str]:
+    rows = (
+        db.query(WikiFile.id, WikiFile.rel_path)
+        .filter(WikiFile.user_id == user_id)
+        .all()
+    )
+    return [str(row_id) for row_id, rel_path in rows if rel_path not in keep_rel_paths]
 
 
 def _bump_revision(db: Session, user_id: str) -> int:
@@ -565,6 +741,26 @@ def commit(
     tables = staging.get("tables", {})
     accepted = CommitAccepted()
 
+    def _record_tombstone(table_name: str, row_id: str) -> None:
+        existing = db.query(CloudDeletion).filter(
+            CloudDeletion.user_id == user.user_id,
+            CloudDeletion.table_name == table_name,
+            CloudDeletion.row_id == row_id,
+        ).one_or_none()
+        if existing is None:
+            db.add(CloudDeletion(
+                user_id=user.user_id,
+                table_name=table_name,
+                row_id=row_id,
+                deleted_at=now,
+            ))
+        else:
+            existing.deleted_at = now
+
+    def _record_many_tombstones(table_name: str, row_ids: list[str]) -> None:
+        for row_id in row_ids:
+            _record_tombstone(table_name, row_id)
+
     # Order matters for FK shape: papers → nodes → edges → wiki_files.
     # Bulk variants here cut N round trips per table down to ~1 — see
     # ``_bulk_upsert`` docstring for the perf rationale.
@@ -577,12 +773,36 @@ def commit(
             _to_paper_dict(PaperRow.model_validate(raw))
             for raw in tables.get("papers", [])
         ]
-        accepted.papers = _bulk_upsert(db, CloudPaper, paper_payloads)
+        accepted.papers = _bulk_upsert(
+            db,
+            CloudPaper,
+            paper_payloads,
+            conflict_cols=("user_id", "file_hash"),
+        )
+        db.flush()
+        paper_id_aliases = _paper_id_aliases(db, paper_payloads)
+        stale_paper_ids = _stale_paper_ids_by_hash(
+            db,
+            user_id=user.user_id,
+            keep_hashes={
+                p["file_hash"] for p in paper_payloads
+                if p.get("file_hash") is not None
+            },
+        )
+        _delete_rows_by_ids(db, CloudPaper, user_id=user.user_id, row_ids=stale_paper_ids)
+        _record_many_tombstones("papers", stale_paper_ids)
 
         node_payloads = [
             _to_node_dict(KnowledgeNodeRow.model_validate(raw))
             for raw in tables.get("knowledge_nodes", [])
         ]
+        if paper_id_aliases:
+            for payload in node_payloads:
+                if "source_paper_ids" in payload:
+                    payload["source_paper_ids"] = _rewrite_paper_refs(
+                        payload.get("source_paper_ids"),
+                        paper_id_aliases,
+                    )
         accepted.knowledge_nodes = _bulk_upsert(db, CloudKnowledgeNode, node_payloads)
 
         # FLUSH the nodes BEFORE inserting edges. The cloud schema's
@@ -605,24 +825,51 @@ def commit(
             _to_edge_dict(KnowledgeEdgeRow.model_validate(raw))
             for raw in tables.get("knowledge_edges", [])
         ]
-        # Edges are fully-DERIVED data: the desktop's similarity rebuild
-        # periodically deletes + recreates them with FRESH UUIDs. So the
-        # cloud may hold an edge with the same (source, target, relation)
-        # triple under an OLD id, while the snapshot carries it under a
-        # NEW id. ``_bulk_upsert`` matches by id, so it would try to INSERT
-        # the new-id row — violating UNIQUE(user_id, source_id, target_id,
-        # relation_type) and 409-ing the whole commit. Treat the snapshot
-        # as source-of-truth: replace this user's edge set wholesale (one
-        # bulk DELETE + bulk INSERT). Edges have no inbound FKs, and the
-        # nodes they reference were already flushed above, so the
-        # edge_user_consistency trigger is satisfied. Only replace when the
-        # snapshot actually carries edges, so an edge-less partial snapshot
-        # never wipes the cloud graph.
-        if edge_payloads:
-            db.query(CloudKnowledgeEdge).filter(
-                CloudKnowledgeEdge.user_id == user.user_id
-            ).delete(synchronize_session=False)
+        # The desktop sends a full local snapshot. Treat derived graph rows
+        # as a mirror: edges are replaced wholesale, and stale nodes are
+        # pruned after old edges are gone so FK cascades never mask the
+        # intended tombstones.
+        incoming_edge_ids = {
+            str(p["id"]) for p in edge_payloads
+            if p.get("id") is not None
+        }
+        stale_edge_ids = _stale_ids_by_id(
+            db,
+            CloudKnowledgeEdge,
+            user_id=user.user_id,
+            keep_ids=incoming_edge_ids,
+        )
+        existing_edge_ids = _stale_ids_by_id(
+            db,
+            CloudKnowledgeEdge,
+            user_id=user.user_id,
+            keep_ids=set(),
+        )
+        if existing_edge_ids:
+            _delete_rows_by_ids(
+                db,
+                CloudKnowledgeEdge,
+                user_id=user.user_id,
+                row_ids=existing_edge_ids,
+            )
+            _record_many_tombstones("knowledge_edges", stale_edge_ids)
             db.flush()
+        stale_node_ids = _stale_ids_by_id(
+            db,
+            CloudKnowledgeNode,
+            user_id=user.user_id,
+            keep_ids={str(p["id"]) for p in node_payloads if p.get("id") is not None},
+        )
+        if stale_node_ids:
+            _delete_rows_by_ids(
+                db,
+                CloudKnowledgeNode,
+                user_id=user.user_id,
+                row_ids=stale_node_ids,
+            )
+            _record_many_tombstones("knowledge_nodes", stale_node_ids)
+            db.flush()
+        if edge_payloads:
             accepted.knowledge_edges = _bulk_upsert(
                 db, CloudKnowledgeEdge, edge_payloads
             )
@@ -637,9 +884,31 @@ def commit(
             # missing object. They stay "required" and retry next sync.
             if row.rel_path in rejected_paths:
                 continue
-            wiki_payloads.append(_to_wiki_dict(
-                row, storage_path=_storage_path(user.user_id, row.rel_path)))
-        accepted.wiki_files = _bulk_upsert(db, WikiFile, wiki_payloads)
+            payload = _to_wiki_dict(
+                row, storage_path=_storage_path(user.user_id, row.rel_path))
+            if paper_id_aliases and payload.get("paper_id"):
+                payload["paper_id"] = _rewrite_paper_refs(
+                    payload.get("paper_id"),
+                    paper_id_aliases,
+                )
+            wiki_payloads.append(payload)
+        accepted.wiki_files = _bulk_upsert(
+            db,
+            WikiFile,
+            wiki_payloads,
+            conflict_cols=("user_id", "rel_path"),
+        )
+        stale_wiki_ids = _stale_wiki_ids_by_rel_path(
+            db,
+            user_id=user.user_id,
+            keep_rel_paths={
+                raw.get("rel_path")
+                for raw in tables.get("wiki_files", [])
+                if raw.get("rel_path") is not None
+            },
+        )
+        _delete_rows_by_ids(db, WikiFile, user_id=user.user_id, row_ids=stale_wiki_ids)
+        _record_many_tombstones("wiki_files", stale_wiki_ids)
         # Force the flush here so any constraint failure on the second
         # half of the commit (edges / wiki) surfaces as a structured
         # 409 too, not the bare 500 + CORS-stripped error the browser
@@ -658,25 +927,6 @@ def commit(
     # tombstone to cloud_deletions so the mobile snapshot endpoint can
     # tell clients "you previously synced this id; please evict it."
     deletions = staging.get("deletions", {}) or {}
-
-    def _record_tombstone(table_name: str, row_id: str) -> None:
-        # Upsert: if a previous deletion of the same row exists, refresh
-        # its deleted_at so the snapshot since-cursor reflects the latest
-        # decision (e.g. user re-created then re-deleted).
-        existing = db.query(CloudDeletion).filter(
-            CloudDeletion.user_id == user.user_id,
-            CloudDeletion.table_name == table_name,
-            CloudDeletion.row_id == row_id,
-        ).one_or_none()
-        if existing is None:
-            db.add(CloudDeletion(
-                user_id=user.user_id,
-                table_name=table_name,
-                row_id=row_id,
-                deleted_at=now,
-            ))
-        else:
-            existing.deleted_at = now
 
     for pid in deletions.get("papers", []):
         deleted = db.query(CloudPaper).filter(

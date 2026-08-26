@@ -106,6 +106,7 @@ class LocalSnapshotTests(unittest.TestCase):
                 filepath="data/papers/foo.pdf", filename="foo.pdf",
                 file_hash="",  # empty so the route computes + caches
                 title="Foo", processed=True,
+                learning_status="learning",
                 processed_at=datetime(2026, 5, 29, 10, tzinfo=timezone.utc),
                 created_at=datetime(2026, 5, 1, tzinfo=timezone.utc),
             )
@@ -173,6 +174,7 @@ class LocalSnapshotTests(unittest.TestCase):
                          "agent stamps user_id; snapshot must leave empty")
         self.assertEqual(p["legacy_id"], 1)
         self.assertTrue(p["processed"])
+        self.assertEqual(p["learning_status"], "learning")
 
     def test_paper_updated_at_uses_snapshot_time(self):
         self._seed_rows()

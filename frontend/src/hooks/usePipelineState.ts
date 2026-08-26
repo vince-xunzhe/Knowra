@@ -14,6 +14,7 @@ import {
   acceptLLMProposals,
   getPromotionCounts,
   getPromotionPrompt,
+  getPromotionRunStatus,
   getStatus,
   getWikiFreshness,
   getWikiLintStatus,
@@ -24,7 +25,9 @@ import {
   runPromotion,
   scanPapers,
   type LintReportStatus,
+  type PaperScanResult,
   type PromotionRunResponse,
+  type PromotionRunStatus,
   type PromotionSummary,
   type WikiCompileState,
   type WikiFreshnessSummary,
@@ -75,9 +78,12 @@ export interface NextStep {
 }
 
 export interface PipelineActions {
-  scan: () => Promise<{ new_found: number; duplicates: number; total: number; unprocessed: number }>
+  scan: () => Promise<PaperScanResult>
   process: () => Promise<void>
-  runPromotionRun: (params: { use_llm: boolean; force_all: boolean }) => Promise<PromotionRunResponse>
+  runPromotionRun: (
+    params: { use_llm: boolean; force_all: boolean },
+    onProgress?: (status: PromotionRunStatus) => void,
+  ) => Promise<PromotionRunResponse>
   acceptPromotion: () => Promise<void>
   recompilePapers: () => Promise<void>
   recompileConcepts: () => Promise<void>
@@ -88,14 +94,14 @@ export interface PipelineActions {
 export interface PipelineState {
   freshness: WikiFreshnessSummary | null
   promotion: PromotionSummary | null
+  promotionRunStatus: PromotionRunStatus | null
   processing: ProcessingStatus | null
   compileStatus: WikiCompileState | null
   lintStatus: LintReportStatus | null
   promotionPromptConfigured: boolean | null
-  /** Number of unprocessed papers known to the backend, refreshed on scan
-   *  and after every poll of `/api/status`. Not a first-class field on
-   *  /status — derived as total - done while running, falls back to last
-   *  scan delta otherwise. */
+  /** Number of unprocessed papers known to the backend. `/api/scan` is the
+   *  authoritative source; `/api/status` only refines it while a processing
+   *  run is active or finishing. */
   unprocessedHint: number
   loading: boolean
   /** Bumps every time any of the action handlers completes successfully.
@@ -117,6 +123,38 @@ export interface UsePipelineStateOptions {
 
 const FAST_POLL = 1500
 const SLOW_POLL = 5000
+const PROMOTION_POLL = 1200
+const MAX_PROMOTION_POLL_FAILURES = 5
+
+const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
+
+async function waitForPromotionRun(
+  initial: PromotionRunStatus,
+  onProgress?: (status: PromotionRunStatus) => void,
+): Promise<PromotionRunResponse> {
+  let status = initial
+  let failures = 0
+
+  while (true) {
+    onProgress?.(status)
+    if (!status.running) {
+      if (status.phase === 'done' && status.result) return status.result
+      if (status.phase === 'error') {
+        throw new Error(status.error || '概念筛选后台任务失败')
+      }
+      throw new Error('概念筛选任务意外停止，未返回结果')
+    }
+
+    await sleep(PROMOTION_POLL)
+    try {
+      status = await getPromotionRunStatus()
+      failures = 0
+    } catch (error) {
+      failures += 1
+      if (failures >= MAX_PROMOTION_POLL_FAILURES) throw error
+    }
+  }
+}
 
 export function usePipelineState({
   onMutated,
@@ -124,6 +162,7 @@ export function usePipelineState({
 }: UsePipelineStateOptions = {}): PipelineState & PipelineActions {
   const [freshness, setFreshness] = useState<WikiFreshnessSummary | null>(null)
   const [promotion, setPromotion] = useState<PromotionSummary | null>(null)
+  const [promotionRunStatus, setPromotionRunStatus] = useState<PromotionRunStatus | null>(null)
   const [processing, setProcessing] = useState<ProcessingStatus | null>(null)
   const [compileStatus, setCompileStatus] = useState<WikiCompileState | null>(null)
   const [lintStatus, setLintStatus] = useState<LintReportStatus | null>(null)
@@ -170,8 +209,14 @@ export function usePipelineState({
     }
     const pollPromotion = async () => {
       try {
-        const r = await getPromotionCounts()
-        if (!cancelled) setPromotion(r.summary)
+        const [counts, runStatus] = await Promise.all([
+          getPromotionCounts(),
+          getPromotionRunStatus(),
+        ])
+        if (!cancelled) {
+          setPromotion(counts.summary)
+          setPromotionRunStatus(runStatus)
+        }
       } catch (e) {
         console.warn('promotion poll failed', e)
       }
@@ -188,10 +233,11 @@ export function usePipelineState({
           current: s.current ?? '',
         }
         setProcessing(next)
-        // If a run is active, the remaining work is the gap. Outside an
-        // active run we keep the last scan-derived hint.
-        if (next.running && next.total > next.done) {
-          setUnprocessedHint(next.total - next.done)
+        // Keep the ingest badge honest after processing finishes too. Do
+        // not let an idle status with total=0 overwrite the scan-derived
+        // count; /status is just the last processing run, not a DB count.
+        if (next.running || next.total > 0) {
+          setUnprocessedHint(Math.max(0, next.total - next.done))
         }
       } catch {
         // Brief 5xx during heavy compile work is expected; skip tick.
@@ -241,13 +287,13 @@ export function usePipelineState({
     // on every interval so the cadence adapts.
     const id = setInterval(() => {
       void tick()
-    }, processing?.running || compileStatus?.running ? FAST_POLL : SLOW_POLL)
+    }, processing?.running || compileStatus?.running || promotionRunStatus?.running ? FAST_POLL : SLOW_POLL)
 
     return () => {
       cancelled = true
       clearInterval(id)
     }
-  }, [refreshNonce, processing?.running, compileStatus?.running])
+  }, [refreshNonce, processing?.running, compileStatus?.running, promotionRunStatus?.running])
 
   // --- derived stages --------------------------------------------------
 
@@ -264,18 +310,16 @@ export function usePipelineState({
       label: '录入',
       tone: ingestRunning
         ? 'running'
-        : totalProcessed === 0
+        : remaining > 0
           ? 'warning'
-          : remaining > 0
-            ? 'warning'
-            : 'ok',
+          : 'ok',
       headline: ingestRunning
         ? `处理中 ${processing?.done}/${processing?.total}`
-        : totalProcessed === 0
-          ? '尚未处理论文'
-          : remaining > 0
-            ? `${remaining} 待处理 · ${totalProcessed} 已入库`
-            : `${totalProcessed} 已入库`,
+        : remaining > 0
+          ? `${remaining} 待处理 · ${totalProcessed} 已入库`
+          : totalProcessed > 0
+            ? `${totalProcessed} 已入库`
+            : '无需处理论文',
       sub: ingestRunning && processing?.errors
         ? `${processing.errors} 失败`
         : undefined,
@@ -283,6 +327,8 @@ export function usePipelineState({
     }
 
     // ② 筛选 — promotion lifecycle.
+    const promotionRunning = !!promotionRunStatus?.running
+    const promotionFailed = promotionRunStatus?.phase === 'error'
     const pending = promotion?.counts.pending ?? 0
     const llmDecided = promotion?.by.llm ?? 0
     const promoted = promotion?.counts.promoted ?? 0
@@ -291,7 +337,11 @@ export function usePipelineState({
       index: '②',
       label: '筛选',
       tone:
-        pending > 0
+        promotionRunning
+          ? 'running'
+          : promotionFailed
+            ? 'danger'
+          : pending > 0
           ? 'warning'
           : llmDecided > 0
             ? 'warning'
@@ -299,16 +349,24 @@ export function usePipelineState({
               ? 'ok'
               : 'idle',
       headline:
-        pending > 0
+        promotionRunning
+          ? promotionRunStatus?.phase === 'llm' && (promotionRunStatus.total ?? 0) > 0
+            ? `Agent 判断 ${promotionRunStatus.done}/${promotionRunStatus.total}`
+            : promotionPhaseLabel(promotionRunStatus?.phase)
+          : promotionFailed
+            ? '筛选失败'
+          : pending > 0
           ? `${pending} 待评`
           : llmDecided > 0
             ? `${llmDecided} Agent 待确认`
             : promoted > 0
               ? `${promoted} 已选中`
               : '尚无候选',
-      sub: promotion
-        ? `选中 ${promotion.counts.promoted} · 淘汰 ${promotion.counts.rejected}`
-        : undefined,
+      sub: promotionFailed
+        ? promotionRunStatus?.error || '请重试筛选'
+        : promotion
+          ? `选中 ${promotion.counts.promoted} · 淘汰 ${promotion.counts.rejected}`
+          : undefined,
       isNext: false,
     }
 
@@ -393,6 +451,7 @@ export function usePipelineState({
     const winner = pickNextStep({
       ingestRunning,
       compRunning,
+      promotionRunning,
       remaining,
       totalProcessed,
       pending,
@@ -409,6 +468,7 @@ export function usePipelineState({
     processing,
     freshness,
     promotion,
+    promotionRunStatus,
     compileStatus,
     lintStatus,
     unprocessedHint,
@@ -439,14 +499,33 @@ export function usePipelineState({
 
   const process = useCallback(async () => {
     await wrap(async () => {
-      await processAll()
+      const started = await processAll()
+      const next: ProcessingStatus = {
+        running: !!started.running,
+        total: started.total ?? 0,
+        done: started.done ?? 0,
+        errors: started.errors ?? 0,
+        current: started.current ?? '',
+      }
+      setProcessing(next)
+      if (next.running || next.total > 0) {
+        setUnprocessedHint(Math.max(0, next.total - next.done))
+      }
     })
   }, [wrap])
 
   const runPromotionRun = useCallback(
-    async (params: { use_llm: boolean; force_all: boolean }) => {
+    async (
+      params: { use_llm: boolean; force_all: boolean },
+      onProgress?: (status: PromotionRunStatus) => void,
+    ) => {
       return wrap(async () => {
-        const r = await runPromotion(params)
+        const started = await runPromotion(params)
+        setPromotionRunStatus(started)
+        const r = await waitForPromotionRun(started, status => {
+          setPromotionRunStatus(status)
+          onProgress?.(status)
+        })
         setPromotion(r.summary)
         return r
       })
@@ -505,10 +584,10 @@ export function usePipelineState({
   const nextStep = useMemo<NextStep>(() => {
     const ingestRunning = !!processing?.running
     const compRunning = !!compileStatus?.running
+    const promotionRunning = !!promotionRunStatus?.running
     const remaining = ingestRunning
       ? Math.max(0, (processing?.total ?? 0) - (processing?.done ?? 0))
       : unprocessedHint
-    const totalProcessed = freshness?.papers.total_processed ?? 0
     const pending = promotion?.counts.pending ?? 0
     const llmDecided = promotion?.by.llm ?? 0
     const promoted = promotion?.counts.promoted ?? 0
@@ -551,19 +630,28 @@ export function usePipelineState({
         disabled: true,
       }
     }
+    if (promotionRunning) {
+      const hasProgress = promotionRunStatus.phase === 'llm' && promotionRunStatus.total > 0
+      return {
+        stage: 'curate',
+        label: hasProgress
+          ? `Agent 判断 ${promotionRunStatus.done}/${promotionRunStatus.total}`
+          : promotionPhaseLabel(promotionRunStatus.phase),
+        reason: '概念筛选正在后台运行，可以切换页面，任务不会中断。',
+        tone: 'indigo',
+        run: async () => {},
+        busy: true,
+        disabled: true,
+      }
+    }
     // 2) Unprocessed papers — feed the pipeline first.
-    if (remaining > 0 || totalProcessed === 0) {
-      const knownUnprocessed = remaining > 0
+    if (remaining > 0) {
       return {
         stage: 'ingest',
-        label: knownUnprocessed ? `处理 ${remaining} 篇论文` : '扫描并处理论文',
-        reason: knownUnprocessed
-          ? `有 ${remaining} 篇新论文待解析，先把它们入库再做后续步骤。`
-          : '当前还没有处理过的论文，先扫描目录并处理论文。',
+        label: `处理 ${remaining} 篇论文`,
+        reason: `有 ${remaining} 篇新论文待解析，先把它们入库再做后续步骤。`,
         tone: 'indigo',
-        // scan() returns a result object — discard it so the union widens to
-        // Promise<void> like every other branch.
-        run: knownUnprocessed ? process : async () => { await scan() },
+        run: process,
         busy: nextStepBusy,
       }
     }
@@ -651,6 +739,7 @@ export function usePipelineState({
     unprocessedHint,
     freshness,
     promotion,
+    promotionRunStatus,
     lintStatus,
     nextStepBusy,
     process,
@@ -665,6 +754,7 @@ export function usePipelineState({
   return {
     freshness,
     promotion,
+    promotionRunStatus,
     processing,
     compileStatus,
     lintStatus,
@@ -685,11 +775,25 @@ export function usePipelineState({
   }
 }
 
+function promotionPhaseLabel(phase?: PromotionRunStatus['phase']): string {
+  switch (phase) {
+    case 'heuristic':
+      return '启发式筛选中'
+    case 'llm':
+      return '准备 Agent 判断'
+    case 'reconcile':
+      return '同步概念页'
+    default:
+      return '筛选中'
+  }
+}
+
 // Pure helper — keeps the stage isNext logic and nextStep CTA logic in
 // the same ordering. Returns the StageId of the stage that should glow.
 function pickNextStep(c: {
   ingestRunning: boolean
   compRunning: boolean
+  promotionRunning: boolean
   remaining: number
   totalProcessed: number
   pending: number
@@ -702,7 +806,8 @@ function pickNextStep(c: {
 }): StageId {
   if (c.ingestRunning) return 'ingest'
   if (c.compRunning) return 'compile'
-  if (c.remaining > 0 || c.totalProcessed === 0) return 'ingest'
+  if (c.promotionRunning) return 'curate'
+  if (c.remaining > 0) return 'ingest'
   if (c.pending > 0 || c.llmDecided > 0) return 'curate'
   if (c.compileTotalIssues > 0) return 'compile'
   if (c.compileTotalNodes > 0 && (!c.lintExists || c.lintStale)) return 'maintain'

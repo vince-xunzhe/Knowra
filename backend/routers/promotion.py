@@ -12,13 +12,15 @@ auto-runs skip the node.
 """
 from __future__ import annotations
 
+import threading
+from datetime import datetime, timezone
 from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import SessionLocal, get_db
 from models import KnowledgeNode
 from services import promotion_service
 from services import wiki_index
@@ -51,6 +53,58 @@ def _reconcile_curated_wiki(db: Session) -> None:
         pass
 
 router = APIRouter(prefix="/api/promotion", tags=["promotion"])
+
+
+# Promotion can involve many sequential model batches. Keep it off the HTTP
+# request lifecycle so a slow provider (especially Codex CLI) cannot be cut
+# off by the browser's request timeout. The in-memory state mirrors the wiki
+# compiler's background-job contract and survives page navigation.
+_run_state_lock = threading.Lock()
+promotion_run_state: dict = {
+    "running": False,
+    "phase": "idle",  # idle | heuristic | llm | reconcile | done | error
+    "total": 0,
+    "done": 0,
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+    "result": None,
+    "use_llm": False,
+    "force_all": False,
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _run_state_snapshot() -> dict:
+    with _run_state_lock:
+        return dict(promotion_run_state)
+
+
+def _set_run_state(**changes) -> None:
+    with _run_state_lock:
+        promotion_run_state.update(changes)
+
+
+def _try_begin_run(body: "RunRequest") -> bool:
+    with _run_state_lock:
+        if promotion_run_state["running"]:
+            return False
+        promotion_run_state.update({
+            "running": True,
+            "phase": "heuristic",
+            "total": 0,
+            "done": 0,
+            "started_at": _now_iso(),
+            "finished_at": None,
+            "error": None,
+            "result": None,
+            "use_llm": body.use_llm,
+            "force_all": body.force_all,
+        })
+        return True
 
 
 class RunRequest(BaseModel):
@@ -88,11 +142,8 @@ def _serialize_candidate(node: KnowledgeNode) -> dict:
     }
 
 
-@router.post("/run")
-def run_promotion(
-    body: RunRequest = RunRequest(),
-    db: Session = Depends(get_db),
-):
+def _execute_promotion_run(db: Session, body: RunRequest) -> dict:
+    _set_run_state(phase="heuristic", total=0, done=0)
     heuristic = promotion_service.run_heuristic_pass(db, force_all=body.force_all)
     response = {
         "heuristic": {
@@ -112,7 +163,15 @@ def run_promotion(
             promotion_llm = None
         if promotion_llm is not None:
             try:
-                llm_result = promotion_llm.run_llm_pass(db)
+                _set_run_state(phase="llm", total=0, done=0)
+                llm_result = promotion_llm.run_llm_pass(
+                    db,
+                    progress_callback=lambda done, total: _set_run_state(
+                        phase="llm",
+                        done=done,
+                        total=total,
+                    ),
+                )
             except promotion_llm.PromotionLLMUnavailable as exc:
                 response["llm"] = {"error": str(exc)}
             else:
@@ -127,10 +186,71 @@ def run_promotion(
     # A run can flip nodes to rejected → their .md needs to go. Likewise
     # newly-promoted nodes will surface as "missing" in the freshness panel
     # so the user knows to recompile.
+    _set_run_state(phase="reconcile")
     _reconcile_curated_wiki(db)
     response["summary"] = promotion_service.promotion_summary(db)
     response["counts"] = response["summary"]["counts"]
     return response
+
+
+def _run_promotion_background(force_all: bool, use_llm: bool) -> None:
+    db = SessionLocal()
+    try:
+        result = _execute_promotion_run(
+            db,
+            RunRequest(force_all=force_all, use_llm=use_llm),
+        )
+    except Exception as exc:
+        db.rollback()
+        _set_run_state(
+            running=False,
+            phase="error",
+            error=f"{type(exc).__name__}: {exc}",
+            finished_at=_now_iso(),
+        )
+    else:
+        _set_run_state(
+            running=False,
+            phase="done",
+            result=result,
+            error=None,
+            finished_at=_now_iso(),
+        )
+    finally:
+        db.close()
+
+
+@router.post("/run")
+def run_promotion(body: RunRequest = RunRequest()):
+    """Start a promotion pass and return immediately.
+
+    Repeated calls while a pass is active are idempotent: callers receive
+    the current state and can resume polling instead of spawning duplicate
+    model work.
+    """
+    if _try_begin_run(body):
+        try:
+            threading.Thread(
+                target=_run_promotion_background,
+                args=(body.force_all, body.use_llm),
+                name="promotion-run",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            _set_run_state(
+                running=False,
+                phase="error",
+                error=f"{type(exc).__name__}: {exc}",
+                finished_at=_now_iso(),
+            )
+            raise HTTPException(status_code=500, detail="Failed to start promotion job") from exc
+    return _run_state_snapshot()
+
+
+@router.get("/run/status")
+def get_promotion_run_status():
+    """Live state for the promotion background job."""
+    return _run_state_snapshot()
 
 
 @router.get("/candidates")

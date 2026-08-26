@@ -260,6 +260,12 @@ function OverviewGrid({
 }) {
   const cards = [
     { label: '论文', value: overview.papers, sub: overview.papers_unprocessed > 0 ? `${overview.papers_unprocessed} 未处理` : undefined },
+    {
+      label: '学习完成',
+      value: overview.learning_completed,
+      sub: `${overview.learning} 正在 · ${overview.learning_not_started} 未学`,
+      tone: overview.learning > 0 ? 'cyan' : 'slate',
+    },
     { label: '节点', value: overview.nodes, sub: `${overview.concepts_promoted} 已选中` },
     { label: '边', value: overview.edges },
     { label: '标签', value: overview.unique_tags },
@@ -284,6 +290,8 @@ function OverviewGrid({
           className={`rounded-lg border px-3 py-2 ${
             c.tone === 'rose'
               ? 'border-rose-500/30 bg-rose-500/[0.05]'
+              : c.tone === 'cyan'
+                ? 'border-cyan-500/30 bg-cyan-500/[0.05]'
               : c.tone === 'amber'
                 ? 'border-amber-500/30 bg-amber-500/[0.05]'
                 : 'border-slate-800 bg-slate-950/40'

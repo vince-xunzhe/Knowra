@@ -41,6 +41,17 @@ const NAV: NavItem[] = [
 
 export default function App() {
   const [page, setPage] = useState<Page>('graph')
+  const [reviewPaperId, setReviewPaperId] = useState<number | null>(null)
+
+  const openPage = (nextPage: Page) => {
+    if (nextPage === 'review') setReviewPaperId(null)
+    setPage(nextPage)
+  }
+
+  const openPaperReview = (paperId: number) => {
+    setReviewPaperId(paperId)
+    setPage('review')
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#0b0d12] text-slate-200">
@@ -58,7 +69,7 @@ export default function App() {
           return (
             <button
               key={id}
-              onClick={() => setPage(id)}
+              onClick={() => openPage(id)}
               title={label}
               className={`relative group w-14 h-14 px-1 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
                 active
@@ -85,8 +96,8 @@ export default function App() {
       {/* Main */}
       <main className="flex-1 min-w-0 overflow-hidden">
         {page === 'graph' && <GraphPage />}
-        {page === 'papers' && <PapersPage />}
-        {page === 'review' && <ReviewPage />}
+        {page === 'papers' && <PapersPage onOpenReview={openPaperReview} />}
+        {page === 'review' && <ReviewPage initialPaperId={reviewPaperId} />}
         {page === 'recommend' && <RecommendPage />}
         {page === 'dashboard' && <DashboardPage />}
         {page === 'settings' && <SettingsPage />}
