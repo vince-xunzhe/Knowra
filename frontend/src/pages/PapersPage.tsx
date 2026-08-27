@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
-  uploadPapers,
+  uploadPapers, listPaperCategories, updatePaperCategory,
   type PaperRecord,
 } from '../api/client'
 import PromptPanel from '../components/PromptPanel'
@@ -23,6 +23,35 @@ interface ProcStatus {
 
 type ViewMode = 'grid' | 'list'
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
+
+const CATEGORY_INHERIT = '__inherit__'
+const CATEGORY_FILTER_ALL = '__all__'
+const DEFAULT_PAPER_CATEGORIES = ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他']
+const CATEGORY_DOT_COLORS = [
+  'bg-violet-400',
+  'bg-sky-400',
+  'bg-cyan-400',
+  'bg-emerald-400',
+  'bg-amber-400',
+  'bg-rose-400',
+  'bg-indigo-400',
+  'bg-teal-400',
+  'bg-fuchsia-400',
+  'bg-lime-400',
+  'bg-orange-400',
+  'bg-blue-400',
+]
+const CATEGORY_DOT_BY_NAME: Record<string, string> = {
+  LLM: CATEGORY_DOT_COLORS[0],
+  VLM: CATEGORY_DOT_COLORS[1],
+  VLA: CATEGORY_DOT_COLORS[2],
+  '三维重建-静态': CATEGORY_DOT_COLORS[6],
+  '三维重建-动态': CATEGORY_DOT_COLORS[3],
+  世界模型: CATEGORY_DOT_COLORS[4],
+  蒸馏: CATEGORY_DOT_COLORS[5],
+  表征学习: CATEGORY_DOT_COLORS[8],
+  动态重建: CATEGORY_DOT_COLORS[7],
+}
 
 interface ActionNotice {
   tone: TaskNoticeTone
@@ -42,12 +71,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   const [status, setStatus] = useState<ProcStatus | null>(null)
   const [view, setView] = useState<ViewMode>('grid')
   const [filter, setFilter] = useState<Filter>('all')
+  const [categoryFilter, setCategoryFilter] = useState(CATEGORY_FILTER_ALL)
   const [search, setSearch] = useState('')
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [bulkProcessingPending, setBulkProcessingPending] = useState(false)
   const [bulkRetrying, setBulkRetrying] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [categoryOptions, setCategoryOptions] = useState<string[]>(DEFAULT_PAPER_CATEGORIES)
+  const [categoryDrafts, setCategoryDrafts] = useState<Record<number, string>>({})
+  const [categorySavingIds, setCategorySavingIds] = useState<Set<number>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
   // Global Prompt column collapses to a thin icon strip by default so
   // the paper grid gets the whole horizontal width. Most users don't
@@ -82,6 +115,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     }
 
     void loadInitialPapers()
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    listPaperCategories()
+      .then(items => {
+        if (!cancelled && items.length > 0) setCategoryOptions(items.map(item => item.name))
+      })
+      .catch(error => console.error('Failed to load paper categories', error))
     return () => { cancelled = true }
   }, [])
 
@@ -339,6 +382,39 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setSelected(paper)
   }
 
+  const handleCategoryChange = async (paper: PaperRecord, nextValue: string) => {
+    const currentValue = paper.paper_category_override || CATEGORY_INHERIT
+    if (nextValue === currentValue || categorySavingIds.has(paper.id)) return
+
+    setCategoryDrafts(prev => ({ ...prev, [paper.id]: nextValue }))
+    setCategorySavingIds(prev => new Set(prev).add(paper.id))
+    try {
+      const updated = await updatePaperCategory(
+        paper.id,
+        nextValue === CATEGORY_INHERIT ? null : nextValue,
+      )
+      setPapers(prev => prev.map(item => item.id === updated.id ? updated : item))
+      setSelected(prev => prev?.id === updated.id ? updated : prev)
+    } catch (error) {
+      setActionNotice({
+        tone: 'error',
+        title: `论文大类保存失败：${paper.title || paper.filename}`,
+        detail: getErrorMessage(error),
+      })
+    } finally {
+      setCategoryDrafts(prev => {
+        const next = { ...prev }
+        delete next[paper.id]
+        return next
+      })
+      setCategorySavingIds(prev => {
+        const next = new Set(prev)
+        next.delete(paper.id)
+        return next
+      })
+    }
+  }
+
   const stats = useMemo(() => ({
     processed: papers.filter(p => p.processed).length,
     failed: papers.filter(p => p.error && !p.processed).length,
@@ -358,11 +434,32 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     [papers],
   )
 
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    papers.forEach(paper => {
+      const category = effectivePaperCategoryLabel(paper)
+      counts.set(category, (counts.get(category) || 0) + 1)
+    })
+    return counts
+  }, [papers])
+
+  const filterCategoryOptions = useMemo(() => {
+    const configured = categoryOptions.filter(category => categoryCounts.has(category))
+    const configuredSet = new Set(configured)
+    const historical = [...categoryCounts.keys()]
+      .filter(category => !configuredSet.has(category))
+      .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+    return [...configured, ...historical]
+  }, [categoryCounts, categoryOptions])
+
   const filtered = useMemo(() => {
     let list = papers
     if (filter === 'processed') list = list.filter(p => p.processed)
     else if (filter === 'pending') list = list.filter(p => !p.processed && !p.error)
     else if (filter === 'failed') list = list.filter(p => p.error && !p.processed)
+    if (categoryFilter !== CATEGORY_FILTER_ALL) {
+      list = list.filter(p => effectivePaperCategoryLabel(p) === categoryFilter)
+    }
     if (search.trim()) {
       const q = search.toLowerCase()
       list = list.filter(p =>
@@ -372,7 +469,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       )
     }
     return list
-  }, [papers, filter, search])
+  }, [papers, filter, categoryFilter, search])
 
   return (
     <div className="flex h-full">
@@ -492,6 +589,32 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                 {label} <span className="text-slate-600 tabular-nums">{n}</span>
               </button>
             ))}
+
+            <span className="mx-1.5 h-4 w-px bg-slate-800" aria-hidden="true" />
+            <div className="relative">
+              <label htmlFor="paper-category-filter" className="sr-only">按论文大类筛选</label>
+              <span
+                className={`pointer-events-none absolute left-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${
+                  categoryFilter === CATEGORY_FILTER_ALL
+                    ? 'bg-slate-500'
+                    : categoryDotColor(categoryFilter)
+                }`}
+                aria-hidden="true"
+              />
+              <select
+                id="paper-category-filter"
+                value={categoryFilter}
+                onChange={event => setCategoryFilter(event.target.value)}
+                className="h-8 w-40 cursor-pointer truncate rounded-lg border border-slate-700/70 bg-slate-900/60 py-1 pl-6 pr-7 text-xs font-medium text-slate-300 outline-none transition-colors hover:border-slate-600 focus:border-indigo-500/60"
+              >
+                <option value={CATEGORY_FILTER_ALL}>全部大类 · {papers.length}</option>
+                {filterCategoryOptions.map(category => (
+                  <option key={category} value={category}>
+                    {category} · {categoryCounts.get(category) || 0}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
           {recentFailures.length > 0 && (
@@ -550,6 +673,10 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   active={selected?.id === p.id}
                   pending={isPending(p)}
                   onClick={() => handlePaperClick(p)}
+                  categoryOptions={categoryOptions}
+                  categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
+                  categorySaving={categorySavingIds.has(p.id)}
+                  onCategoryChange={value => handleCategoryChange(p, value)}
                 />
               ))}
             </div>
@@ -562,6 +689,10 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   active={selected?.id === p.id}
                   pending={isPending(p)}
                   onClick={() => handlePaperClick(p)}
+                  categoryOptions={categoryOptions}
+                  categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
+                  categorySaving={categorySavingIds.has(p.id)}
+                  onCategoryChange={value => handleCategoryChange(p, value)}
                 />
               ))}
             </div>
@@ -787,13 +918,30 @@ function PaperDetailStrip({
 }
 
 function PaperGridCard({
-  paper, active, pending, onClick,
-}: { paper: PaperRecord; active: boolean; pending: boolean; onClick: () => void }) {
+  paper, active, pending, onClick, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+}: {
+  paper: PaperRecord
+  active: boolean
+  pending: boolean
+  onClick: () => void
+  categoryOptions: string[]
+  categoryValue: string
+  categorySaving: boolean
+  onCategoryChange: (value: string) => void
+}) {
   return (
-    <button
+    <article
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={event => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          onClick()
+        }
+      }}
       title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
-      className={`text-left group bg-slate-900/40 rounded-2xl overflow-hidden border transition-all ${
+      className={`text-left group bg-slate-900/40 rounded-2xl overflow-hidden border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'border-indigo-500/60 shadow-lg shadow-indigo-500/10'
           : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
@@ -823,23 +971,48 @@ function PaperGridCard({
             {paper.authors.slice(0, 3).join(', ')}
           </p>
         )}
-        <div className="flex items-center gap-2 text-xs text-slate-600 mt-2.5">
-          {paper.num_pages && <span className="tabular-nums">{paper.num_pages} 页</span>}
+        <div className="mt-2.5 flex min-h-7 items-center justify-between gap-2 text-xs text-slate-600">
+          <span className="tabular-nums">{paper.num_pages ? `${paper.num_pages} 页` : ''}</span>
+          <InlinePaperCategoryEditor
+            paper={paper}
+            options={categoryOptions}
+            value={categoryValue}
+            saving={categorySaving}
+            onChange={onCategoryChange}
+            variant="grid"
+          />
         </div>
       </div>
-    </button>
+    </article>
   )
 }
 
 function PaperListRow({
-  paper, active, pending, onClick,
-}: { paper: PaperRecord; active: boolean; pending: boolean; onClick: () => void }) {
+  paper, active, pending, onClick, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+}: {
+  paper: PaperRecord
+  active: boolean
+  pending: boolean
+  onClick: () => void
+  categoryOptions: string[]
+  categoryValue: string
+  categorySaving: boolean
+  onCategoryChange: (value: string) => void
+}) {
   const stage = inferPaperProcessMeta(paper, null, pending)
   return (
-    <button
+    <article
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={event => {
+        if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault()
+          onClick()
+        }
+      }}
       title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
-      className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all ${
+      className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'bg-indigo-500/5 border-indigo-500/40'
           : 'bg-slate-900/40 border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
@@ -869,11 +1042,87 @@ function PaperListRow({
           {stage.stage === 'failed' ? (stage.errorSummary || stage.summary) : stage.summary}
         </p>
       </div>
-      <div className="shrink-0">
+      <div className="flex shrink-0 items-center gap-2">
+        <InlinePaperCategoryEditor
+          paper={paper}
+          options={categoryOptions}
+          value={categoryValue}
+          saving={categorySaving}
+          onChange={onCategoryChange}
+          variant="list"
+        />
         <PaperProcessBadge paper={paper} pending={pending} />
       </div>
-    </button>
+    </article>
   )
+}
+
+function InlinePaperCategoryEditor({
+  paper, options, value, saving, onChange, variant,
+}: {
+  paper: PaperRecord
+  options: string[]
+  value: string
+  saving: boolean
+  onChange: (value: string) => void
+  variant: 'grid' | 'list'
+}) {
+  const selectId = `paper-category-${variant}-${paper.id}`
+  const effectiveCategory = value === CATEGORY_INHERIT
+    ? (paper.paper_category_model || paper.paper_category || '未设置')
+    : value
+  const dotColor = categoryDotColor(effectiveCategory)
+  return (
+    <div
+      className="relative min-w-0"
+      onClick={event => event.stopPropagation()}
+      onKeyDown={event => event.stopPropagation()}
+    >
+      <label htmlFor={selectId} className="sr-only">论文大类</label>
+      <span
+        className={`pointer-events-none absolute left-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${dotColor}`}
+        aria-hidden="true"
+      />
+      <select
+        id={selectId}
+        aria-label={`${paper.title || paper.filename}的论文大类`}
+        value={value}
+        disabled={saving}
+        onChange={event => onChange(event.target.value)}
+        title={`论文大类：${effectiveCategory}${paper.paper_category_source === 'manual' ? '（人工）' : '（跟随模型）'}`}
+        className={`${variant === 'grid' ? 'max-w-32' : 'max-w-36'} cursor-pointer truncate rounded-md border border-slate-700/70 bg-transparent py-1 pl-5 pr-6 text-[10px] font-medium text-slate-300 focus:border-slate-500 focus:outline-none disabled:cursor-wait disabled:opacity-60`}
+      >
+        <option value={CATEGORY_INHERIT}>
+          跟随 · {paper.paper_category_model || '未设置'}
+        </option>
+        {options.map(option => (
+          <option key={option} value={option}>{option}</option>
+        ))}
+      </select>
+      {saving && (
+        <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center">
+          <Loader2 size={10} className="animate-spin text-current" aria-label="保存中" />
+        </span>
+      )}
+    </div>
+  )
+}
+
+function categoryDotColor(category: string): string {
+  if (!category || category === '未设置' || category === '其他') {
+    return 'bg-slate-500'
+  }
+  if (CATEGORY_DOT_BY_NAME[category]) return CATEGORY_DOT_BY_NAME[category]
+  let hash = 0
+  for (const char of category) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0
+  return CATEGORY_DOT_COLORS[Math.abs(hash) % CATEGORY_DOT_COLORS.length]
+}
+
+function effectivePaperCategoryLabel(paper: PaperRecord): string {
+  return paper.paper_category_override
+    || paper.paper_category
+    || paper.paper_category_model
+    || '未设置'
 }
 
 function StatusDot({ paper, pending }: { paper: PaperRecord; pending: boolean }) {

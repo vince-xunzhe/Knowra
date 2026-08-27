@@ -91,14 +91,51 @@ class ModelGatewayConfigTests(unittest.TestCase):
         self.assertEqual(binding["reasoning_effort"], "medium")
 
     def test_codex_models_cover_all_non_embedding_tasks(self):
-        codex_model = next(
-            model for model in BUILTIN_MODEL_REGISTRY if model["id"] == "codex-cli/gpt-5.4-mini"
+        model_ids = [
+            "codex-cli/gpt-5.4-mini",
+            "codex-cli/gpt-5.6-sol",
+            "codex-cli/gpt-5.6-ter",
+            "codex-cli/gpt-5.6-lun",
+        ]
+
+        for model_id in model_ids:
+            with self.subTest(model_id=model_id):
+                codex_model = next(
+                    model for model in BUILTIN_MODEL_REGISTRY if model["id"] == model_id
+                )
+                self.assertIn("paper_extract", codex_model["supported_tasks"])
+                self.assertIn("paper_chat", codex_model["supported_tasks"])
+                self.assertIn("ask_agent", codex_model["supported_tasks"])
+                self.assertNotIn("embedding", codex_model["supported_tasks"])
+
+    def test_existing_config_receives_new_codex_models(self):
+        cfg = ensure_model_gateway_config(
+            {
+                "model_gateway": {
+                    "models": [
+                        {
+                            "id": "codex-cli/gpt-5.5",
+                            "label": "Codex CLI / GPT-5.5",
+                            "provider_id": "codex-cli",
+                            "upstream_model": "gpt-5.5",
+                            "model_kind": "chat",
+                            "supports_vision": True,
+                            "supported_tasks": ["paper_extract"],
+                            "builtin": True,
+                        }
+                    ]
+                }
+            }
         )
 
-        self.assertIn("paper_extract", codex_model["supported_tasks"])
-        self.assertIn("paper_chat", codex_model["supported_tasks"])
-        self.assertIn("ask_agent", codex_model["supported_tasks"])
-        self.assertNotIn("embedding", codex_model["supported_tasks"])
+        model_ids = {model["id"] for model in cfg["model_gateway"]["models"]}
+        self.assertTrue(
+            {
+                "codex-cli/gpt-5.6-sol",
+                "codex-cli/gpt-5.6-ter",
+                "codex-cli/gpt-5.6-lun",
+            }.issubset(model_ids)
+        )
 
     def test_builtin_models_do_not_keep_stale_saved_supported_tasks(self):
         cfg = ensure_model_gateway_config(
@@ -222,6 +259,32 @@ class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
         called_args = mock_run.call_args.args[0]
         self.assertIn("-c", called_args)
         self.assertIn('model_reasoning_effort="high"', called_args)
+
+    @patch("model_gateway.runtime.subprocess.run")
+    def test_codex_cli_passes_gpt_5_6_variants_as_model_names(self, mock_run):
+        def _fake_run(args, **kwargs):
+            output_index = args.index("--output-last-message") + 1
+            Path(args[output_index]).write_text("OK", encoding="utf-8")
+
+            class _Completed:
+                returncode = 0
+                stderr = b""
+
+            return _Completed()
+
+        mock_run.side_effect = _fake_run
+
+        for model_name in ("gpt-5.6-sol", "gpt-5.6-ter", "gpt-5.6-lun"):
+            with self.subTest(model_name=model_name):
+                _run_codex_cli(
+                    {"command": "codex"},
+                    model_name,
+                    "请只回复 OK。",
+                )
+
+                called_args = mock_run.call_args.args[0]
+                model_index = called_args.index("--model") + 1
+                self.assertEqual(called_args[model_index], model_name)
 
     @patch("model_gateway.runtime.subprocess.run")
     def test_codex_cli_passes_images_when_provided(self, mock_run):

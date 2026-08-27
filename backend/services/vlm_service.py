@@ -25,6 +25,7 @@ from services.pdf_service import (
     render_pdf_pages,
     select_key_pages,
 )
+from services.paper_category_service import get_active_categories
 
 ensure_project_root_on_path()
 
@@ -86,6 +87,7 @@ LOCAL_EXTRACTION_CHUNK_CHAR_BUDGET = 12000
 LOCAL_EXTRACTION_MAX_CHUNKS = 4
 LOCAL_EXTRACTION_CHUNK_TIMEOUT_S = 150
 LOCAL_EXTRACTION_FINAL_TIMEOUT_S = 600
+RUNTIME_CATEGORY_MARKER = "═══════════ 运行时可选论文大类（以此处为准） ═══════════"
 
 
 def model_uses_responses_api(model: str) -> bool:
@@ -175,6 +177,22 @@ def _build_local_text_fallback_prompt(prompt: str, fallback_text: str) -> str:
         "[LOCAL_PDF_TEXT_BEGIN]\n"
         f"{text}\n"
         "[LOCAL_PDF_TEXT_END]\n"
+    )
+
+
+def _with_runtime_paper_categories(prompt: str) -> str:
+    """Append the current category vocabulary without mutating the saved prompt."""
+    categories = [str(item).strip() for item in get_active_categories() if str(item).strip()]
+    if not categories:
+        return prompt
+
+    marker_pattern = rf"\n*{re.escape(RUNTIME_CATEGORY_MARKER)}.*\Z"
+    base_prompt = re.sub(marker_pattern, "", prompt, flags=re.S).rstrip()
+    options = " / ".join(f"`{category}`" for category in categories)
+    return (
+        f"{base_prompt}\n\n{RUNTIME_CATEGORY_MARKER}\n"
+        f"- paper_category 必须且只能从以下值中选择一个：{options}。\n"
+        "- 根据论文的主贡献而不是单个关键词选择；无法归入时选择 `其他`。"
     )
 
 
@@ -754,6 +772,7 @@ def extract_knowledge_from_paper(
     and thread_id on the Paper row so follow-up chat can reuse the thread.
     """
     cfg, provider_type = _resolve_model_gateway_context(model)
+    prompt = _with_runtime_paper_categories(prompt)
     if provider_type == "codex_cli":
         local_prompt = _build_local_text_fallback_prompt(prompt, fallback_text or "")
         page_texts, num_pages = extract_text_pages(
