@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Files, FolderOpen, Loader2, X } from 'lucide-react'
+import { Check, Files, FolderOpen, Loader2, RefreshCw, X } from 'lucide-react'
 import type { DuplicatePaperFile } from '../api/client'
 
 interface RevealResult {
@@ -13,6 +13,9 @@ interface Props {
   selectedPath: string | null
   onSelect: (path: string) => void
   onReveal: (path: string) => Promise<RevealResult>
+  onRefresh: () => Promise<void>
+  refreshing: boolean
+  refreshError: string | null
   onClose: () => void
 }
 
@@ -26,6 +29,9 @@ export default function DuplicateFilesModal({
   selectedPath,
   onSelect,
   onReveal,
+  onRefresh,
+  refreshing,
+  refreshError,
   onClose,
 }: Props) {
   const [locating, setLocating] = useState(false)
@@ -70,12 +76,21 @@ export default function DuplicateFilesModal({
           </span>
           <div className="min-w-0 flex-1">
             <h2 id="duplicate-files-title" className="text-[15px] font-semibold text-slate-100">
-              发现 {items.length} 篇重复论文
+              当前发现 {items.length} 个重复文件
             </h2>
             <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
-              已跳过这些文件，没有重复写入数据库。默认选中扫描路径下的第一项。
+              这些文件已跳过，不参与论文处理。删除后返回应用会自动检查，也可手动重新检查。
             </p>
+            {refreshError && <p role="alert" className="mt-1 text-[12px] text-rose-300">{refreshError}</p>}
           </div>
+          <button
+            onClick={() => void onRefresh()}
+            disabled={refreshing}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] text-slate-400 hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            {refreshing ? '检查中…' : '重新检查'}
+          </button>
           <button
             onClick={onClose}
             className="rounded-md p-1.5 text-slate-500 hover:bg-slate-800 hover:text-slate-200"

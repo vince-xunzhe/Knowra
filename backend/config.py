@@ -100,6 +100,19 @@ def _upgrade_extraction_prompt(prompt: str) -> str:
             upgraded,
         )
 
+    formula_guidance = (
+        '- principle.key_formulas: 优先列 2-4 条论文真正出现且最关键的公式；每条 '
+        '{name: "式(3) 自注意力" 之类, formula: "仅填写 KaTeX 兼容的标准 LaTeX", '
+        'plain: "解释变量、输入输出以及这条公式解决什么问题"}。不得把普通描述伪造成公式；'
+        '论文少于 2 条关键公式时按实际数量返回，没有公式则返回 []\n'
+        '    · formula 不包含 `$` / `$$` / `\\[` / `\\]` 外层定界符；`{}` 只用于 LaTeX 分组，'
+        '需要显示集合花括号时写 `\\{` 和 `\\}`\n'
+        '    · 使用 `\\sim`、`\\sum`、`\\theta`、`\\hat{y}`、`\\mathbb{E}`、`\\mid`、`\\|` '
+        '等标准命令，不得混用 `～`、`Σ`、`θ`、`ŷ`、`E_ŷ~_{...}` 等 Unicode/伪 LaTeX 写法\n'
+        '    · formula 位于 JSON 字符串中，输出文本里的 LaTeX 反斜杠必须按 JSON 规则转义；'
+        '例如解析后的 `\\theta` 在 JSON 源文本中应写为 `\\\\theta`'
+    )
+
     # Keep user-edited prompts intact while migrating known legacy wording.
     # Whole-line replacements make this migration safe to run on every load.
     replace_line(
@@ -153,11 +166,15 @@ def _upgrade_extraction_prompt(prompt: str) -> str:
     )
     replace_line(
         '- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, plain: "白话解释这条公式在做什么"}；plain 不要粘 LaTeX',
-        '- principle.key_formulas: 优先列 2-4 条论文真正出现且最关键的公式；每条 {name: "式(3) 自注意力" 之类, formula: "公式正文，可用 LaTeX 或论文里的标准写法", plain: "解释变量、输入输出以及这条公式解决什么问题"}。不得把普通描述伪造成公式；论文少于 2 条关键公式时按实际数量返回，没有公式则返回 []',
+        formula_guidance,
     )
     replace_line(
         '- principle.key_formulas: **至少列 2-4 条**论文最关键的公式；每条 {name: "式(3) 自注意力" 之类, formula: "公式正文，可用 LaTeX 或论文里的标准写法", plain: "白话解释这条公式在做什么"}；`formula` 必须填写真正公式内容，不能为空，`plain` 不要粘 LaTeX',
+        formula_guidance,
+    )
+    replace_line(
         '- principle.key_formulas: 优先列 2-4 条论文真正出现且最关键的公式；每条 {name: "式(3) 自注意力" 之类, formula: "公式正文，可用 LaTeX 或论文里的标准写法", plain: "解释变量、输入输出以及这条公式解决什么问题"}。不得把普通描述伪造成公式；论文少于 2 条关键公式时按实际数量返回，没有公式则返回 []',
+        formula_guidance,
     )
     replace_line(
         '- experimental_gains: 实验比前人好在哪？给具体数字与对比对象（如 "ImageNet top-1 从 76.5 → 80.1"），指出最有说服力的实验（120-200 字）',

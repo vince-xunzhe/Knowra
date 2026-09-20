@@ -39,6 +39,18 @@ export interface ProcessingStatus {
   done: number
   errors: number
   current: string
+  succeeded: number
+  pending: number | null
+  failedPapers: Array<{
+    id: string
+    filename: string
+    stage: string | null
+    reason: string | null
+    recoverable: boolean
+    retryCount: number
+  }>
+  batchError: string | null
+  lastMessage: string
 }
 
 export type StageId = 'ingest' | 'curate' | 'compile' | 'maintain'
@@ -231,12 +243,23 @@ export function usePipelineState({
           done: s.done ?? 0,
           errors: s.errors ?? 0,
           current: s.current ?? '',
+          succeeded: s.succeeded ?? Math.max(0, (s.done ?? 0) - (s.errors ?? 0)),
+          pending: typeof s.pending === 'number' ? s.pending : null,
+          failedPapers: (s.failed_papers ?? []).map(item => ({
+            id: item.id,
+            filename: item.filename,
+            stage: item.stage,
+            reason: item.reason,
+            recoverable: item.recoverable,
+            retryCount: item.retry_count,
+          })),
+          batchError: s.batch_error ?? null,
+          lastMessage: s.last_message ?? s.message ?? '',
         }
         setProcessing(next)
-        // Keep the ingest badge honest after processing finishes too. Do
-        // not let an idle status with total=0 overwrite the scan-derived
-        // count; /status is just the last processing run, not a DB count.
-        if (next.running || next.total > 0) {
+        if (next.pending !== null) {
+          setUnprocessedHint(next.pending)
+        } else if (next.running) {
           setUnprocessedHint(Math.max(0, next.total - next.done))
         }
       } catch {
@@ -506,10 +529,24 @@ export function usePipelineState({
         done: started.done ?? 0,
         errors: started.errors ?? 0,
         current: started.current ?? '',
+        succeeded: started.succeeded ?? 0,
+        pending: typeof started.pending === 'number' ? started.pending : null,
+        failedPapers: (started.failed_papers ?? []).map(item => ({
+          id: item.id,
+          filename: item.filename,
+          stage: item.stage,
+          reason: item.reason,
+          recoverable: item.recoverable,
+          retryCount: item.retry_count,
+        })),
+        batchError: started.batch_error ?? null,
+        lastMessage: started.last_message ?? started.message ?? '',
       }
       setProcessing(next)
-      if (next.running || next.total > 0) {
-        setUnprocessedHint(Math.max(0, next.total - next.done))
+      if (next.pending !== null) {
+        setUnprocessedHint(next.pending)
+      } else if (next.running || next.total > 0) {
+        setUnprocessedHint(Math.max(0, next.total - next.succeeded))
       }
     })
   }, [wrap])

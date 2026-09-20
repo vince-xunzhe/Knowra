@@ -31,6 +31,7 @@ import PaperProcessBadge, {
   type ProcessStatusHint,
 } from '../components/PaperProcessBadge'
 import PdfSidePanel, { type PdfViewState } from '../components/PdfSidePanel'
+import { normalizeFormula } from '../services/formulaNormalizer'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 type Technique = { name?: string; aliases?: string[]; role?: string; builds_on?: string[] }
@@ -2044,15 +2045,6 @@ function ReviewBlock({
       <div className="px-3 py-4 text-sm sm:px-4">{children}</div>
     </section>
   )
-}
-
-function normalizeFormula(raw: string): string {
-  const text = (raw || '').trim()
-  if (!text) return ''
-  if (text.startsWith('$$') && text.endsWith('$$')) return text.slice(2, -2).trim()
-  if (text.startsWith('\\[') && text.endsWith('\\]')) return text.slice(2, -2).trim()
-  if (text.startsWith('$') && text.endsWith('$')) return text.slice(1, -1).trim()
-  return text
 }
 
 function FormulaEditor({

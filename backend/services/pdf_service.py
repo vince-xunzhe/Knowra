@@ -11,6 +11,21 @@ ARTIFACT_DIR = Path(__file__).parent.parent.parent / "data" / "artifacts"
 ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def sanitize_pdf_text(text: str) -> str:
+    """Replace lone UTF-16 surrogates emitted by some PDF text maps.
+
+    Python strings can contain these code points, but SQLite, JSON and most
+    model transports require valid UTF-8. Keeping the replacement marker is
+    preferable to dropping surrounding formula or citation text.
+    """
+    if not text:
+        return ""
+    return "".join(
+        "\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char
+        for char in text
+    )
+
+
 def extract_text(filepath: str, max_chars: int = 40000) -> tuple[str, int]:
     """
     Extract plain text from a PDF. Returns (text, num_pages).
@@ -23,7 +38,7 @@ def extract_text(filepath: str, max_chars: int = 40000) -> tuple[str, int]:
     total_len = 0
     for page in reader.pages:
         try:
-            txt = page.extract_text() or ""
+            txt = sanitize_pdf_text(page.extract_text() or "")
         except Exception:
             txt = ""
         parts.append(txt)
@@ -59,7 +74,7 @@ def extract_text_pages(
         if max_pages is not None and index > max_pages:
             break
         try:
-            text = (page.extract_text() or "").strip()
+            text = sanitize_pdf_text(page.extract_text() or "").strip()
         except Exception:
             text = ""
         if not text:

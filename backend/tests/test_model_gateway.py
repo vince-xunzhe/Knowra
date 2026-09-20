@@ -96,6 +96,7 @@ class ModelGatewayConfigTests(unittest.TestCase):
             "codex-cli/gpt-5.6-sol",
             "codex-cli/gpt-5.6-ter",
             "codex-cli/gpt-5.6-lun",
+            "codex-cli/gpt-6-astra",
         ]
 
         for model_id in model_ids:
@@ -134,6 +135,7 @@ class ModelGatewayConfigTests(unittest.TestCase):
                 "codex-cli/gpt-5.6-sol",
                 "codex-cli/gpt-5.6-ter",
                 "codex-cli/gpt-5.6-lun",
+                "codex-cli/gpt-6-astra",
             }.issubset(model_ids)
         )
 
@@ -261,7 +263,7 @@ class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
         self.assertIn('model_reasoning_effort="high"', called_args)
 
     @patch("model_gateway.runtime.subprocess.run")
-    def test_codex_cli_passes_gpt_5_6_variants_as_model_names(self, mock_run):
+    def test_codex_cli_passes_registered_model_names(self, mock_run):
         def _fake_run(args, **kwargs):
             output_index = args.index("--output-last-message") + 1
             Path(args[output_index]).write_text("OK", encoding="utf-8")
@@ -274,7 +276,12 @@ class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
 
         mock_run.side_effect = _fake_run
 
-        for model_name in ("gpt-5.6-sol", "gpt-5.6-ter", "gpt-5.6-lun"):
+        for model_name in (
+            "gpt-5.6-sol",
+            "gpt-5.6-ter",
+            "gpt-5.6-lun",
+            "gpt-6-astra",
+        ):
             with self.subTest(model_name=model_name):
                 _run_codex_cli(
                     {"command": "codex"},
@@ -361,6 +368,19 @@ class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
 
         self.assertIn("不支持模型名 'gpt-5.4-high'", message)
         self.assertIn("gpt-5.4", message)
+
+    def test_codex_cli_failure_summary_explains_required_upgrade(self):
+        raw = (
+            "OpenAI Codex v0.151.0-alpha.7.2\n"
+            "ERROR: {\"type\":\"error\",\"status\":400,\"error\":{"
+            "\"message\":\"The 'gpt-6-astra' model requires a newer version of Codex.\"}}\n"
+        )
+
+        message = _summarize_codex_cli_failure(raw, "gpt-6-astra")
+
+        self.assertIn("gpt-6-astra", message)
+        self.assertIn("更新版本", message)
+        self.assertIn("升级", message)
 
 
 if __name__ == "__main__":

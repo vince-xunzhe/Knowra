@@ -216,6 +216,10 @@ processing_state = {
     "succeeded": 0,
     "failed_papers": [],
     "max_retries": 0,
+    "batch_error": None,
+    "last_message": "",
+    "started_at": None,
+    "finished_at": None,
 }
 
 
@@ -278,6 +282,19 @@ def _paper_failure_item(p: Paper) -> dict:
         "recoverable": bool(p.last_error_recoverable),
         "retry_count": int(p.retry_count or 0),
     }
+
+
+def _sync_processing_record(paper: Paper, event: str) -> None:
+    """Mirror processing state to markdown without risking the core task."""
+    try:
+        sync_record_from_paper(paper, event=event)
+    except Exception:
+        logger.exception(
+            "paper record sync failed paper_id=%s filename=%s event=%s",
+            paper.id,
+            paper.filename,
+            event,
+        )
 
 
 class RawResponseUpdate(BaseModel):
@@ -712,7 +729,8 @@ def _process_single(paper_id: str):
                 error_stage=PIPELINE_STATUS_EXTRACTING,
                 error_recoverable=False,
             )
-            sync_record_from_paper(p, event="process_error")
+            _sync_processing_record(p, event="process_error")
+            processing_state["done"] += 1
             processing_state["errors"] += 1
             processing_state["failed_papers"].append(_paper_failure_item(p))
             return
@@ -876,12 +894,13 @@ def _process_single(paper_id: str):
                 p.last_error_reason = None
                 p.last_error_recoverable = None
                 db.commit()
-                sync_record_from_paper(p, event="process")
                 processing_state["done"] += 1
                 processing_state["succeeded"] += 1
+                _sync_processing_record(p, event="process")
                 _run_wiki_compile_phase(p, db, cfg)
                 return
             except PaperExtractionError as e:
+                db.rollback()
                 if e.raw:
                     p.raw_llm_response = e.raw
                 if e.file_id and not p.openai_file_id:
@@ -902,6 +921,9 @@ def _process_single(paper_id: str):
                     max_retries,
                 )
             except Exception as e:
+                # SQLAlchemy requires an explicit rollback after a flush or
+                # encoding failure before we can persist retry/failure state.
+                db.rollback()
                 reason = short_error_reason(e)
                 recoverable = is_recoverable_error(e)
                 logger.exception(
@@ -925,7 +947,7 @@ def _process_single(paper_id: str):
                     error_stage=stage,
                     error_recoverable=True,
                 )
-                sync_record_from_paper(p, event="process_retry")
+                _sync_processing_record(p, event="process_retry")
                 delay = compute_backoff_seconds(
                     attempt,
                     base_seconds=backoff_base_s,
@@ -945,7 +967,8 @@ def _process_single(paper_id: str):
                 error_stage=stage,
                 error_recoverable=recoverable,
             )
-            sync_record_from_paper(p, event="process_error")
+            _sync_processing_record(p, event="process_error")
+            processing_state["done"] += 1
             processing_state["errors"] += 1
             processing_state["failed_papers"].append(_paper_failure_item(p))
             return
@@ -971,23 +994,95 @@ def _process_one_background(paper_id: str):
     _process_many_background([paper_id])
 
 
-def _process_many_background(paper_ids: list[int]):
+def _record_unhandled_processing_failure(paper_id: str, exc: Exception) -> None:
+    """Contain an unexpected paper failure so the rest of the batch runs."""
+    from database import SessionLocal
+
+    reason = short_error_reason(exc)
+    logger.exception(
+        "paper batch item aborted paper_id=%s reason=%s",
+        paper_id,
+        reason,
+    )
+    failure_item = {
+        "id": paper_id,
+        "filename": str(paper_id),
+        "stage": PIPELINE_STATUS_FAILED,
+        "reason": reason,
+        "recoverable": False,
+        "retry_count": 0,
+    }
+    db = SessionLocal()
+    try:
+        paper = db.query(Paper).filter(Paper.id == paper_id).first()
+        if paper is not None:
+            if paper.processed:
+                # A post-processing side effect failed after the extraction
+                # was committed. Keep the successful database result.
+                processing_state["done"] += 1
+                processing_state["succeeded"] += 1
+                return
+            _set_pipeline_state(
+                db,
+                paper,
+                status=PIPELINE_STATUS_FAILED,
+                retry_count=paper.retry_count or 0,
+                error=reason,
+                error_stage=paper.processing_status or PIPELINE_STATUS_SCANNING,
+                error_recoverable=False,
+            )
+            _sync_processing_record(paper, event="process_error")
+            failure_item = _paper_failure_item(paper)
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "failed to persist batch item error paper_id=%s original_reason=%s",
+            paper_id,
+            reason,
+        )
+    finally:
+        db.close()
+
+    processing_state["done"] += 1
+    processing_state["errors"] += 1
+    processing_state["failed_papers"].append(failure_item)
+    processing_state["batch_error"] = reason
+
+
+def _process_many_background(paper_ids: list[str]):
     processing_state["total"] = len(paper_ids)
     processing_state["done"] = 0
     processing_state["succeeded"] = 0
     processing_state["errors"] = 0
     processing_state["failed_papers"] = []
     processing_state["max_retries"] = 0
+    processing_state["batch_error"] = None
+    processing_state["last_message"] = "论文处理任务已启动"
+    processing_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    processing_state["finished_at"] = None
     processing_state["running"] = True
     try:
         for paper_id in paper_ids:
-            _process_single(paper_id)
+            try:
+                _process_single(paper_id)
+            except Exception as exc:
+                _record_unhandled_processing_failure(paper_id, exc)
     finally:
         processing_state["running"] = False
         processing_state["current"] = ""
+        processing_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        if processing_state["errors"]:
+            processing_state["last_message"] = (
+                f"处理完成：{processing_state['succeeded']} 篇成功，"
+                f"{processing_state['errors']} 篇失败"
+            )
+        else:
+            processing_state["last_message"] = (
+                f"处理完成：{processing_state['succeeded']} 篇成功"
+            )
 
 
-def _mark_processing_started(paper_ids: list[int]) -> None:
+def _mark_processing_started(paper_ids: list[str]) -> None:
     processing_state["total"] = len(paper_ids)
     processing_state["done"] = 0
     processing_state["succeeded"] = 0
@@ -995,6 +1090,10 @@ def _mark_processing_started(paper_ids: list[int]) -> None:
     processing_state["failed_papers"] = []
     processing_state["max_retries"] = 0
     processing_state["current"] = ""
+    processing_state["batch_error"] = None
+    processing_state["last_message"] = "论文处理任务已提交"
+    processing_state["started_at"] = datetime.now(timezone.utc).isoformat()
+    processing_state["finished_at"] = None
     processing_state["running"] = bool(paper_ids)
 
 
@@ -1807,5 +1906,9 @@ def reset_chat(paper_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/status")
-def get_status():
-    return processing_state
+def get_status(db: Session = Depends(get_db)):
+    pending = db.query(Paper).filter(
+        Paper.processed == False,
+        Paper.error == None,
+    ).count()
+    return {**processing_state, "pending": pending}

@@ -13,7 +13,7 @@
 // the user expands them. Whole rail collapses to a thin 48-px icon strip
 // for users who don't need it.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Sparkles,
   ScanLine,
@@ -47,6 +47,7 @@ import {
   revealScannedFile,
   runWikiLint,
   type DuplicatePaperFile,
+  type PaperScanResult,
   type WikiCompileState,
 } from '../api/client'
 import { getLastSyncAt } from '../api/cloud'
@@ -102,6 +103,12 @@ export default function PipelineConsole({
   const [error, setError] = useState<string | null>(null)
   const [promptEditorOpen, setPromptEditorOpen] = useState(false)
   const [duplicateFiles, setDuplicateFiles] = useState<DuplicatePaperFile[]>([])
+  const [duplicateModalOpen, setDuplicateModalOpen] = useState(false)
+  const [scanSummary, setScanSummary] = useState<PaperScanResult | null>(null)
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false)
+  const [duplicateCheckError, setDuplicateCheckError] = useState<string | null>(null)
+  const duplicateCheckInFlight = useRef(false)
+  const scanRevision = useRef(0)
   const [selectedDuplicatePath, setSelectedDuplicatePath] = useState<string | null>(null)
   // Which pipeline action is currently in-flight (null = idle). Drives
   // the grey/disabled + spinner state on the action buttons so the user
@@ -144,27 +151,80 @@ export default function PipelineConsole({
     setRunAllStatus({ running: true, label, detail, tone: 'running' })
   }
 
-  const showDuplicateFiles = (items: DuplicatePaperFile[]) => {
+  const showScanResult = (result: PaperScanResult) => {
+    scanRevision.current += 1
+    const items = result.duplicate_files || []
+    setScanSummary(result)
+    setDuplicateFiles(items)
+    setDuplicateCheckError(null)
+    setDuplicateModalOpen(items.length > 0)
+    setSelectedDuplicatePath(items[0]?.path ?? null)
     if (items.length === 0) return
     const first = items[0]
-    setDuplicateFiles(items)
-    setSelectedDuplicatePath(first.path)
     // The scan click explicitly asks the app to inspect this local folder.
     // Reveal the deterministic first duplicate immediately; the modal also
     // lets the user switch items and reveal them again.
     void revealScannedFile(first.path).catch(() => {})
   }
 
-  const duplicateModal = duplicateFiles.length > 0 ? (
+  const refreshDuplicateFiles = useCallback(async () => {
+    if (duplicateCheckInFlight.current) return
+    duplicateCheckInFlight.current = true
+    const revision = scanRevision.current
+    setCheckingDuplicates(true)
+    setDuplicateCheckError(null)
+    try {
+      const result = await scanForDirectory()
+      // A newer explicit scan owns the visible result.
+      if (revision !== scanRevision.current) return
+      const items = result.duplicate_files || []
+      setDuplicateFiles(items)
+      setSelectedDuplicatePath(previous =>
+        items.some(item => item.path === previous) ? previous : items[0]?.path ?? null,
+      )
+      if (items.length === 0) setDuplicateModalOpen(false)
+      setScanSummary(previous => previous ? {
+        ...previous,
+        new_found: previous.new_found + result.new_found,
+        total: result.total,
+        unprocessed: result.unprocessed,
+      } : result)
+    } catch (reason) {
+      if (revision === scanRevision.current) {
+        setDuplicateCheckError('重新检查失败，当前显示上次扫描结果，请稍后重试。')
+      }
+      console.warn('duplicate files refresh failed', reason)
+    } finally {
+      duplicateCheckInFlight.current = false
+      setCheckingDuplicates(false)
+    }
+  }, [scanForDirectory])
+
+  useEffect(() => {
+    if (duplicateFiles.length === 0) return
+    const refreshOnReturn = () => {
+      if (document.visibilityState === 'visible') void refreshDuplicateFiles()
+    }
+    window.addEventListener('focus', refreshOnReturn)
+    document.addEventListener('visibilitychange', refreshOnReturn)
+    return () => {
+      window.removeEventListener('focus', refreshOnReturn)
+      document.removeEventListener('visibilitychange', refreshOnReturn)
+    }
+  }, [duplicateFiles.length, refreshDuplicateFiles])
+
+  useEffect(() => () => { scanRevision.current += 1 }, [])
+
+  const duplicateModal = duplicateModalOpen && duplicateFiles.length > 0 ? (
     <DuplicateFilesModal
       items={duplicateFiles}
       selectedPath={selectedDuplicatePath}
       onSelect={setSelectedDuplicatePath}
       onReveal={revealScannedFile}
-      onClose={() => {
-        setDuplicateFiles([])
-        setSelectedDuplicatePath(null)
-      }}
+      onRefresh={refreshDuplicateFiles}
+      refreshing={checkingDuplicates}
+      refreshError={duplicateCheckError}
+      onClose={() => setDuplicateModalOpen(false)}
     />
   ) : null
 
@@ -180,14 +240,22 @@ export default function PipelineConsole({
     setRunAllStep('扫描论文目录')
     try {
       const scanResult = await state.scan()
-      showDuplicateFiles(scanResult.duplicate_files || [])
+      showScanResult(scanResult)
 
       if (scanResult.unprocessed > 0) {
         setRunAllStep('处理论文', `${scanResult.unprocessed} 篇待处理`)
         await state.process()
-        await waitForProcessingDone(s => {
+        const processingResult = await waitForProcessingDone(s => {
           if (s.running) setRunAllStep('处理论文', `${s.done}/${s.total}`)
         })
+        if (processingResult.errors > 0) {
+          const firstFailure = processingResult.failedPapers[0]
+          throw new Error(
+            firstFailure?.reason ||
+              processingResult.batchError ||
+              `${processingResult.errors} 篇论文处理失败`,
+          )
+        }
       }
 
       setRunAllStep('自动筛选候选概念')
@@ -297,20 +365,24 @@ export default function PipelineConsole({
   }
 
   // Scan reports its result inline (new vs. skipped-duplicate counts).
-  const [scanNotice, setScanNotice] = useState<string | null>(null)
+  const scanNotice = scanSummary
+    ? `扫描完成：新增 ${scanSummary.new_found} 篇` +
+      (duplicateFiles.length > 0 ? ` · 当前重复文件 ${duplicateFiles.length} 个（已跳过，不参与处理）`
+        : scanSummary.duplicates > 0 ? ' · 重复文件已清理' : '') +
+      ` · 待处理 ${scanSummary.unprocessed} 篇` +
+      (duplicateCheckError ? ` · ${duplicateCheckError}` : '')
+    : null
   const runScan = async () => {
     if (busyKey) return
     setError(null)
-    setScanNotice(null)
+    scanRevision.current += 1
+    setScanSummary(null)
+    setDuplicateFiles([])
+    setDuplicateModalOpen(false)
     setBusyKey('scan')
     try {
       const r = await state.scan()
-      showDuplicateFiles(r.duplicate_files || [])
-      setScanNotice(
-        `扫描完成：新增 ${r.new_found} 篇` +
-          (r.duplicates > 0 ? ` · 跳过重复 ${r.duplicates} 篇` : '') +
-          ` · 待处理 ${r.unprocessed} 篇`,
-      )
+      showScanResult(r)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -582,6 +654,8 @@ function IngestActions({
   const remaining = running
     ? Math.max(0, (state.processing?.total ?? 0) - (state.processing?.done ?? 0))
     : state.unprocessedHint
+  const firstFailure = state.processing?.failedPapers[0]
+  const failureReason = firstFailure?.reason || state.processing?.batchError
   return (
     <div className="space-y-2">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
@@ -615,6 +689,18 @@ function IngestActions({
         <p className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
           {scanNotice}
         </p>
+      )}
+      {!running && (state.processing?.errors ?? 0) > 0 && (
+        <div className="rounded-md border border-rose-500/35 bg-rose-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-rose-200">
+          <div className="flex items-start gap-1.5">
+            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+            <span>
+              {state.processing?.lastMessage || `有 ${state.processing?.errors} 篇处理失败`}
+              {firstFailure?.filename ? `；首篇：${firstFailure.filename}` : ''}
+              {failureReason ? `；${failureReason}` : ''}
+            </span>
+          </div>
+        </div>
       )}
       {running && (
         <ProgressLine
@@ -1171,6 +1257,18 @@ async function waitForProcessingDone(onTick: (status: ProcessingPollStatus) => v
       done: raw.done ?? 0,
       errors: raw.errors ?? 0,
       current: raw.current ?? '',
+      succeeded: raw.succeeded ?? Math.max(0, (raw.done ?? 0) - (raw.errors ?? 0)),
+      pending: typeof raw.pending === 'number' ? raw.pending : null,
+      failedPapers: (raw.failed_papers ?? []).map(item => ({
+        id: item.id,
+        filename: item.filename,
+        stage: item.stage,
+        reason: item.reason,
+        recoverable: item.recoverable,
+        retryCount: item.retry_count,
+      })),
+      batchError: raw.batch_error ?? null,
+      lastMessage: raw.last_message ?? raw.message ?? '',
     }
     onTick(status)
     if (status.running) {

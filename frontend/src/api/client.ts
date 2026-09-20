@@ -262,15 +262,27 @@ export const revealScannedFile = (path: string) =>
     .then(r => r.data)
 
 export interface ProcessStartResponse {
-  message: string
+  message?: string
   running: boolean
   total: number
   done: number
   errors: number
   current: string
   succeeded?: number
-  failed_papers?: unknown[]
+  pending?: number
+  failed_papers?: Array<{
+    id: string
+    filename: string
+    stage: string | null
+    reason: string | null
+    recoverable: boolean
+    retry_count: number
+  }>
   max_retries?: number
+  batch_error?: string | null
+  last_message?: string
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 export interface UploadResult extends PaperScanResult {
@@ -457,7 +469,7 @@ export const restoreNode = (id: number) =>
 // Status — short timeout so a single slow tick doesn't block the next
 // polling round. The tick handler must tolerate timeouts gracefully.
 export const getStatus = () =>
-  api.get('/status', { timeout: 8000 }).then(r => r.data)
+  api.get<ProcessStartResponse>('/status', { timeout: 8000 }).then(r => r.data)
 
 // Wiki — Phase 1 LLM-compiled concept pages.
 // `compiled_at` is sourced from each .md's YAML frontmatter, so the wiki
@@ -537,6 +549,13 @@ export interface WikiCompileState {
   model: string | null
   current_item_id?: number | null
   current_item_kind?: 'paper' | 'concept' | null
+  failed_items?: Array<{
+    kind: 'paper' | 'concept'
+    id: string | number
+    label: string
+    error: string
+    failed_at: string
+  }>
 }
 
 export const getWikiStatus = () =>

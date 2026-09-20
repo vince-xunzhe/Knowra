@@ -371,6 +371,16 @@ BUILTIN_MODEL_REGISTRY = [
         "builtin": True,
     },
     {
+        "id": "codex-cli/gpt-6-astra",
+        "label": "Codex CLI / GPT-6 Astra",
+        "provider_id": "codex-cli",
+        "upstream_model": "gpt-6-astra",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_CODEX_ALL_NON_EMBED_TASKS),
+        "builtin": True,
+    },
+    {
         "id": "kimi/kimi-k2.5",
         "label": "Kimi / kimi-k2.5",
         "provider_id": "kimi",

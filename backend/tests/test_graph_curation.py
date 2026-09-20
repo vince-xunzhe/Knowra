@@ -384,6 +384,7 @@ class WikiCompileSkipTests(unittest.TestCase):
                     first_path = compile_paper_page(paper, api_key="test-key", model="gpt-4o-mini")
                 self.assertIsNotNone(first_path)
                 self.assertEqual(first_call.call_count, 1)
+                self.assertEqual(first_call.call_args.kwargs["timeout_s"], 600)
 
                 with patch("services.wiki_compiler._call_llm", side_effect=AssertionError("LLM should have been skipped")):
                     second_path = compile_paper_page(paper, api_key="test-key", model="gpt-4o-mini")

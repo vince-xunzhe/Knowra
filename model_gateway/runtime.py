@@ -132,6 +132,11 @@ def _summarize_codex_cli_failure(text: str, upstream_model: str) -> str:
                     f"Codex CLI 当前不支持模型名 '{upstream_model}'。如果你使用 ChatGPT 账号，"
                     f"请改成 {base_model} 这样的基础模型名；high / medium / low 不是可直接传给 codex exec 的模型名。"
                 )
+        if "requires a newer version of Codex" in message:
+            return (
+                f"模型 '{upstream_model}' 需要更新版本的 Codex CLI。"
+                "请升级 ChatGPT/Codex 应用，或在 Provider 中配置新版 codex 可执行文件。"
+            )
         return message
 
     lines = [

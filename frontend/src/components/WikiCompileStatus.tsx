@@ -56,6 +56,7 @@ export default function WikiCompileStatus() {
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
   const kindLabel = status.kind === 'papers' ? '论文页' : '概念页'
   const Icon = status.kind === 'papers' ? FileText : Sparkles
+  const lastFailure = status.failed_items?.[status.failed_items.length - 1]
 
   return (
     <div className="fixed top-24 right-5 bg-slate-900/95 backdrop-blur-md border border-indigo-500/30 rounded-2xl p-4 w-72 shadow-2xl shadow-indigo-500/10 z-50 fade-in">
@@ -89,6 +90,16 @@ export default function WikiCompileStatus() {
         <p className="mt-1.5 text-[11px] text-slate-400 line-clamp-2 leading-relaxed text-safe-wrap">
           {status.current}
         </p>
+      )}
+
+      {lastFailure && (
+        <div
+          className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-2 text-[10.5px] leading-relaxed"
+          title={`${lastFailure.label}: ${lastFailure.error}`}
+        >
+          <p className="truncate text-amber-200">失败项：{lastFailure.label}</p>
+          <p className="mt-0.5 truncate text-amber-300/70">{lastFailure.error}</p>
+        </div>
       )}
     </div>
   )

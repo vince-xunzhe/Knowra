@@ -37,6 +37,8 @@ class ExtractionPromptTests(unittest.TestCase):
         self.assertEqual(upgraded.count("═══════════ 证据与保真规则"), 1)
         self.assertIn("file_search，或本地解析的分页正文", upgraded)
         self.assertIn("论文没有关键公式时为 []", upgraded)
+        self.assertIn("KaTeX 兼容的标准 LaTeX", upgraded)
+        self.assertIn("不得混用 `～`、`Σ`、`θ`、`ŷ`", upgraded)
 
     def test_default_prompt_keeps_schema_and_evidence_contract(self):
         required_fields = (
@@ -57,6 +59,8 @@ class ExtractionPromptTests(unittest.TestCase):
         self.assertIn("证据与保真规则", DEFAULT_PAPER_PROMPT)
         self.assertIn("严禁为了“非空”而编造", DEFAULT_PAPER_PROMPT)
         self.assertIn("换行写成 `\\n`", DEFAULT_PAPER_PROMPT)
+        self.assertIn("KaTeX 兼容的标准 LaTeX", DEFAULT_PAPER_PROMPT)
+        self.assertIn("需要显示集合花括号时写 `\\{` 和 `\\}`", DEFAULT_PAPER_PROMPT)
 
     @patch(
         "services.vlm_service.get_active_categories",

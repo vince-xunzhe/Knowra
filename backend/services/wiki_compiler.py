@@ -335,6 +335,11 @@ PAPER_PAGE_SYSTEM = (
     "4. 末尾不要写 Sources 段；frontmatter 已记录 paper_id。"
 )
 
+# Wiki generation is an offline batch job. Codex CLI calls regularly finish
+# close to the gateway's 180-second interactive ceiling, so give compile jobs
+# the same longer budget already used by the Wiki lint pipeline.
+WIKI_COMPILE_TIMEOUT_S = 600
+
 
 def _paper_user_prompt(paper: Paper, extraction: dict) -> str:
     extraction_text = json.dumps(extraction, ensure_ascii=False, indent=2)
@@ -548,6 +553,7 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         PAPER_PAGE_SYSTEM,
         _paper_user_prompt(paper, extraction),
         task_id="wiki_compile",
+        timeout_s=WIKI_COMPILE_TIMEOUT_S,
     )
 
     title = _paper_page_title(paper)
@@ -670,6 +676,7 @@ def compile_concept_page(
         _concept_user_prompt(node, snippets),
         max_tokens=1500,
         task_id="wiki_compile",
+        timeout_s=WIKI_COMPILE_TIMEOUT_S,
     )
 
     meta = {
