@@ -103,7 +103,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
         </details>
         {data.pending_imports.length > 0 && <section className="rounded-xl border border-indigo-500/30 p-4"><h2 className="font-medium">待入库请求</h2><p className="mt-1 text-xs text-slate-400">尚未完成的本机入库请求保留在这里，实际入库成功后才计入采纳。</p>{data.pending_imports.map(item => <div key={item.arxiv_id} className="mt-3 flex items-center gap-3 text-sm"><span className="flex-1">{item.title}</span><button className={button} disabled={!!busy} onClick={() => void action(item.arxiv_id, () => adopt(item, item.batch_id))}>{busy === item.arxiv_id ? '入库中…' : '完成入库'}</button></div>)}</section>}
         {!data.items.length && <div className="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">{data.profile.paper_count ? '还没有符合条件的精选。连接执行节点后更新；相关性不足时不会凑数。' : '先加入本地论文，让推荐从你的知识库开始。'}</div>}
-        <div className="grid gap-4 lg:grid-cols-2">{data.items.map(item => <RecommendationCard key={`${data.batch?.id}:${item.arxiv_id}`} item={item} batchId={data.batch!.id} busy={!!busy}
+        <div className="grid grid-cols-1 gap-4">{data.items.map(item => <RecommendationCard key={`${data.batch?.id}:${item.arxiv_id}`} item={item} batchId={data.batch!.id} busy={!!busy}
           onError={e => setError(errorMessage(e))} onAdopt={() => void action(item.arxiv_id, () => adopt(item, data.batch!.id))} />)}</div>
         <p className="text-xs text-slate-500">已浏览 {data.metrics.viewed} 篇 · 已采纳 {data.metrics.adopted} 篇 · 14 天采纳率 {data.metrics.adoption_rate_14d === null ? '等待观察窗口完成' : `${Math.round(data.metrics.adoption_rate_14d * 100)}%`}（成熟样本 {data.metrics.mature_viewed}，目标 30%）。未采纳不会记为不喜欢。</p>
         <details className="rounded-xl border border-slate-800 p-4 text-sm">
