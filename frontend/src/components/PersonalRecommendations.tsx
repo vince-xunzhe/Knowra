@@ -3,7 +3,7 @@ import { personalRecommendations, saveRecommendationFocus, refreshPersonalRecomm
   PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem } from '../api/recommendations'
 import { importRecommendation, localRecommendationWorker, startWorkspaceRecommendationWorker, stopLocalRecommendationWorker } from '../api/client'
 
-const labels: Record<string, string> = { domain: '领域', problem: '问题', method: '方法', dataset: '数据集', team: '团队' }
+const labels: Record<string, string> = { domain: '领域', problem: '研究问题', method: '方法', dataset: '数据集', team: '团队' }
 const workerHealth: Record<string, string> = { ready: '等待任务', busy: '正在生成', model_unavailable: 'AI 暂不可用', failed: '任务失败' }
 const lanes = { long_term: '长期兴趣', recent: '当前课题', explore: '相邻探索' }
 const button = 'rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-50'
@@ -96,7 +96,16 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
         </section>
         <details className="rounded-xl border border-slate-800 p-4">
           <summary className="cursor-pointer">我的兴趣画像 · {data.profile.paper_count} 篇论文 · 版本 {data.profile.version}</summary>
-          <div className="mt-3 space-y-2 text-sm text-slate-400">{Object.entries(data.profile.dimensions).map(([dimension, values]) => <p key={dimension}><span className="text-slate-200">{labels[dimension]}：</span>{Object.keys(values).slice(0, 10).join('、') || '暂无足够信息'}</p>)}</div>
+          <p className="mt-3 text-xs leading-relaxed text-slate-500">根据库内论文已有的分类、研究问题和知识节点汇总，按画像权重展示。</p>
+          <dl className="mt-3 space-y-3 text-sm text-slate-400">{Object.entries(data.profile.dimensions).map(([dimension, values]) => {
+            const entries = Object.keys(values).slice(0, 10)
+            return <div key={dimension} className="grid gap-x-4 gap-y-1 sm:grid-cols-[5rem_minmax(0,1fr)]">
+              <dt className="leading-relaxed text-slate-200">{labels[dimension]}：</dt>
+              <dd className="min-w-0 leading-relaxed">{!entries.length ? '暂无足够信息' : dimension === 'problem'
+                ? <ul className="list-disc space-y-1.5 pl-5">{entries.map(entry => <li key={entry}>{entry.replace(/[。．.;；、，,\s]+$/u, '')}</li>)}</ul>
+                : entries.join('、')}</dd>
+            </div>
+          })}</dl>
           <label className="mt-4 block text-sm" htmlFor="rec-focus">当前课题（可选，留空时从近期入库自动推断）</label>
           <textarea id="rec-focus" value={focus} maxLength={2000} onChange={e => setFocus(e.target.value)} rows={2} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 p-3" placeholder="例如：关注低成本三维重建中的泛化方法" />
           <button className={button} disabled={!!busy} onClick={() => void action('focus', () => saveRecommendationFocus(focus))}>保存课题</button>
