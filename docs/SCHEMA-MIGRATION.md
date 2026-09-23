@@ -488,3 +488,11 @@ Phase 0 结束前需要验证：
 - [ ] knowledge_edges 跨 user 的 source/target 在 trigger 阶段被拒绝
 - [ ] 现有 32 篇论文能成功跑完迁移脚本到 staging Postgres
 - [ ] 迁移后 `SELECT COUNT(*) FROM ...` 与本地 SQLite 完全一致
+
+## 个性化推荐（0009）
+
+`0009_personal_recommendations.sql` 增加 `rec_profiles`、`rec_candidates`、`rec_batches`、`rec_events`、`rec_workers`、`rec_usage`。这些是云服务状态，不参与桌面论文快照同步；云 SQLite 测试后备与 PostgreSQL 都由 `cloud_models.py` 对齐，桌面本地论文表不变。
+
+公共候选仅保存论文元数据和原文支持的公共特征。画像、批次、反馈和预算按当前用户隔离，写入仅经服务后端。worker 表不允许 authenticated 角色直接读取，令牌只保存 SHA-256 哈希。迁移与现有 Python 云模型一致，用户标识用 VARCHAR，RLS 将 `auth.uid()` 转为 text 比较。
+
+PostgreSQL 部署前执行迁移；保留表和事件即可回退旧应用。启动、参数回滚及验证见 [推荐运行手册](RECOMMENDATION-RUNBOOK.md)。

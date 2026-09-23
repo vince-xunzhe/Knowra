@@ -10,6 +10,8 @@ For installation, environment setup, and startup commands, see [Install](INSTALL
 
 ## Highlights
 
+- **Personalized paper recommendations**: infer interests from your synced library, rank arXiv metadata with optional Codex CLI / API scoring, and learn from successful imports. Desktop and mobile show selected papers and worker availability; the first worker can run on your own computer. See the [recommendation runbook](docs/RECOMMENDATION-RUNBOOK.md) for migration and startup.
+
 - **Task-routed model gateway**: bind a different model to each task instead of using one global model everywhere. Settings now expose per-task routing for `paper_extract`, `paper_chat`, `embedding`, `wiki_compile`, `ask_agent`, `ask_synthesis`, and `promotion_judge`.
 - **Multi-provider support**: built-in support for `OpenAI`, OpenAI-compatible APIs (`Kimi`, `DeepSeek`, `Qwen`, `MiniMax`), and local `Codex CLI`, with provider health checks in Settings.
 - **Codex CLI across all non-embedding tasks**: paper extraction, paper follow-up chat, wiki compilation, Ask, Ask-to-concept synthesis, and concept promotion can now run through local Codex. Embeddings remain API-based.

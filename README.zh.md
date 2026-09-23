@@ -10,6 +10,8 @@ Knowra 是一个本地优先的研究工作台，目标是把论文逐步沉淀�
 
 ## 亮点功能
 
+- **个性化论文精选**：从已同步知识库建立兴趣画像，基于 arXiv 标题和摘要筛选论文，使用 Codex CLI 或显式 API 精排，并从成功入库持续更新偏好。桌面和手机均显示精选与节点离线状态，首个节点可直接在本机启动。迁移与启动步骤见 [推荐运行手册](docs/RECOMMENDATION-RUNBOOK.md)。
+
 - **按任务绑定模型**：不再用一个全局模型覆盖所有能力；现在可以分别给 `paper_extract`、`paper_chat`、`embedding`、`wiki_compile`、`ask_agent`、`ask_synthesis`、`promotion_judge` 绑定不同模型。
 - **多 Provider 支持**：内置 `OpenAI`、OpenAI 兼容 API（`Kimi`、`DeepSeek`、`Qwen`、`MiniMax`）以及本机 `Codex CLI`，并支持在设置页做联通测试。
 - **Codex CLI 覆盖全部非 embedding 子模块**：论文抽取、论文追问、Wiki 编译、Ask、Ask 生成概念、概念精选判断都可以走本机 Codex；只有向量任务仍然保留 API 路线。
