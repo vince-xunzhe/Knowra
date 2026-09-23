@@ -8,6 +8,8 @@ import SettingsPage from './pages/SettingsPage'
 import DashboardPage from './pages/DashboardPage'
 import ProcessingStatus from './components/ProcessingStatus'
 import WikiCompileStatus from './components/WikiCompileStatus'
+import WikiLintStatus from './components/WikiLintStatus'
+import { WikiLintProvider } from './hooks/useWikiLint'
 
 type Page = 'graph' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
 type NavItem =
@@ -40,7 +42,12 @@ const NAV: NavItem[] = [
 ]
 
 export default function App() {
+  return <WikiLintProvider><AppContent /></WikiLintProvider>
+}
+
+function AppContent() {
   const [page, setPage] = useState<Page>('graph')
+  const [lintOpen, setLintOpen] = useState(false)
   const [reviewPaperId, setReviewPaperId] = useState<number | null>(null)
 
   const openPage = (nextPage: Page) => {
@@ -95,7 +102,7 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 min-w-0 overflow-hidden">
-        {page === 'graph' && <GraphPage />}
+        {page === 'graph' && <GraphPage lintOpen={lintOpen} setLintOpen={setLintOpen} />}
         {page === 'papers' && <PapersPage onOpenReview={openPaperReview} />}
         {page === 'review' && <ReviewPage initialPaperId={reviewPaperId} />}
         {page === 'recommend' && <RecommendPage />}
@@ -105,6 +112,7 @@ export default function App() {
 
       <ProcessingStatus />
       <WikiCompileStatus />
+      <WikiLintStatus onOpen={() => { setPage('graph'); setLintOpen(true) }} />
     </div>
   )
 }

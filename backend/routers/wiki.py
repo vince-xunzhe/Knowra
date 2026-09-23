@@ -24,6 +24,7 @@ from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
 from services import wiki_index
 from services import wiki_lint_service
+from services.wiki_lint_job import lint_job
 from services.wiki_compiler import (
     backfill_obsidian_aliases,
     count_publishable_concepts,
@@ -289,18 +290,25 @@ class LintRunRequest(BaseModel):
     use_llm: bool = True
 
 
-@router.post("/lint/run")
+@router.post("/lint/run", status_code=202)
 def wiki_lint_run(
     body: LintRunRequest = LintRunRequest(),
-    db: Session = Depends(get_db),
 ):
-    """Run the content health-check: stub detection, merge candidates,
-    missing cross-cutting concepts, and (LLM) follow-up questions.
-    Writes data/wiki/lint-report.md and returns the structured payload."""
+    """Submit a background job, reusing the active job on repeated clicks."""
     try:
-        return wiki_lint_service.run_lint(db, use_llm=body.use_llm)
+        return lint_job.start(body.use_llm)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/lint/job")
+def wiki_lint_job_status():
+    return lint_job.snapshot()
+
+
+@router.get("/lint/result")
+def wiki_lint_result():
+    return lint_job.report()
 
 
 @router.get("/lint/status")

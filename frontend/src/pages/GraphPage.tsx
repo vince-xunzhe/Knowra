@@ -70,7 +70,10 @@ function paperNodeMatchesTitle(nodeTitle: string, fullTitle: string) {
   return !!trimmed && target.startsWith(trimmed)
 }
 
-export default function GraphPage() {
+export default function GraphPage({ lintOpen, setLintOpen }: {
+  lintOpen: boolean
+  setLintOpen: (open: boolean) => void
+}) {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -93,7 +96,6 @@ export default function GraphPage() {
   const [candidateMode, setCandidateMode] = useState<'off' | 'pending' | 'all'>('off')
   const [rescueOpen, setRescueOpen] = useState(false)
   const [askOpen, setAskOpen] = useState(false)
-  const [lintOpen, setLintOpen] = useState(false)
   const [composerOpen, setComposerOpen] = useState(false)
   const [teamComposerOpen, setTeamComposerOpen] = useState(false)
   const [compiledGroupBy, setCompiledGroupBy] = useState<'category' | 'team'>('category')

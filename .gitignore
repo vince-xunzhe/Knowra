@@ -30,6 +30,8 @@ frontend/dist/
 *.tsbuildinfo
 
 # Runtime data
+data/wiki-lint-job.json
+data/.wiki-lint-*
 data/*.db
 data/*.sqlite
 data/*.sqlite3

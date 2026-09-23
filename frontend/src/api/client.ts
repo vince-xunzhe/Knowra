@@ -881,10 +881,37 @@ export interface LintReportStatus {
   modified_at?: string
 }
 
+export interface LintJobState {
+  job_id: string | null
+  status: 'idle' | 'running' | 'completed' | 'warning' | 'failed'
+  phase: string
+  error: string | null
+  started_at: string | null
+  finished_at: string | null
+  use_llm: boolean
+}
+
 export const runWikiLint = (useLlm = true) =>
-  api
-    .post<LintResult>('/wiki/lint/run', { use_llm: useLlm }, { timeout: 300000 })
-    .then(r => r.data)
+  api.post<LintJobState>('/wiki/lint/run', { use_llm: useLlm }, { timeout: 10000 }).then(r => r.data)
+
+export const getWikiLintJob = () =>
+  api.get<LintJobState>('/wiki/lint/job', { timeout: 8000 }).then(r => r.data)
+
+export const getWikiLintResult = () =>
+  api.get<{ job_id: string | null; result: LintResult | null }>('/wiki/lint/result', { timeout: 10000 }).then(r => r.data)
+
+export async function waitForWikiLint(initial: LintJobState) {
+  let job = initial
+  while (job.status === 'running') {
+    await new Promise(resolve => setTimeout(resolve, 2500))
+    job = await getWikiLintJob()
+    if (job.job_id !== initial.job_id) throw new Error('健康检查任务已变更，请查看最新报告。')
+  }
+  if (job.status === 'failed' || job.status === 'warning') {
+    throw new Error(job.error || '健康检查未完整完成，请查看报告。')
+  }
+  return job
+}
 
 export const getWikiLintStatus = () =>
   api.get<LintReportStatus>('/wiki/lint/status').then(r => r.data)

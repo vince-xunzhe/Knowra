@@ -46,6 +46,7 @@ import {
   getWikiStatus,
   revealScannedFile,
   runWikiLint,
+  waitForWikiLint,
   type DuplicatePaperFile,
   type PaperScanResult,
   type WikiCompileState,
@@ -311,7 +312,7 @@ export default function PipelineConsole({
         (freshness.concepts.total_nodes ?? 0)
       if (compileTotalNodes > 0) {
         setRunAllStep('运行健康检查', '规则 + Agent')
-        await runWikiLint(true)
+        await waitForWikiLint(await runWikiLint(true))
       }
 
       if (auth.configured && auth.user) {

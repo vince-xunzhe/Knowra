@@ -12,14 +12,13 @@ import {
   Plus,
 } from 'lucide-react'
 import {
-  runWikiLint,
   getWikiLintStatus,
   recompileConcept,
   updatePromotionStatus,
   acceptLintStub,
-  type LintResult,
   type LintReportStatus,
 } from '../api/client'
+import { useWikiLint } from '../hooks/useWikiLint'
 
 interface Props {
   open: boolean
@@ -48,8 +47,9 @@ interface Props {
  */
 export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept }: Props) {
   const [status, setStatus] = useState<LintReportStatus | null>(null)
-  const [result, setResult] = useState<LintResult | null>(null)
-  const [running, setRunning] = useState(false)
+  const { job, result, start } = useWikiLint()
+  const [submitting, setSubmitting] = useState(false)
+  const running = submitting || job?.status === 'running'
   const [useLlm, setUseLlm] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -76,25 +76,22 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
   }, [open])
 
   const handleRun = useCallback(async () => {
-    setRunning(true)
+    setSubmitting(true)
     setError(null)
     try {
-      const r = await runWikiLint(useLlm)
-      setResult(r)
-      setStatus({
-        exists: true,
-        rel_path: r.report_rel_path,
-        modified_at: r.generated_at,
-      })
+      await start(useLlm)
+      setDone(new Set())
+      setActionErrors({})
+      onClose()
     } catch (e: unknown) {
       const msg =
         (e as { response?: { data?: { detail?: string } } })?.response?.data
           ?.detail || (e instanceof Error ? e.message : String(e))
       setError(msg)
     } finally {
-      setRunning(false)
+      setSubmitting(false)
     }
-  }, [useLlm])
+  }, [useLlm, start, onClose])
 
   const markDone = (key: string) =>
     setDone(prev => {
@@ -244,12 +241,13 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
             ) : (
               <RefreshCw size={11} />
             )}
-            {running ? '检查中…' : '运行检查'}
+            {submitting ? '正在提交…' : running ? '后台检查中…' : '运行检查'}
           </button>
           <label className="inline-flex items-center gap-1.5 text-slate-400 cursor-pointer">
             <input
               type="checkbox"
               checked={useLlm}
+              disabled={running}
               onChange={e => setUseLlm(e.target.checked)}
               className="accent-indigo-500"
             />
@@ -263,6 +261,8 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 text-[12px]">
+          {running && <p className="text-indigo-200">{job?.phase || '正在提交检查'}。关闭窗口后检查会继续，可自由浏览其他页面。</p>}
+          {job?.error && <p role="alert" className="text-amber-300">{job.status === 'warning' ? '规则检查已完成，Agent 判定未完成：' : '检查失败：'}{job.error}</p>}
           {error && (
             <div className="px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-200">
               {error}

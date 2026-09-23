@@ -419,15 +419,22 @@ def _render_report(result: dict[str, Any]) -> str:
 # --- public entry -------------------------------------------------------
 
 
-def run_lint(db: Session, *, use_llm: bool = True) -> dict[str, Any]:
+def run_lint(db: Session, *, use_llm: bool = True, on_progress=None) -> dict[str, Any]:
+    def progress(phase):
+        if on_progress is not None:
+            on_progress(phase)
+
+    progress("检查概念内容与来源")
     concept_nodes = list_publishable_concept_nodes(db)
 
     stubs = _scan_stubs(concept_nodes)
+    progress("检查相似概念与跨论文关联")
     merges = _scan_merge_candidates(concept_nodes)
     crosscut = _scan_missing_crosscut(db, concept_nodes)
 
     judgment: dict[str, Any] = {"used_model": False}
     if use_llm and (stubs or merges or crosscut):
+        progress("Agent 正在判定检查结果")
         judgment = _llm_judge(
             stubs=stubs,
             merges=merges,
@@ -451,6 +458,7 @@ def run_lint(db: Session, *, use_llm: bool = True) -> dict[str, Any]:
         "judgment": judgment,
     }
 
+    progress("保存健康检查报告")
     WIKI_DIR.mkdir(parents=True, exist_ok=True)
     LINT_REPORT_PATH.write_text(_render_report(result), encoding="utf-8")
     result["report_path"] = str(LINT_REPORT_PATH)
