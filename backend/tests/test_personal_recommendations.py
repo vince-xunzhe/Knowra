@@ -418,7 +418,7 @@ def test_api_text_path_has_no_tools_and_reserves_before_call():
         )
     assert order == ["reserve", "call"]
     kwargs = client.responses.create.call_args.kwargs
-    assert kwargs["max_output_tokens"] == 6000 and "tools" not in kwargs
+    assert kwargs["max_output_tokens"] == 9000 and "tools" not in kwargs
 
 
 def test_cli_api_key_login_cannot_bypass_paid_budget():
@@ -771,3 +771,33 @@ def test_bounded_ai_shortlist_matches_worker_and_publisher(db):
         )
         assert len(published.items) == 10
         assert all(c["ai"] and c["arxiv_id"] in seen for c in published.items)
+
+
+def test_explanation_refresh_preserves_selection_scores_and_order():
+    from services.personal_recommendation import replace_explanations
+
+    original = rank_candidates(
+        build_profile([paper()], now=NOW), candidates(2), now=NOW
+    )
+    output = {
+        "items": [
+            {
+                "arxiv_id": item["arxiv_id"],
+                "relevance": 0.01,
+                "reason": "这篇工作研究重建中的泛化方法。它与你的高斯表示兴趣相关。值得关注其效率与泛化之间的取舍。",
+                "evidence": "Gaussian splatting",
+                "features": [],
+            }
+            for item in reversed(original)
+        ]
+    }
+    updated = replace_explanations(original, output)
+    assert len(updated) == len(original)
+    for before, after in zip(original, updated):
+        assert before["reason"] != after["reason"]
+        assert {k: v for k, v in before.items() if k not in {"reason", "evidence"}} == {
+            k: v for k, v in after.items() if k not in {"reason", "evidence"}
+        }
+    output["items"][0]["evidence"] = "unsupported claim"
+    with pytest.raises(ValueError, match="原文"):
+        replace_explanations(original, output)

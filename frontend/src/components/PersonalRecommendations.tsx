@@ -6,6 +6,11 @@ import { importRecommendation, localRecommendationWorker, startWorkspaceRecommen
 const labels: Record<string, string> = { domain: '领域', problem: '研究问题', method: '方法', dataset: '数据集', team: '团队' }
 const workerHealth: Record<string, string> = { ready: '等待任务', busy: '正在生成', model_unavailable: 'AI 暂不可用', failed: '任务失败' }
 const lanes = { long_term: '长期兴趣', recent: '当前课题', explore: '相邻探索' }
+const paperCategories: Record<string, string> = {
+  'cs.AI': '人工智能', 'cs.CL': '自然语言处理', 'cs.CV': '计算机视觉',
+  'cs.LG': '机器学习', 'cs.RO': '机器人', 'cs.IR': '信息检索',
+  'cs.DC': '分布式计算', 'stat.ML': '统计机器学习',
+}
 const button = 'rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-50'
 function errorMessage(error: unknown) {
   const value = error as { response?: { data?: { detail?: unknown } }; message?: string }
@@ -67,7 +72,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
   return <div className="h-full overflow-y-auto bg-[#0b0d12] p-6 text-slate-200">
     <div className="mx-auto max-w-5xl space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="text-xl font-semibold">为你精选</h1><p className="mt-1 text-sm text-slate-400">基于本地知识库，每周一、三、五精选最多 10 篇。无需云端登录，入库反馈保存在本机。</p></div>
+        <div><h1 className="text-xl font-semibold">推荐精选</h1><p className="mt-1 text-sm text-slate-400">基于本地知识库，每周一、三、五精选最多 10 篇。无需云端登录，入库反馈保存在本机。</p></div>
         <button className={button} disabled={!!busy || !data || unavailable} onClick={() => void action('refresh', async () => {
           await startWorkspaceRecommendationWorker()
           const result = await refreshPersonalRecommendations()
@@ -78,7 +83,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
         <h2 className="font-medium text-amber-100">本机推荐服务尚未加载</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-300">请重启新版桌面后端以加载本地推荐接口。画像、任务和采纳记录均保存在本机，无需登录云端。</p>
         <p className="mt-2 text-xs text-slate-400">重启后服务会自动启动推荐节点；电脑关闭时暂停，重新打开后继续。</p>
-        <div className="mt-4 flex gap-3"><button className={button} onClick={onBrowseAll}>浏览云端全部论文</button><button className={button} disabled={!!busy} onClick={() => void action('retry', load)}>重新检查服务</button></div>
+        <div className="mt-4 flex gap-3"><button className={button} onClick={onBrowseAll}>查看完整推荐</button><button className={button} disabled={!!busy} onClick={() => void action('retry', load)}>重新检查服务</button></div>
       </section>}
       {error && !unavailable && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}<button className="ml-3 underline" onClick={() => void action('retry', load)}>重试</button></div>}
       {notice && <p role="status" className="text-sm text-indigo-200">{notice}</p>}
@@ -95,7 +100,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
           {data.batch?.error && <p className="mt-2 text-amber-200">{data.batch.error}</p>}
         </section>
         <details className="rounded-xl border border-slate-800 p-4">
-          <summary className="cursor-pointer">我的兴趣画像 · {data.profile.paper_count} 篇论文 · 版本 {data.profile.version}</summary>
+          <summary className="cursor-pointer">科研品味 · {data.profile.paper_count} 篇论文 · 版本 {data.profile.version}</summary>
           <p className="mt-3 text-xs leading-relaxed text-slate-500">根据库内论文已有的分类、研究问题和知识节点汇总，按画像权重展示。</p>
           <dl className="mt-3 space-y-3 text-sm text-slate-400">{Object.entries(data.profile.dimensions).map(([dimension, values]) => {
             const entries = Object.keys(values).slice(0, 10)
@@ -150,13 +155,17 @@ function RecommendationCard({ item, batchId, busy, onAdopt, onError }: { item: P
   return <article ref={ref} className="rounded-xl border border-slate-800 bg-slate-900/30 p-5">
     <h2 className="font-semibold leading-relaxed">{item.title}</h2>
     <p className="mt-1 text-xs text-slate-500">{item.authors.slice(0, 3).join(', ')} · {item.published?.slice(0, 10)}</p>
-    <p className="mt-3 text-sm leading-relaxed text-indigo-100">{item.reason}</p>
+    <div className="mt-4 text-sm leading-7">
+      <p className="mb-1 text-xs font-medium text-indigo-300">推荐理由</p>
+      <p className="whitespace-pre-line text-indigo-100">{item.reason}</p>
+    </div>
     {item.sources.length > 0 && <p className="mt-2 text-xs text-slate-500">关联库内论文：{item.sources.map(s => s.title).join('；')}</p>}
     <details className="mt-4 text-sm" onToggle={e => { if (e.currentTarget.open) void recommendationEvent(batchId, item.arxiv_id, 'viewed').catch(onError) }}><summary className="cursor-pointer text-slate-400">查看摘要与依据</summary><p className="mt-3 whitespace-pre-wrap leading-relaxed text-slate-300">{item.abstract || '暂无摘要'}</p>{item.evidence && <blockquote className="mt-3 border-l-2 border-indigo-500 pl-3 text-slate-400">{item.evidence}</blockquote>}</details>
     <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
       <button className={button} disabled={busy} onClick={onAdopt}>加入知识库</button>
       <a href={`https://arxiv.org/abs/${item.arxiv_id}`} target="_blank" rel="noreferrer" className="py-1.5 text-sm text-slate-400">arXiv ↗</a>
       <p className="text-xs text-indigo-300">{lanes[item.lane]} · {item.historical ? '历史补漏' : '近期论文'} · {item.ai ? 'AI 精选' : '基础排序'}</p>
+      <span className="rounded-md border border-slate-700/70 px-2 py-1 text-xs text-slate-400" title={item.primary_category ? `arXiv 分类：${item.primary_category}` : '论文元数据暂无类别'}>类别：{item.primary_category ? paperCategories[item.primary_category] || item.primary_category : '未分类'}</span>
     </div>
   </article>
 }

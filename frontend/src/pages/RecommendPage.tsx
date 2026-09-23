@@ -72,7 +72,7 @@ export default function RecommendPage() {
   const auth = useCloudAuth()
   return <div className="flex h-full min-h-0 flex-col">
     <nav className="flex shrink-0 gap-2 border-b border-slate-800 bg-[#0f1117] px-5 py-2">
-      {(['personal', 'public'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`rounded-lg px-4 py-2 text-sm ${tab === value ? 'bg-indigo-500/20 text-indigo-200' : 'text-slate-400 hover:bg-slate-800'}`}>{value === 'personal' ? '为你精选' : '全部论文'}</button>)}
+      {(['personal', 'public'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`rounded-lg px-4 py-2 text-sm ${tab === value ? 'bg-indigo-500/20 text-indigo-200' : 'text-slate-400 hover:bg-slate-800'}`}>{value === 'personal' ? '推荐精选' : '完整推荐'}</button>)}
     </nav>
     <div className="min-h-0 flex-1">{tab === 'personal' ? <PersonalRecommendations key="local-workspace" onBrowseAll={() => setTab('public')} /> : <PublicRecommendPage key={auth.user?.id || 'signed-out'} />}</div>
   </div>

@@ -770,6 +770,7 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array | string): Promis
 
 export interface PersonalRecItem {
   arxiv_id: string; title: string; abstract: string; authors: string[]; published: string | null;
+  primary_category?: string | null;
   reason: string; evidence?: string; score: number; ai: boolean; historical: boolean;
   lane: 'long_term' | 'recent' | 'explore'; matched_terms: string[]; matched_teams: string[];
   sources: { id: string; title: string }[];

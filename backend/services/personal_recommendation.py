@@ -436,3 +436,17 @@ def apply_ai(ranked, output):
         (c for c in updated.values() if c["relevance"] >= 0.25),
         key=lambda c: (-c["score"], c["arxiv_id"]),
     )
+
+
+def replace_explanations(items, output):
+    """Refresh prose for an existing selection without reranking or changing feedback."""
+    apply_ai(items, output)  # Reuse ID, completeness and evidence validation.
+    replacements = {r["arxiv_id"]: r for r in output["items"]}
+    return [
+        {
+            **item,
+            "reason": replacements[item["arxiv_id"]]["reason"],
+            "evidence": replacements[item["arxiv_id"]]["evidence"],
+        }
+        for item in items
+    ]
