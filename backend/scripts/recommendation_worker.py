@@ -19,6 +19,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / "backend")]
 from config import load_config
 from services.arxiv_service import search_arxiv
 from services.personal_recommendation import (
+    ai_shortlist,
     apply_ai,
     aware,
     base_id,
@@ -151,14 +152,14 @@ def process(
                 output = infer(
                     cfg,
                     job["snapshot"],
-                    ranked,
+                    ai_shortlist(ranked),
                     provider_mode=provider,
                     reserve=reserve,
                     input_rate=input_rate,
                     output_rate=output_rate,
                 )
                 apply_ai(
-                    ranked, output
+                    ai_shortlist(ranked), output
                 )  # Validate before publishing; no extra retries/cost.
             except urllib.error.HTTPError as exc:
                 if exc.code != 409:
@@ -179,6 +180,9 @@ def process(
 def main():
     parser = argparse.ArgumentParser(
         description="Knowra 论文推荐节点（默认 Codex CLI）"
+    )
+    parser.add_argument(
+        "--local", action="store_true", help="直接使用本机知识库和持久化队列，无需云端"
     )
     parser.add_argument("--url", default=os.environ.get("KNOWRA_CLOUD_URL", ""))
     parser.add_argument("--provider", choices=["cli", "api"], default="cli")
@@ -210,7 +214,7 @@ def main():
             parser.error("--local-input 需要 --output")
         if args.provider == "api" and not args.no_ai:
             parser.error(
-                "付费 API 测试需通过云端 worker 预算预留；本地测试请使用默认 CLI"
+                "付费 API 测试需通过持久化 worker 队列预留预算；样本测试请使用默认 CLI"
             )
         data = json.loads(args.local_input.read_text())
         now = utcnow()
@@ -231,7 +235,7 @@ def main():
         )
         ranked = rank_candidates(snapshot, data["candidates"], now=now)[:30]
         if result["ai_output"]:
-            ranked = apply_ai(ranked, result["ai_output"])
+            ranked = apply_ai(ai_shortlist(ranked), result["ai_output"])
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(
@@ -245,7 +249,12 @@ def main():
             print("AI smoke test 未通过：" + str(result["note"]))
             raise SystemExit(1)
         return
-    client = WorkerClient(args.url, os.environ.get("KNOWRA_REC_WORKER_TOKEN", ""))
+    if args.local:
+        from services.local_recommendations import LocalWorkerClient
+
+        client = LocalWorkerClient()
+    else:
+        client = WorkerClient(args.url, os.environ.get("KNOWRA_REC_WORKER_TOKEN", ""))
     stop = threading.Event()
     state = {"health": "ready"}
 
@@ -254,7 +263,7 @@ def main():
             try:
                 client.post("/heartbeat", state)
             except Exception:  # noqa: BLE001 - external transport/model failures use a bounded fallback
-                print("节点心跳发送失败；云端将显示离线状态", flush=True)
+                print("节点心跳发送失败；界面将显示离线状态", flush=True)
             stop.wait(60)
 
     thread = threading.Thread(target=heartbeat, daemon=True)
@@ -307,7 +316,7 @@ def main():
                             {"lease": job["lease"], "reason": "worker_error"},
                         )
                     except Exception:  # noqa: BLE001 - preserve lease-based recovery on transport failure
-                        print("失败状态未送达，云端将在租约到期后恢复任务", flush=True)
+                        print("失败状态未送达，队列将在租约到期后恢复任务", flush=True)
                 if args.once:
                     raise SystemExit(1)
             if args.once:

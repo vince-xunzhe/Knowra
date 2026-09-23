@@ -20,6 +20,7 @@ from cloud_models import (
 from sqlalchemy import or_
 
 from services.personal_recommendation import (
+    ai_shortlist,
     apply_ai,
     aware,
     base_id,
@@ -62,6 +63,9 @@ def get_profile(db, user_id):
 
 
 def library_rows(db, user_id):
+    loader = db.info.get("recommendation_library_loader")
+    if loader is not None:
+        return loader(user_id)
     papers = db.query(CloudPaper).filter_by(user_id=user_id).all()
     fields = (
         "id",
@@ -132,11 +136,11 @@ def record_event(db, user_id, batch_id, aid, kind, now=None):
 
 
 def reconcile_adoptions(db, user_id, now=None):
-    """Called after successful cloud sync; HTTP clients cannot assert adoption."""
+    """Reconcile persisted library rows locally or after sync; clients cannot assert adoption."""
     now = now or utcnow()
-    papers = db.query(CloudPaper).filter_by(user_id=user_id).all()
-    ids = {base_id(p.filename): p for p in papers if base_id(p.filename)}
-    titles = {normalized_title(p.title): p for p in papers if p.title}
+    papers, _ = library_rows(db, user_id)
+    ids = {base_id(p["filename"]): p for p in papers if base_id(p["filename"])}
+    titles = {normalized_title(p["title"]): p for p in papers if p["title"]}
     interactions = (
         db.query(RecEvent)
         .filter(
@@ -150,7 +154,7 @@ def reconcile_adoptions(db, user_id, now=None):
         paper = ids.get(event.arxiv_id) or titles.get(
             normalized_title(event.payload.get("title"))
         )
-        if paper and aware(paper.created_at) >= (
+        if paper and aware(paper["created_at"]) >= (
             aware(event.payload.get("first_seen")) or aware(event.created_at)
         ):
             record_event(
@@ -159,7 +163,7 @@ def reconcile_adoptions(db, user_id, now=None):
                 event.batch_id,
                 event.arxiv_id,
                 "adopted",
-                now=aware(paper.created_at),
+                now=aware(paper["created_at"]),
             )
 
 
@@ -452,7 +456,7 @@ def complete(db, worker, job_id, lease, candidates, output=None, note=None):
     exclusions = job.snapshot.get("excluded", [])
     ranked = rank_candidates(job.snapshot, clean, excluded=exclusions, now=as_of)[:30]
     if output is not None:
-        ranked = apply_ai(ranked, output)
+        ranked = apply_ai(ai_shortlist(ranked), output)
         for item in ranked:
             db.query(RecCandidate).filter_by(arxiv_id=item["arxiv_id"]).update(
                 {

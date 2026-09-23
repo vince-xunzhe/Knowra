@@ -15,6 +15,7 @@ router = APIRouter(
 )
 _lock = threading.Lock()
 _process = None
+_mode = None
 
 
 class StartWorker(BaseModel):
@@ -36,12 +37,13 @@ def status():
         return {
             "running": _process is not None and _process.poll() is None,
             "exit_code": _process.poll() if _process is not None else None,
+            "mode": _mode,
         }
 
 
 @router.post("/start")
 def start(body: StartWorker):
-    global _process
+    global _process, _mode
     _local_only()
     parsed = urlparse(body.url)
     if (
@@ -81,7 +83,39 @@ def start(body: StartWorker):
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        _mode = "remote"
     return {"running": True}
+
+
+@router.post("/start-local")
+def start_local():
+    global _process, _mode
+    _local_only()
+    with _lock:
+        if _process is not None and _process.poll() is None:
+            if _mode != "local":
+                raise HTTPException(409, "请先停止正在连接远端的节点")
+            return {"running": True, "mode": "local"}
+        from services.local_recommendations import local_store
+
+        local_store()  # Finish table creation before the worker opens the store.
+        root = Path(__file__).resolve().parents[2]
+        _process = subprocess.Popen(
+            [
+                sys.executable,
+                str(root / "backend/scripts/recommendation_worker.py"),
+                "--local",
+                "--provider",
+                "cli",
+            ],
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        _mode = "local"
+    return {"running": True, "mode": "local"}
 
 
 @router.post("/stop")

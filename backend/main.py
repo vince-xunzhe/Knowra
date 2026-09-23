@@ -53,6 +53,8 @@ if not is_cloud_mode():
     app.include_router(sync_local.router)
     app.include_router(recommendation_local.router)
     app.add_event_handler("shutdown", recommendation_local.shutdown_worker)
+    from routers.recommendation_workspace import create_workspace_app
+    app.mount("/api/recommendations", create_workspace_app())
 
 # Cloud-mode-only routers + DB wiring. Mounting these unconditionally would require
 # Supabase env vars even on desktop where they make no sense, so we
@@ -148,6 +150,11 @@ def startup():
         rebuild_index()
     except Exception as e:
         print(f"[wiki_search] startup index failed: {e}")
+
+
+if not is_cloud_mode():
+    # Registered after startup() so the existing library schema is ready first.
+    app.add_event_handler("startup", recommendation_local.start_local)
 
 
 @app.get("/")

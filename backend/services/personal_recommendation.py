@@ -170,8 +170,18 @@ def build_profile(papers, nodes=(), focus="", feedback=None, now=None):
             in [str(x) for x in (n.get("source_paper_ids") or [])]
         ]
         features = paper_features(paper, related)
+        # Unparsed imports may only have an arXiv filename as their title.
+        # File extensions and identifiers are not research interests.
+        interest_title = re.sub(r"\.pdf$", "", title, flags=re.IGNORECASE)
+        if base_id(interest_title):
+            interest_title = ARXIV.sub(" ", interest_title)
+            interest_title = re.sub(
+                r"^arxiv[_ -]*", "", interest_title, flags=re.IGNORECASE
+            )
         words = terms(
-            title + " " + " ".join(v for values in features.values() for v in values)
+            interest_title
+            + " "
+            + " ".join(v for values in features.values() for v in values)
         )
         # Each paper contributes one unit regardless of label/node count.
         for word in sorted(words):
@@ -349,6 +359,11 @@ def select_diverse(ranked, limit=10):
         historical += int(item["historical"])
         teams.update(item["matched_teams"])
     return chosen
+
+
+def ai_shortlist(ranked):
+    """Bound CLI latency while retaining the same diversity constraints on both ends."""
+    return select_diverse(ranked[:30], limit=12)
 
 
 def apply_ai(ranked, output):

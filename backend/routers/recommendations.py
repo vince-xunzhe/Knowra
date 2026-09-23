@@ -17,9 +17,7 @@ from sqlalchemy.orm import Session
 from model_gateway.auth import AuthenticatedUser
 from routers.sync import get_cloud_db
 
-router = APIRouter(
-    prefix="/api/cloud/personal-recommendations", tags=["personal-recommendations"]
-)
+endpoints = APIRouter(tags=["personal-recommendations"])
 
 
 DB = Annotated[Session, Depends(get_cloud_db)]
@@ -39,7 +37,7 @@ def worker_identity(db: DB, authorization: str = Header(default="")):
 Worker = Annotated[RecWorker, Depends(worker_identity)]
 
 
-@router.get("")
+@endpoints.get("")
 def personal_feed(db: DB, user: User):
     result = jobs.feed(db, user.user_id)
     db.commit()
@@ -50,7 +48,7 @@ class Focus(BaseModel):
     current_focus: str = Field(max_length=2000)
 
 
-@router.put("/focus")
+@endpoints.put("/focus")
 def focus(body: Focus, db: DB, user: User):
     profile = jobs.get_profile(db, user.user_id)
     profile.current_focus = body.current_focus.strip()
@@ -60,7 +58,7 @@ def focus(body: Focus, db: DB, user: User):
     return {"updated": True}
 
 
-@router.post("/refresh")
+@endpoints.post("/refresh")
 def refresh(db: DB, user: User):
     job = jobs.enqueue(db, user.user_id, manual=True)
     db.commit()
@@ -70,7 +68,7 @@ def refresh(db: DB, user: User):
     }
 
 
-@router.get("/profile/versions")
+@endpoints.get("/profile/versions")
 def versions(db: DB, user: User):
     batches = (
         db.query(RecBatch)
@@ -95,7 +93,7 @@ class Rollback(BaseModel):
     batch_id: str = Field(max_length=80)
 
 
-@router.post("/profile/rollback")
+@endpoints.post("/profile/rollback")
 def rollback(body: Rollback, db: DB, user: User):
     profile = jobs.get_profile(db, user.user_id)
     batch = (
@@ -123,7 +121,7 @@ class Event(BaseModel):
     kind: Literal["exposed", "viewed", "requested"]
 
 
-@router.post("/events")
+@endpoints.post("/events")
 def event(body: Event, db: DB, user: User):
     try:
         jobs.record_event(db, user.user_id, body.batch_id, body.arxiv_id, body.kind)
@@ -137,7 +135,7 @@ class Register(BaseModel):
     node_id: str = Field(min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9_-]+$")
 
 
-@router.post("/workers")
+@endpoints.post("/workers")
 def register(body: Register, db: DB, user: User):
     token = "krw_" + secrets.token_urlsafe(32)
     digest = hashlib.sha256(token.encode()).hexdigest()
@@ -158,7 +156,7 @@ def register(body: Register, db: DB, user: User):
     return {"node_id": body.node_id, "token": token}
 
 
-@router.delete("/workers/{node_id}")
+@endpoints.delete("/workers/{node_id}")
 def revoke(node_id: str, db: DB, user: User):
     db.query(RecWorker).filter_by(user_id=user.user_id, node_id=node_id).delete()
     db.commit()
@@ -171,14 +169,14 @@ class Heartbeat(BaseModel):
     )
 
 
-@router.post("/worker/heartbeat")
+@endpoints.post("/worker/heartbeat")
 def heartbeat(body: Heartbeat, db: DB, worker: Worker):
     worker.last_seen_at, worker.health = utcnow(), body.health
     db.commit()
     return {"ok": True}
 
 
-@router.post("/worker/claim")
+@endpoints.post("/worker/claim")
 def claim(db: DB, worker: Worker):
     worker.last_seen_at = utcnow()
     result = jobs.claim(db, worker)
@@ -192,7 +190,7 @@ class Reservation(BaseModel):
     provider: Literal["codex_cli", "api"]
 
 
-@router.post("/worker/{job_id}/reserve")
+@endpoints.post("/worker/{job_id}/reserve")
 def reserve(job_id: str, body: Reservation, db: DB, worker: Worker):
     try:
         usage = jobs.reserve_budget(
@@ -229,7 +227,7 @@ class Result(BaseModel):
     ] = None
 
 
-@router.post("/worker/{job_id}/complete")
+@endpoints.post("/worker/{job_id}/complete")
 def complete(job_id: str, body: Result, db: DB, worker: Worker):
     try:
         job = jobs.complete(
@@ -255,7 +253,7 @@ class Failure(BaseModel):
     ]
 
 
-@router.post("/worker/{job_id}/fail")
+@endpoints.post("/worker/{job_id}/fail")
 def fail(job_id: str, body: Failure, db: DB, worker: Worker):
     try:
         job = jobs.require_lease(db, worker, job_id, body.lease)
@@ -266,3 +264,7 @@ def fail(job_id: str, body: Failure, db: DB, worker: Worker):
         return {"status": job.status}
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+router = APIRouter()
+router.include_router(endpoints, prefix="/api/cloud/personal-recommendations")

@@ -716,3 +716,55 @@ def test_retry_crossing_month_keeps_reservations_in_current_cap(db):
         db.commit()
         assert db.query(RecUsage).one().reserved_cny == 25
         assert jobs.aware(db.query(RecUsage).one().created_at) == after
+
+
+def test_arxiv_filename_does_not_create_spurious_interests():
+    profile = build_profile(
+        [
+            paper(
+                title="1711.00937v2.pdf",
+                filename="1711.00937v2.pdf",
+                paper_category_model=None,
+                paper_team_model=None,
+            )
+        ],
+        now=NOW,
+    )
+    assert profile["paper_count"] == 1
+    assert not profile["long_term"] and not profile["recent"]
+    assert profile["library_ids"] == ["1711.00937"]
+
+
+def test_bounded_ai_shortlist_matches_worker_and_publisher(db):
+    from scripts.recommendation_worker import process
+
+    worker, _ = seed(db)
+    rows = candidates(40)
+    seen = []
+
+    def model(cfg, profile, shortlist, **kwargs):
+        seen.extend(c["arxiv_id"] for c in shortlist)
+        return {
+            "items": [
+                {
+                    "arxiv_id": c["arxiv_id"],
+                    "relevance": 0.9,
+                    "reason": "相关",
+                    "evidence": "Gaussian splatting",
+                    "features": [],
+                }
+                for c in shortlist
+            ]
+        }
+
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        db.commit()
+        with patch("scripts.recommendation_worker.infer", side_effect=model):
+            result = process(claim, {}, candidates=rows)
+        assert len(seen) == 12 and result["note"] is None
+        published = jobs.complete(
+            db, worker, claim["id"], claim["lease"], rows, result["ai_output"]
+        )
+        assert len(published.items) == 10
+        assert all(c["ai"] and c["arxiv_id"] in seen for c in published.items)
