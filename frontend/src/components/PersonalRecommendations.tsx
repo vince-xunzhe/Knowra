@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { personalRecommendations, saveRecommendationFocus, refreshPersonalRecommendations, recommendationEvent,
-  registerRecommendationWorker, revokeRecommendationWorker, getCloudConfig, type PersonalFeed, type PersonalRecItem } from '../api/cloud'
+  registerRecommendationWorker, revokeRecommendationWorker, getCloudConfig, PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem } from '../api/cloud'
 import { importRecommendation, localRecommendationWorker, startLocalRecommendationWorker, stopLocalRecommendationWorker } from '../api/client'
 import { gatherLocalSnapshot } from '../services/gatherLocalSnapshot'
 import { runSync } from '../services/syncAgent'
@@ -14,35 +14,51 @@ function errorMessage(error: unknown) {
   return typeof detail === 'string' ? detail : value.message || '操作失败，请重试'
 }
 
-export default function PersonalRecommendations() {
+export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: () => void }) {
   const [data, setData] = useState<PersonalFeed | null>(null)
   const [focus, setFocus] = useState('')
   const initialized = useRef(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [unavailable, setUnavailable] = useState(false)
+  const [localError, setLocalError] = useState('')
   const [nodeId, setNodeId] = useState('research-worker')
   const [token, setToken] = useState('')
   const [localRunning, setLocalRunning] = useState(false)
-  const load = useCallback(async () => {
-    const next = await personalRecommendations()
-    setData(next)
-    setLocalRunning((await localRecommendationWorker()).running)
+  const acceptFeed = useCallback((next: PersonalFeed) => {
+    setData(next); setUnavailable(false); setError('')
     if (!initialized.current) { setFocus(next.profile.current_focus); initialized.current = true }
   }, [])
+  const reportFeedError = useCallback((error: unknown) => {
+    setUnavailable(error instanceof PersonalRecommendationsUnavailableError)
+    setError(errorMessage(error))
+  }, [])
+  const load = useCallback(async () => {
+    try { acceptFeed(await personalRecommendations()) }
+    catch (error) { reportFeedError(error); throw error }
+  }, [acceptFeed, reportFeedError])
+  const loadLocalWorker = useCallback(async () => {
+    try {
+      setLocalRunning((await localRecommendationWorker()).running)
+      setLocalError('')
+    } catch {
+      setLocalError('暂时无法连接本机节点管理，请启动或重启新版桌面后端。云端精选仍可查看。')
+    }
+  }, [])
   useEffect(() => {
-    void personalRecommendations().then(next => {
-      setData(next)
-      if (!initialized.current) { setFocus(next.profile.current_focus); initialized.current = true }
-    }).catch(e => setError(errorMessage(e)))
-    void localRecommendationWorker().then(result => setLocalRunning(result.running)).catch(() => {})
-    const timer = window.setInterval(() => void load().catch(e => setError(errorMessage(e))), 60000)
+    const refresh = () => {
+      void personalRecommendations().then(acceptFeed).catch(reportFeedError)
+      void loadLocalWorker()
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 60000)
     return () => clearInterval(timer)
-  }, [load])
+  }, [acceptFeed, reportFeedError, loadLocalWorker])
 
   async function action(name: string, fn: () => Promise<unknown>) {
     setBusy(name); setError(''); setNotice('')
-    try { await fn(); await load() } catch (e) { setError(errorMessage(e)) } finally { setBusy('') }
+    try { await fn(); await load(); await loadLocalWorker() } catch (e) { setError(errorMessage(e)) } finally { setBusy('') }
   }
 
   async function adopt(item: { arxiv_id: string; title: string; authors?: string[] }, batchId: string) {
@@ -61,15 +77,21 @@ export default function PersonalRecommendations() {
     <div className="mx-auto max-w-5xl space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div><h1 className="text-xl font-semibold">为你精选</h1><p className="mt-1 text-sm text-slate-400">沿着你的长期兴趣，每周一、三、五精选最多 10 篇。加入知识库，让后续推荐更了解你。</p></div>
-        <button className={button} disabled={!!busy} onClick={() => void action('refresh', async () => {
+        <button className={button} disabled={!!busy || !data || unavailable} onClick={() => void action('refresh', async () => {
           const result = await refreshPersonalRecommendations()
           setNotice(result.status === 'empty_library' ? '请先将论文知识库同步到云端。' : '已提交精选任务；执行节点在线后会自动处理。')
         })}>{busy === 'refresh' ? '提交中…' : '更新精选'}</button>
       </header>
-      {error && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}<button className="ml-3 underline" onClick={() => void action('retry', load)}>重试</button></div>}
+      {unavailable && <section role="status" className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-5">
+        <h2 className="font-medium text-amber-100">个性化推荐服务尚未就绪</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-300">当前连接的云端服务尚未提供此功能，需要完成服务升级。你的知识库不受影响，可以先浏览全部论文。</p>
+        <p className="mt-2 text-xs text-slate-400">本机执行节点负责 AI 计算，推荐任务和反馈仍由云端服务管理。</p>
+        <div className="mt-4 flex gap-3"><button className={button} onClick={onBrowseAll}>浏览全部论文</button><button className={button} disabled={!!busy} onClick={() => void action('retry', load)}>重新检查服务</button></div>
+      </section>}
+      {error && !unavailable && <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-3 text-sm text-rose-200">{error}<button className="ml-3 underline" onClick={() => void action('retry', load)}>重试</button></div>}
       {notice && <p role="status" className="text-sm text-indigo-200">{notice}</p>}
       {!data && !error && <p>正在读取个人推荐…</p>}
-      {data && <>
+      {data && !unavailable && <>
         <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-sm">
           <div className="flex flex-wrap justify-between gap-2">
             <span className={data.worker_status === 'online' ? 'text-emerald-300' : 'text-amber-200'}>
@@ -96,8 +118,9 @@ export default function PersonalRecommendations() {
           <summary className="cursor-pointer">执行节点与调用预算</summary>
           <p className="my-3 text-slate-400">月度付费调用预算 ¥{data.budget.limit_cny}；已预留上界 ¥{data.budget.reserved_cny.toFixed(2)}。CLI 费用未知时不显示为零费用。节点离线仅在站内提醒。</p>
           <p className="mb-3 text-slate-400">在常驻机器运行推荐 worker。以下凭证只用于这个账号的推荐任务，新生成同名节点凭证会撤销旧凭证。</p>
+          {localError && <p role="status" className="mb-3 text-amber-200">{localError}</p>}
           <div className="mb-4 flex gap-2">
-            <button className={button} disabled={!!busy || localRunning} onClick={() => void action('local-start', async () => {
+            <button className={button} disabled={!!busy || localRunning || !!localError} onClick={() => void action('local-start', async () => {
               const worker = await registerRecommendationWorker('desktop-local')
               await startLocalRecommendationWorker(getCloudConfig().baseUrl, worker.token)
               setNotice('本机节点已启动，使用 Codex CLI。关闭桌面后端或电脑后任务会等待节点恢复。')

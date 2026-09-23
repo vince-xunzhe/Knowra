@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View, type ViewToken } from 'react-native'
 import { personalRecommendations, recommendationEvent, refreshPersonalRecommendations, saveRecommendationFocus,
-  type PersonalFeed, type PersonalRecItem } from '../api/cloud'
+  PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem } from '../api/cloud'
 
 const lanes = { long_term: '长期兴趣', recent: '当前课题', explore: '相邻探索' }
 
-export default function PersonalRecommendations() {
+export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: () => void }) {
   const [data, setData] = useState<PersonalFeed | null>(null)
   const [focus, setFocus] = useState('')
   const [error, setError] = useState('')
+  const [unavailable, setUnavailable] = useState(false)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -16,7 +17,10 @@ export default function PersonalRecommendations() {
   const batch = useRef<string | null>(null)
   const exposed = useRef(new Set<string>())
   const load = useCallback(async () => {
-    const next = await personalRecommendations()
+    let next: PersonalFeed
+    try { next = await personalRecommendations() }
+    catch (error) { setUnavailable(error instanceof PersonalRecommendationsUnavailableError); throw error }
+    setUnavailable(false); setError('')
     setData(next)
     batch.current = next.batch?.id ?? null
     if (!initialized.current) { initialized.current = true; setFocus(next.profile.current_focus) }
@@ -41,6 +45,12 @@ export default function PersonalRecommendations() {
       }
     }
   }).current
+  if (unavailable) return <View style={s.container}><View style={s.content}>
+    <Text style={s.heading}>个性化推荐服务尚未就绪</Text>
+    <Text style={s.meta}>当前云端服务尚未提供此功能，需要完成服务升级。你的知识库不受影响，可以先浏览全部论文。</Text>
+    <TouchableOpacity style={s.button} onPress={onBrowseAll}><Text style={s.notice}>浏览全部论文</Text></TouchableOpacity>
+    <TouchableOpacity style={s.button} disabled={busy} onPress={() => void action(load)}><Text style={s.notice}>重新检查服务</Text></TouchableOpacity>
+  </View></View>
   if (!data && !error) return <View style={s.center}><ActivityIndicator color="#a5b4fc" /><Text style={s.meta}>正在读取精选…</Text></View>
   return <FlatList style={s.container} contentContainerStyle={s.content} data={data?.items || []}
     keyExtractor={item => item.arxiv_id} onViewableItemsChanged={onVisible}
@@ -66,7 +76,7 @@ export default function PersonalRecommendations() {
           })}><Text style={s.notice}>更新精选</Text></TouchableOpacity></View>
       </>}
     </View>}
-    ListEmptyComponent={<Text style={s.empty}>还没有符合条件的精选。请先同步知识库、连接执行节点，再更新精选。</Text>}
+    ListEmptyComponent={data ? <Text style={s.empty}>还没有符合条件的精选。请先同步知识库、连接执行节点，再更新精选。</Text> : null}
     ListFooterComponent={data ? <Text style={s.meta}>已采纳 {data.metrics.adopted} 篇 · 14 天采纳率 {data.metrics.adoption_rate_14d === null ? '等待观察窗口完成' : `${Math.round(data.metrics.adoption_rate_14d * 100)}%`} · 目标 30%。未采纳不会记为不喜欢。</Text> : <TouchableOpacity onPress={() => void action(load)}><Text style={s.notice}>重试</Text></TouchableOpacity>}
     renderItem={({ item }) => {
       const pending = data?.pending_imports.some(p => p.arxiv_id === item.arxiv_id)

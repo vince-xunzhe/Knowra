@@ -26,7 +26,7 @@ export default function RecommendScreen() {
     <View style={{ flexDirection: 'row', gap: 20, padding: 12 }}>
       {(['personal', 'public'] as const).map(value => <TouchableOpacity key={value} onPress={() => setTab(value)}><Text style={{ color: tab === value ? '#a5b4fc' : '#64748b', fontWeight: '600' }}>{value === 'personal' ? '为你精选' : '全部论文'}</Text></TouchableOpacity>)}
     </View>
-    {tab === 'personal' ? <PersonalRecommendations key={auth.user.id} /> : <PublicRecommendScreen key={auth.user.id} />}
+    {tab === 'personal' ? <PersonalRecommendations key={auth.user.id} onBrowseAll={() => setTab('public')} /> : <PublicRecommendScreen key={auth.user.id} />}
   </View>
 }
 

@@ -787,8 +787,22 @@ export interface PersonalFeed {
 }
 
 const PERSONAL_REC = '/api/cloud/personal-recommendations'
+export class PersonalRecommendationsUnavailableError extends Error {
+  constructor() {
+    super('当前云端服务尚未启用个性化推荐。服务升级完成后即可使用，已有论文和全部论文推荐不受影响。')
+    this.name = 'PersonalRecommendationsUnavailableError'
+  }
+}
+
 export async function personalRecommendations(): Promise<PersonalFeed> {
-  return cloudClient().get<PersonalFeed>(PERSONAL_REC).then(r => r.data)
+  try {
+    return (await cloudClient().get<PersonalFeed>(PERSONAL_REC)).data
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      throw new PersonalRecommendationsUnavailableError()
+    }
+    throw error
+  }
 }
 export async function saveRecommendationFocus(current_focus: string) {
   return cloudClient().put(PERSONAL_REC + '/focus', { current_focus }).then(r => r.data)

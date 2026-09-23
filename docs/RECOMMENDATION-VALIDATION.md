@@ -36,3 +36,11 @@ PostgreSQL 迁移、RLS 和并发锁尚未在真实数据库验证；应用层�
 这些样本特意检查“排除无关论文、不凑数”的契约，**不是质量 benchmark，不是效果提升证据**。没有把未采纳论文标成负例；没有修改现有验证划分。当前真实在线采纳率、真实知识库回放和 AI 相对内容排序收益均未测得。30% 是用户确认的 14 天浏览后采纳目标，需收集成熟在线样本。
 
 命令、启动和回滚方式见 [运行手册](RECOMMENDATION-RUNBOOK.md)，实现边界见 [设计文档第 11 节](RECOMMENDATION-PERSONALIZATION-DESIGN.md#11-首版落地说明以此为准)。
+
+## 旧云服务兼容修复
+
+用户反馈精选页显示 `Not Found`。实际探测 `https://knowra-cloud.fly.dev/openapi.json` 不含 `/api/cloud/personal-recommendations`，该路径返回 HTTP 404，确认是云端尚未提供新接口。
+
+桌面与手机改为明确的“个性化推荐服务尚未就绪”，提供“浏览全部论文”和重新检查入口；服务缺失时不允许提交精选任务。桌面本机节点状态读取与云端 feed 分开，本机后端不可用不再导致云端内容加载报错。云端恢复后正常读取会清除旧错误。
+
+验证：桌面构建、改动文件 ESLint、手机 TypeScript 均通过。生产未变更：`flyctl status --app knowra-cloud --json` 报 `no access token available`，等待用户完成 Fly 登录并确认上线。
