@@ -530,3 +530,35 @@ export async function cloudRemoveRecMark(arxivId: string): Promise<void> {
   const c = await cloudClient()
   await c.delete(`/api/cloud/rec-marks/${encodeURIComponent(arxivId)}`)
 }
+
+export interface PersonalRecItem {
+  arxiv_id: string; title: string; abstract: string; authors: string[]; published: string | null;
+  reason: string; evidence?: string; score: number; ai: boolean; historical: boolean;
+  lane: 'long_term' | 'recent' | 'explore'; matched_terms: string[]; matched_teams: string[];
+  sources: { id: string; title: string }[];
+}
+export interface PersonalFeed {
+  profile: { version: number; current_focus: string; paper_count: number; dimensions: Record<string, Record<string, number>> };
+  batch: { id: string; status: string; error: string | null; created_at: string; completed_at: string | null } | null;
+  job: { id: string; status: string; error: string | null; created_at: string; completed_at: string | null } | null;
+  items: PersonalRecItem[];
+  workers: { node_id: string; health: string; last_seen_at: string | null }[];
+  worker_status: 'not_configured' | 'online' | 'offline';
+  metrics: { viewed: number; mature_viewed: number; adopted: number; exposed: number; adoption_rate_14d: number | null; target: number };
+  pending_imports: { arxiv_id: string; batch_id: string; title: string }[];
+  budget: { limit_cny: number; reserved_cny: number };
+}
+
+const PERSONAL_REC = '/api/cloud/personal-recommendations'
+export async function personalRecommendations(): Promise<PersonalFeed> {
+  return (await cloudClient()).get<PersonalFeed>(PERSONAL_REC).then(r => r.data)
+}
+export async function saveRecommendationFocus(current_focus: string) {
+  return (await cloudClient()).put(PERSONAL_REC + '/focus', { current_focus }).then(r => r.data)
+}
+export async function refreshPersonalRecommendations() {
+  return (await cloudClient()).post<{ id: string | null; status: string }>(PERSONAL_REC + '/refresh').then(r => r.data)
+}
+export async function recommendationEvent(batch_id: string, arxiv_id: string, kind: 'exposed' | 'viewed' | 'requested') {
+  return (await cloudClient()).post(PERSONAL_REC + '/events', { batch_id, arxiv_id, kind }).then(r => r.data)
+}
