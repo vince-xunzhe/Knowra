@@ -352,6 +352,79 @@ class RecMark(CloudBase):
     created_at = Column(DateTime, default=_utcnow, nullable=False)
 
 
+class RecProfile(CloudBase):
+    __tablename__ = "rec_profiles"
+    user_id = Column(String, primary_key=True)
+    current_focus = Column(Text, default="", nullable=False)
+    snapshot = Column(JSON, default=dict, nullable=False)
+    feedback_weights = Column(JSON, default=dict, nullable=False)
+    version = Column(Integer, default=0, nullable=False)
+    feedback_count = Column(Integer, default=0, nullable=False)
+    feedback_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RecCandidate(CloudBase):
+    __tablename__ = "rec_candidates"
+    arxiv_id = Column(String, primary_key=True)
+    metadata_json = Column(JSON, default=dict, nullable=False)
+    features = Column(JSON, default=dict, nullable=False)
+    content_hash = Column(String, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RecBatch(CloudBase):
+    __tablename__ = "rec_batches"
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=False, index=True)
+    slot = Column(String, nullable=False)
+    status = Column(String, default="queued", nullable=False)
+    snapshot = Column(JSON, default=dict, nullable=False)
+    items = Column(JSON, default=list, nullable=False)
+    node_id = Column(String, nullable=True)
+    lease_token = Column(String, nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (UniqueConstraint("user_id", "slot", name="rec_batches_user_slot_uniq"),)
+
+
+class RecEvent(CloudBase):
+    __tablename__ = "rec_events"
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=False, index=True)
+    arxiv_id = Column(String, nullable=False)
+    kind = Column(String, nullable=False)
+    batch_id = Column(String, nullable=False)
+    payload = Column(JSON, default=dict, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "arxiv_id", "kind", name="rec_events_user_paper_kind_uniq"),)
+
+
+class RecWorker(CloudBase):
+    __tablename__ = "rec_workers"
+    user_id = Column(String, primary_key=True)
+    node_id = Column(String, primary_key=True)
+    token_hash = Column(String, nullable=False, unique=True)
+    health = Column(String, default="registered", nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class RecUsage(CloudBase):
+    __tablename__ = "rec_usage"
+    id = Column(String, primary_key=True, default=_uuid)
+    user_id = Column(String, nullable=False, index=True)
+    batch_id = Column(String, nullable=False, unique=True)
+    provider = Column(String, nullable=False)
+    calls = Column(Integer, default=0, nullable=False)
+    cost_cny = Column(Float, nullable=True)
+    reserved_cny = Column(Float, default=0, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
 def init_cloud_schema(engine) -> None:
     """Create all cloud-mode tables. Used by tests + the cloud-mode
     boot path; production goes through Supabase migrations instead."""

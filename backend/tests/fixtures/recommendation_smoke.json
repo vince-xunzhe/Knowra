@@ -1,0 +1,56 @@
+{
+  "papers": [
+    {
+      "id": "p1",
+      "filename": "arxiv_2308.04079.pdf",
+      "title": "3D Gaussian Splatting for Real-Time Radiance Field Rendering",
+      "authors": [
+        "Researcher A"
+      ],
+      "paper_category_model": "3D reconstruction",
+      "paper_team_model": "Example Lab",
+      "raw_llm_response": "{\"techniques\": [\"Gaussian splatting\", \"neural rendering\"], \"datasets\": [\"Example dataset\"]}"
+    },
+    {
+      "id": "p2",
+      "filename": "arxiv_2003.08934.pdf",
+      "title": "Neural Radiance Fields for View Synthesis",
+      "authors": [
+        "Researcher B"
+      ],
+      "paper_category_model": "3D reconstruction",
+      "raw_llm_response": "{\"techniques\": [\"neural rendering\", \"radiance fields\"]}"
+    }
+  ],
+  "current_focus": "efficient Gaussian splatting reconstruction",
+  "candidates": [
+    {
+      "arxiv_id": "2609.00001",
+      "title": "Efficient Gaussian Splatting for Scene Reconstruction",
+      "abstract": "We study efficient Gaussian splatting for scene reconstruction and neural rendering. Our method reduces the number of primitives while preserving rendered details.",
+      "authors": [
+        "Example Author"
+      ],
+      "published": "2026-09-22T00:00:00+00:00"
+    },
+    {
+      "arxiv_id": "2609.00002",
+      "title": "Generalizable Neural Radiance Fields",
+      "abstract": "We study neural radiance fields for generalizable view synthesis. Our method uses multiple scene observations for reconstruction.",
+      "authors": [
+        "Example Author 2"
+      ],
+      "published": "2026-09-21T00:00:00+00:00"
+    },
+    {
+      "arxiv_id": "2609.00003",
+      "title": "Particle Physics in Collider Experiments",
+      "abstract": "We analyze particle collisions and detector measurements in high energy physics.",
+      "authors": [
+        "Example Author 3"
+      ],
+      "published": "2026-09-23T00:00:00+00:00"
+    }
+  ],
+  "_note": "Synthetic candidates for contract/smoke tests. Not a research-quality evaluation dataset."
+}

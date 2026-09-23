@@ -49,7 +49,10 @@ app.include_router(dashboard.router)
 # start tidy.
 if not is_cloud_mode():
     from routers import sync_local
+    from routers import recommendation_local
     app.include_router(sync_local.router)
+    app.include_router(recommendation_local.router)
+    app.add_event_handler("shutdown", recommendation_local.shutdown_worker)
 
 # Cloud-mode-only routers + DB wiring. Mounting these unconditionally would require
 # Supabase env vars even on desktop where they make no sense, so we
@@ -57,6 +60,7 @@ if not is_cloud_mode():
 if is_cloud_mode():
     from routers import sync as sync_router
     from routers import cloud as cloud_router
+    from routers import recommendations as recommendations_router
     import cloud_db
 
     # Boot the cloud DB engine and override the tests-only stub so
@@ -71,6 +75,7 @@ if is_cloud_mode():
 
     app.include_router(sync_router.router)
     app.include_router(cloud_router.router)
+    app.include_router(recommendations_router.router)
 
     # Mon/Wed/Fri arXiv recommendation scheduler — a daemon thread that's
     # catch-up friendly (runs due tags on the next hourly tick). Skipped on the

@@ -79,6 +79,14 @@ TASK_SPECS = [
 ]
 
 
+TASK_SPECS += [
+    {"id": task, "label": label, "description": description, "category": "推荐",
+     "task_type": "llm", "legacy_field": "", "recommended_model_id": "codex-cli/gpt-5.4-mini"}
+    for task, label, description in [
+        ("recommend_rank", "论文精选", "基于标题和摘要，对个人候选列表评分并解释推荐理由"),
+    ]
+]
+
 TASK_BINDING_DEFAULTS = {
     "paper_extract": "openai/gpt-4o",
     "paper_chat": "openai/gpt-4o",
@@ -88,6 +96,7 @@ TASK_BINDING_DEFAULTS = {
     "ask_synthesis": "openai/gpt-4o-mini",
     "promotion_judge": "openai/gpt-4o-mini",
     "wiki_lint": "openai/gpt-4o-mini",
+    "recommend_rank": "codex-cli/gpt-5.4-mini",
 }
 
 
@@ -174,6 +183,7 @@ DEFAULT_PROVIDER_REGISTRY = [
 
 
 _OPENAI_CHAT_TASKS = [
+    "recommend_rank",
     "paper_extract",
     "paper_chat",
     "wiki_compile",
@@ -184,6 +194,7 @@ _OPENAI_CHAT_TASKS = [
 ]
 
 _OPENAI_TEXT_TASKS = [
+    "recommend_rank",
     "wiki_compile",
     "ask_synthesis",
     "promotion_judge",
@@ -191,6 +202,7 @@ _OPENAI_TEXT_TASKS = [
 ]
 
 _CODEX_ALL_NON_EMBED_TASKS = [
+    "recommend_rank",
     "paper_extract",
     "paper_chat",
     "wiki_compile",
@@ -201,6 +213,7 @@ _CODEX_ALL_NON_EMBED_TASKS = [
 ]
 
 _OPENAPI_LLM_TASKS = [
+    "recommend_rank",
     "wiki_compile",
     "ask_agent",
     "ask_synthesis",
