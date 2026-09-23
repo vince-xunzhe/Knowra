@@ -491,8 +491,8 @@ Phase 0 结束前需要验证：
 
 ## 个性化推荐（0009）
 
-`0009_personal_recommendations.sql` 增加 `rec_profiles`、`rec_candidates`、`rec_batches`、`rec_events`、`rec_workers`、`rec_usage`。这些是云服务状态，不参与桌面论文快照同步；云 SQLite 测试后备与 PostgreSQL 都由 `cloud_models.py` 对齐，桌面本地论文表不变。
+`0009_personal_recommendations.sql` 增加 `rec_profiles`、`rec_candidates`、`rec_batches`、`rec_events`、`rec_workers`、`rec_usage`。这些表由 `cloud_models.py` 定义。桌面本地优先模式在独立的 `data/recommendations.db` 自动创建这六张表，使用当前工作区身份；不需要执行 PostgreSQL 迁移，也不参与论文云同步。可选云模式在云数据库保存自己的推荐状态，桌面原有论文表不变。
 
 公共候选仅保存论文元数据和原文支持的公共特征。画像、批次、反馈和预算按当前用户隔离，写入仅经服务后端。worker 表不允许 authenticated 角色直接读取，令牌只保存 SHA-256 哈希。迁移与现有 Python 云模型一致，用户标识用 VARCHAR，RLS 将 `auth.uid()` 转为 text 比较。
 
-PostgreSQL 部署前执行迁移；保留表和事件即可回退旧应用。启动、参数回滚及验证见 [推荐运行手册](RECOMMENDATION-RUNBOOK.md)。
+仅启用可选云模式时才需要在 PostgreSQL 部署前执行迁移；默认本地模式不依赖 Fly.io、Supabase 或该迁移。保留表和事件即可回退旧应用。启动、参数回滚及验证见 [推荐运行手册](RECOMMENDATION-RUNBOOK.md)。
