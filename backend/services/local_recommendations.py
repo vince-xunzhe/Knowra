@@ -6,6 +6,7 @@ Only the six recommendation tables live here; papers remain in the library DB.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import os
 import threading
@@ -49,6 +50,7 @@ PAPER_FIELDS = (
 class LocalRecommendationStore:
     def __init__(self, path, library_factory):
         path = Path(path)
+        self.worker_lock_path = path.with_suffix(path.suffix + ".worker.lock")
         path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(
             f"sqlite:///{path}",
@@ -111,6 +113,25 @@ def local_store():
 def get_local_db():
     with local_store().session() as db:
         yield db
+
+
+def acquire_worker_lock(store=None):
+    """One worker per SQLite file, including multiple development backends."""
+    handle = (store or local_store()).worker_lock_path.open("a")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle  # The OS releases the lock even if its owner crashes.
+
+
+def worker_is_running():
+    handle = acquire_worker_lock()
+    if handle is None:
+        return True
+    handle.close()
+    return False
 
 
 def local_user():

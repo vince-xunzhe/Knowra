@@ -33,11 +33,15 @@ def _local_only():
 @router.get("")
 def status():
     _local_only()
+    from services.local_recommendations import worker_is_running
+
     with _lock:
+        managed = _process is not None and _process.poll() is None
+        local_running = worker_is_running()
         return {
-            "running": _process is not None and _process.poll() is None,
+            "running": managed or local_running,
             "exit_code": _process.poll() if _process is not None else None,
-            "mode": _mode,
+            "mode": "local" if local_running else _mode,
         }
 
 
@@ -96,9 +100,11 @@ def start_local():
             if _mode != "local":
                 raise HTTPException(409, "请先停止正在连接远端的节点")
             return {"running": True, "mode": "local"}
-        from services.local_recommendations import local_store
+        from services.local_recommendations import local_store, worker_is_running
 
         local_store()  # Finish table creation before the worker opens the store.
+        if worker_is_running():
+            return {"running": True, "mode": "local"}
         root = Path(__file__).resolve().parents[2]
         _process = subprocess.Popen(
             [
@@ -134,8 +140,16 @@ def stop():
                 _process.wait(timeout=5)
             except ProcessLookupError:
                 pass
+        from services.local_recommendations import worker_is_running
+
+        if worker_is_running():
+            raise HTTPException(409, "本机节点由另一个后端或终端管理，请在该进程中停止")
     return {"running": False}
 
 
 def shutdown_worker():
-    stop()
+    try:
+        stop()
+    except HTTPException as exc:
+        if exc.status_code != 409:
+            raise

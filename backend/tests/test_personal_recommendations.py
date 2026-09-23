@@ -558,6 +558,9 @@ def test_local_worker_lifecycle_and_invalid_origins(monkeypatch):
     from routers import recommendation_local as local
 
     monkeypatch.setattr("config.is_cloud_mode", lambda: False)
+    monkeypatch.setattr(
+        "services.local_recommendations.worker_is_running", lambda: False
+    )
     monkeypatch.setattr(local, "_process", None)
     process = MagicMock(pid=12345)
     process.poll.return_value = None

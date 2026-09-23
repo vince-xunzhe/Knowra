@@ -249,9 +249,17 @@ def main():
             print("AI smoke test 未通过：" + str(result["note"]))
             raise SystemExit(1)
         return
+    worker_lock = None
     if args.local:
-        from services.local_recommendations import LocalWorkerClient
+        from services.local_recommendations import (
+            LocalWorkerClient,
+            acquire_worker_lock,
+        )
 
+        worker_lock = acquire_worker_lock()
+        if worker_lock is None:
+            print("本机推荐节点已由其他进程运行，无需重复启动", flush=True)
+            return
         client = LocalWorkerClient()
     else:
         client = WorkerClient(args.url, os.environ.get("KNOWRA_REC_WORKER_TOKEN", ""))
@@ -325,6 +333,8 @@ def main():
     finally:
         stop.set()
         thread.join(timeout=1)
+        if worker_lock is not None:
+            worker_lock.close()
 
 
 if __name__ == "__main__":

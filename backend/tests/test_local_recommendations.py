@@ -171,6 +171,9 @@ def test_local_lifecycle_needs_neither_cloud_url_nor_worker_token(monkeypatch, l
 
     store, _, _ = local
     monkeypatch.setattr("config.is_cloud_mode", lambda: False)
+    monkeypatch.setattr(
+        "services.local_recommendations.worker_is_running", lambda: False
+    )
     monkeypatch.setattr(lifecycle, "_process", None)
     process = MagicMock(pid=1234)
     process.poll.return_value = None
@@ -184,3 +187,38 @@ def test_local_lifecycle_needs_neither_cloud_url_nor_worker_token(monkeypatch, l
         args = spawn.call_args.args[0]
         assert "--local" in args and "--url" not in args and "--provider" in args
         assert "env" not in spawn.call_args.kwargs
+
+
+def test_worker_lock_prevents_duplicate_instances_and_releases(local):
+    from services.local_recommendations import acquire_worker_lock
+
+    store, _, _ = local
+    first = acquire_worker_lock(store)
+    assert first is not None
+    try:
+        assert acquire_worker_lock(store) is None
+    finally:
+        first.close()
+    recovered = acquire_worker_lock(store)
+    assert recovered is not None
+    recovered.close()
+
+
+def test_lifecycle_reports_external_local_worker_without_starting_another(monkeypatch):
+    from fastapi import HTTPException
+    from routers import recommendation_local as lifecycle
+
+    monkeypatch.setattr("config.is_cloud_mode", lambda: False)
+    monkeypatch.setattr(lifecycle, "_process", None)
+    monkeypatch.setattr("services.local_recommendations.local_store", lambda: None)
+    monkeypatch.setattr(
+        "services.local_recommendations.worker_is_running", lambda: True
+    )
+    with patch.object(lifecycle.subprocess, "Popen") as spawn:
+        assert lifecycle.start_local()["running"]
+        assert lifecycle.status()["running"]
+        spawn.assert_not_called()
+        with pytest.raises(HTTPException) as exc:
+            lifecycle.stop()
+        assert exc.value.status_code == 409
+        lifecycle.shutdown_worker()  # Other backends must not kill its owner.
