@@ -139,12 +139,15 @@ function RecommendationCard({ item, batchId, busy, onAdopt, onError }: { item: P
     return () => observer.disconnect()
   }, [batchId, item.arxiv_id])
   return <article ref={ref} className="rounded-xl border border-slate-800 bg-slate-900/30 p-5">
-    <p className="mb-2 text-xs text-indigo-300">{lanes[item.lane]} · {item.historical ? '历史补漏' : '近期论文'} · {item.ai ? 'AI 精选' : '基础排序'}</p>
     <h2 className="font-semibold leading-relaxed">{item.title}</h2>
     <p className="mt-1 text-xs text-slate-500">{item.authors.slice(0, 3).join(', ')} · {item.published?.slice(0, 10)}</p>
     <p className="mt-3 text-sm leading-relaxed text-indigo-100">{item.reason}</p>
     {item.sources.length > 0 && <p className="mt-2 text-xs text-slate-500">关联库内论文：{item.sources.map(s => s.title).join('；')}</p>}
     <details className="mt-4 text-sm" onToggle={e => { if (e.currentTarget.open) void recommendationEvent(batchId, item.arxiv_id, 'viewed').catch(onError) }}><summary className="cursor-pointer text-slate-400">查看摘要与依据</summary><p className="mt-3 whitespace-pre-wrap leading-relaxed text-slate-300">{item.abstract || '暂无摘要'}</p>{item.evidence && <blockquote className="mt-3 border-l-2 border-indigo-500 pl-3 text-slate-400">{item.evidence}</blockquote>}</details>
-    <div className="mt-4 flex gap-3"><button className={button} disabled={busy} onClick={onAdopt}>加入知识库</button><a href={`https://arxiv.org/abs/${item.arxiv_id}`} target="_blank" rel="noreferrer" className="py-1.5 text-sm text-slate-400">arXiv ↗</a></div>
+    <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
+      <button className={button} disabled={busy} onClick={onAdopt}>加入知识库</button>
+      <a href={`https://arxiv.org/abs/${item.arxiv_id}`} target="_blank" rel="noreferrer" className="py-1.5 text-sm text-slate-400">arXiv ↗</a>
+      <p className="text-xs text-indigo-300">{lanes[item.lane]} · {item.historical ? '历史补漏' : '近期论文'} · {item.ai ? 'AI 精选' : '基础排序'}</p>
+    </div>
   </article>
 }
