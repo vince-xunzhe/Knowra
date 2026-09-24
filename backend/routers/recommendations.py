@@ -8,7 +8,7 @@ from typing import Annotated, Literal, Optional
 
 from auth_deps import current_user
 from cloud_models import RecBatch, RecEvent, RecWorker
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 from services import recommendation_jobs as jobs
 from services.personal_recommendation import utcnow
@@ -38,10 +38,25 @@ Worker = Annotated[RecWorker, Depends(worker_identity)]
 
 
 @endpoints.get("")
-def personal_feed(db: DB, user: User):
-    result = jobs.feed(db, user.user_id)
+def personal_feed(
+    db: DB, user: User, batch_id: Optional[str] = Query(default=None, max_length=80)
+):
+    try:
+        result = jobs.feed(db, user.user_id, batch_id=batch_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
     db.commit()
     return result
+
+
+@endpoints.get("/batches")
+def batch_history(
+    db: DB,
+    user: User,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    return jobs.batch_history(db, user.user_id, offset=offset, limit=limit)
 
 
 class Focus(BaseModel):

@@ -222,3 +222,173 @@ def test_lifecycle_reports_external_local_worker_without_starting_another(monkey
             lifecycle.stop()
         assert exc.value.status_code == 409
         lifecycle.shutdown_worker()  # Other backends must not kill its owner.
+
+
+def seed_history(store):
+    from cloud_models import RecBatch
+
+    now = utcnow()
+    item = {
+        "arxiv_id": "2609.00001",
+        "title": "Historical Gaussian splatting",
+        "abstract": "Original abstract",
+        "authors": ["Alice"],
+        "reason": "Original recommendation reason",
+        "sources": [],
+    }
+    with store.session() as db:
+        for index, (bid, status, user) in enumerate(
+            [
+                ("monday", "completed", LOCAL_USER),
+                ("wednesday", "completed", LOCAL_USER),
+                ("running", "running", LOCAL_USER),
+                ("other-user", "completed", "another-user"),
+            ]
+        ):
+            db.add(
+                RecBatch(
+                    id=bid,
+                    user_id=user,
+                    slot=bid,
+                    status=status,
+                    items=[{**item, "reason": f"{bid} reason"}],
+                    snapshot={"version": index},
+                    created_at=now - timedelta(days=4 - index),
+                    completed_at=now - timedelta(days=4 - index)
+                    if status == "completed"
+                    else None,
+                )
+            )
+        db.commit()
+
+
+def test_history_preserves_old_batch_and_paginates_with_user_isolation(local):
+    store, _, _ = local
+    seed_history(store)
+    client = client_for(store)
+    latest = client.get("/personal").json()
+    assert latest["batch"]["id"] == "wednesday"
+    assert latest["job"]["status"] == "running"
+    first = client.get("/personal/batches?limit=1").json()
+    assert [b["id"] for b in first["batches"]] == ["wednesday"]
+    assert first["next_offset"] == 1
+    second = client.get("/personal/batches?limit=1&offset=1").json()
+    assert [b["id"] for b in second["batches"]] == ["monday"]
+    assert second["next_offset"] is None
+    old = client.get("/personal?batch_id=monday").json()
+    assert old["batch"]["id"] == "monday"
+    assert old["latest_batch"]["id"] == "wednesday"
+    assert old["items"][0]["reason"] == "monday reason"
+    assert old["items"][0]["in_library"] is False
+    for bid in ("missing", "running", "other-user"):
+        assert client.get(f"/personal?batch_id={bid}").status_code == 404
+    assert client.get("/personal/batches?offset=-1").status_code == 422
+    assert client.get("/personal/batches?limit=101").status_code == 422
+
+
+def test_history_adoption_remains_visible_and_feedback_survives(local):
+    from cloud_models import RecBatch
+
+    store, factory, _ = local
+    seed_history(store)
+    client = client_for(store)
+    assert (
+        client.post(
+            "/personal/events",
+            json={
+                "batch_id": "monday",
+                "arxiv_id": "2609.00001",
+                "kind": "requested",
+            },
+        ).status_code
+        == 200
+    )
+    with factory() as db:
+        db.add(
+            Paper(
+                filename="arxiv_2609.00001.pdf",
+                filepath="old.pdf",
+                file_hash="old-recommendation",
+                title="Historical Gaussian splatting",
+            )
+        )
+        db.commit()
+    old = client.get("/personal?batch_id=monday").json()
+    assert old["items"][0]["in_library"] is True
+    assert old["pending_imports"] == []
+    assert old["metrics"]["adopted"] == 1
+    assert client.get("/personal").json()["items"] == []
+    assert (
+        client.get("/personal?batch_id=wednesday").json()["items"][0]["in_library"]
+        is True
+    )
+    with store.session() as db:
+        assert db.get(RecBatch, "monday").items[0]["reason"] == "monday reason"
+        assert "in_library" not in db.get(RecBatch, "monday").items[0]
+        assert (
+            db.query(RecEvent).filter_by(kind="adopted", batch_id="monday").count() == 1
+        )
+
+
+def test_empty_completed_batch_can_be_revisited(local):
+    from cloud_models import RecBatch
+
+    store, _, _ = local
+    with store.session() as db:
+        db.add(
+            RecBatch(
+                id="empty",
+                user_id=LOCAL_USER,
+                slot="empty",
+                status="completed",
+                completed_at=utcnow(),
+                items=[],
+            )
+        )
+        db.commit()
+    client = client_for(store)
+    assert client.get("/personal/batches").json()["batches"][0]["count"] == 0
+    assert client.get("/personal?batch_id=empty").json()["items"] == []
+
+
+def test_history_expiration_boundary_preserves_records_and_feedback(local):
+    from cloud_models import RecBatch
+    from services.recommendation_jobs import HISTORY_DAYS
+
+    store, _, _ = local
+    seed_history(store)
+    client = client_for(store)
+    assert (
+        client.post(
+            "/personal/events",
+            json={
+                "batch_id": "monday",
+                "arxiv_id": "2609.00001",
+                "kind": "viewed",
+            },
+        ).status_code
+        == 200
+    )
+    now = utcnow()
+    cutoff = now - timedelta(days=HISTORY_DAYS)
+    with store.session() as db:
+        db.get(RecBatch, "monday").completed_at = cutoff - timedelta(seconds=1)
+        db.get(RecBatch, "wednesday").completed_at = cutoff
+        db.commit()
+    with patch("services.recommendation_jobs.utcnow", return_value=now):
+        history = client.get("/personal/batches").json()
+        assert history["retention_days"] == 90
+        assert [batch["id"] for batch in history["batches"]] == ["wednesday"]
+        assert client.get("/personal?batch_id=monday").status_code == 404
+        assert client.get("/personal?batch_id=wednesday").status_code == 200
+    with patch(
+        "services.recommendation_jobs.utcnow", return_value=now + timedelta(seconds=1)
+    ):
+        assert client.get("/personal/batches").json()["batches"] == []
+        assert client.get("/personal").json()["batch"] is None
+    with store.session() as db:
+        assert db.get(RecBatch, "monday").items[0]["reason"] == "monday reason"
+        assert (
+            db.query(RecEvent).filter_by(batch_id="monday", kind="viewed").count() == 1
+        )
+    assert client.get("/personal").json()["profile"]["paper_count"] == 1

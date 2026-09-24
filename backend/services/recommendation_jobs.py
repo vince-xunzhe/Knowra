@@ -36,6 +36,7 @@ from services.personal_recommendation import (
 LEASE_MINUTES = 15
 MAX_ATTEMPTS = 3
 MONTHLY_BUDGET = 30.0
+HISTORY_DAYS = 90
 
 
 def upsert(db, model, values, keys, update=()):
@@ -522,7 +523,42 @@ def metrics(db, user_id, now=None):
     }
 
 
-def feed(db, user_id):
+def batch_json(batch):
+    return {
+        "id": batch.id,
+        "status": batch.status,
+        "error": batch.error,
+        "slot": batch.slot,
+        "count": len(batch.items),
+        "profile_version": batch.snapshot.get("version"),
+        "created_at": aware(batch.created_at).isoformat(),
+        "completed_at": aware(batch.completed_at).isoformat()
+        if batch.completed_at
+        else None,
+    }
+
+
+def batch_history(db, user_id, offset=0, limit=20):
+    cutoff = utcnow() - timedelta(days=HISTORY_DAYS)
+    query = db.query(RecBatch).filter(
+        RecBatch.user_id == user_id,
+        RecBatch.status == "completed",
+        RecBatch.completed_at >= cutoff,
+    )
+    batches = (
+        query.order_by(RecBatch.completed_at.desc(), RecBatch.id.desc())
+        .offset(offset)
+        .limit(limit + 1)
+        .all()
+    )
+    return {
+        "batches": [batch_json(batch) for batch in batches[:limit]],
+        "retention_days": HISTORY_DAYS,
+        "next_offset": offset + limit if len(batches) > limit else None,
+    }
+
+
+def feed(db, user_id, batch_id=None):
     profile = refresh_profile(db, user_id)
     newest = (
         db.query(RecBatch)
@@ -532,8 +568,12 @@ def feed(db, user_id):
     )
     latest = (
         db.query(RecBatch)
-        .filter_by(user_id=user_id, status="completed")
-        .order_by(RecBatch.completed_at.desc())
+        .filter(
+            RecBatch.user_id == user_id,
+            RecBatch.status == "completed",
+            RecBatch.completed_at >= utcnow() - timedelta(days=HISTORY_DAYS),
+        )
+        .order_by(RecBatch.completed_at.desc(), RecBatch.id.desc())
         .first()
     )
     workers = db.query(RecWorker).filter_by(user_id=user_id).all()
@@ -546,16 +586,27 @@ def feed(db, user_id):
         "not_configured" if not workers else "online" if online else "offline"
     )
 
-    def batch_json(b):
-        return {
-            "id": b.id,
-            "status": b.status,
-            "error": b.error,
-            "created_at": aware(b.created_at).isoformat(),
-            "completed_at": aware(b.completed_at).isoformat()
-            if b.completed_at
-            else None,
-        }
+    selected = latest
+    if batch_id:
+        selected = (
+            db.query(RecBatch)
+            .filter_by(id=batch_id, user_id=user_id, status="completed")
+            .filter(RecBatch.completed_at >= utcnow() - timedelta(days=HISTORY_DAYS))
+            .one_or_none()
+        )
+        if selected is None:
+            raise ValueError("该期精选不存在或已超过回顾期限，请返回最新一期")
+    library_ids = set(profile.snapshot.get("library_ids", []))
+    library_titles = set(profile.snapshot.get("library_titles", []))
+    items = []
+    for item in selected.items if selected else []:
+        in_library = (
+            item["arxiv_id"] in library_ids
+            or normalized_title(item["title"]) in library_titles
+        )
+        # Explicit batch views preserve the original selection, including adopted papers.
+        if batch_id or not in_library:
+            items.append({**item, "in_library": in_library})
 
     requests = db.query(RecEvent).filter_by(user_id=user_id, kind="requested").all()
     adopted = {
@@ -569,13 +620,10 @@ def feed(db, user_id):
             "paper_count": profile.snapshot.get("paper_count", 0),
             "dimensions": profile.snapshot.get("dimensions", {}),
         },
-        "batch": batch_json(latest) if latest else None,
+        "batch": batch_json(selected) if selected else None,
+        "latest_batch": batch_json(latest) if latest else None,
         "job": batch_json(newest) if newest else None,
-        "items": [
-            i
-            for i in (latest.items if latest else [])
-            if i["arxiv_id"] not in profile.snapshot.get("library_ids", [])
-        ],
+        "items": items,
         "workers": [
             {
                 "node_id": w.node_id,
