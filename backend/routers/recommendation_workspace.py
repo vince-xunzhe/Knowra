@@ -2,7 +2,8 @@
 
 from auth_deps import current_user
 from fastapi import Depends, FastAPI, HTTPException, Request
-from services.local_recommendations import get_local_db, local_user
+from services import recommendation_storage
+from services.local_recommendations import get_local_db, local_store, local_user
 
 from routers.recommendations import endpoints
 from routers.sync import get_cloud_db
@@ -16,6 +17,15 @@ def require_loopback(request: Request):
 def create_workspace_app():
     app = FastAPI(dependencies=[Depends(require_loopback)])
     app.include_router(endpoints, prefix="/personal")
+
+    @app.get("/personal/storage")
+    def storage_preview():
+        return recommendation_storage.preview(local_store())
+
+    @app.post("/personal/storage/cleanup")
+    def storage_cleanup():
+        return recommendation_storage.cleanup(local_store())
+
     app.dependency_overrides[get_cloud_db] = get_local_db
     app.dependency_overrides[current_user] = local_user
     return app

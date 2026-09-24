@@ -392,3 +392,102 @@ def test_history_expiration_boundary_preserves_records_and_feedback(local):
             db.query(RecEvent).filter_by(batch_id="monday", kind="viewed").count() == 1
         )
     assert client.get("/personal").json()["profile"]["paper_count"] == 1
+
+
+def test_local_storage_cleanup_reclaims_cache_and_preserves_library_and_feedback(local):
+    from cloud_models import RecBatch, RecCandidate, RecUsage
+
+    store, factory, path = local
+    seed_history(store)
+    client = client_for(store)
+    assert (
+        client.post(
+            "/personal/events",
+            json={
+                "batch_id": "monday",
+                "arxiv_id": "2609.00001",
+                "kind": "requested",
+            },
+        ).status_code
+        == 200
+    )
+    old = utcnow() - timedelta(days=100)
+    with store.session() as db:
+        for bid in ("monday", "wednesday", "running", "other-user"):
+            batch = db.get(RecBatch, bid)
+            batch.created_at = old
+            if batch.status == "completed":
+                batch.completed_at = old
+        db.add(
+            RecBatch(
+                id="recent",
+                user_id=LOCAL_USER,
+                slot="recent",
+                status="completed",
+                completed_at=utcnow(),
+                items=[],
+            )
+        )
+        db.add(
+            RecCandidate(
+                arxiv_id="stale",
+                content_hash="old",
+                updated_at=old,
+                metadata_json={"abstract": "long obsolete abstract " * 10000},
+            )
+        )
+        db.add(
+            RecCandidate(arxiv_id="fresh", content_hash="fresh", updated_at=utcnow())
+        )
+        db.add(
+            RecUsage(
+                user_id=LOCAL_USER, batch_id="wednesday", provider="cli", reserved_cny=1
+            )
+        )
+        db.commit()
+    pdf = path / "library-paper.pdf"
+    pdf.write_bytes(b"Existing user paper")
+    with patch("routers.recommendation_workspace.local_store", return_value=store):
+        preview = client.get("/personal/storage").json()
+        assert preview["expired_batches"] == 1
+        assert preview["expired_candidates"] == 1
+        assert preview["protected_batches"] == 1
+        assert preview["estimated_payload_bytes"] > 100000
+        result = client.post("/personal/storage/cleanup").json()
+        assert result["deleted_batches"] == 1
+        assert result["deleted_candidates"] == 1
+        assert result["compacted"] is True
+        assert result["reclaimed_bytes"] > 0
+        again = client.post("/personal/storage/cleanup").json()
+        assert again["deleted_batches"] == again["deleted_candidates"] == 0
+    with store.session() as db:
+        assert db.get(RecBatch, "running") is not None
+        assert db.get(RecBatch, "recent") is not None
+        assert db.get(RecBatch, "monday") is not None
+        assert db.get(RecBatch, "wednesday") is None
+        assert db.get(RecBatch, "other-user") is not None
+        assert db.get(RecCandidate, "fresh") is not None
+        assert db.query(RecUsage).count() == 1
+        assert db.query(RecEvent).count() == 1
+    assert pdf.read_bytes() == b"Existing user paper"
+    # An old pending import still reconciles after its batch leaves the review window.
+    with factory() as db:
+        assert db.query(Paper).count() == 1
+        db.add(
+            Paper(
+                filename="arxiv_2609.00001.pdf",
+                filepath=str(pdf),
+                file_hash="late",
+                title="Historical Gaussian splatting",
+            )
+        )
+        db.commit()
+    assert client.get("/personal").json()["metrics"]["adopted"] == 1
+    assert client.get("/personal").json()["pending_imports"] == []
+
+
+def test_storage_cleanup_is_loopback_only(local):
+    store, _, _ = local
+    client = client_for(store, address="192.168.1.88")
+    assert client.get("/personal/storage").status_code == 403
+    assert client.post("/personal/storage/cleanup").status_code == 403

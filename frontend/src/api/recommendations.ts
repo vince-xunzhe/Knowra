@@ -32,3 +32,10 @@ export const refreshPersonalRecommendations = () => api.post<{ id: string | null
 export const recommendationEvent = (batch_id: string, arxiv_id: string, kind: 'exposed' | 'viewed' | 'requested') => api.post('/events', { batch_id, arxiv_id, kind }).then(r => r.data)
 
 export const recommendationHistory = (offset = 0) => api.get<RecommendationHistory>('/batches', { params: { offset } }).then(r => r.data)
+
+export interface RecommendationStorage {
+  retention_days: number; expired_batches: number; expired_candidates: number;
+  protected_batches: number; estimated_payload_bytes: number; database_bytes: number;
+}
+export const recommendationStorage = () => api.get<RecommendationStorage>('/storage').then(r => r.data)
+export const cleanupRecommendationStorage = () => api.post<{ deleted_batches: number; deleted_candidates: number; compacted: boolean; reclaimed_bytes: number }>('/storage/cleanup').then(r => r.data)

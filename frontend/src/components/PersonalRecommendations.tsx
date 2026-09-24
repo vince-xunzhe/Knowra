@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { personalRecommendations, saveRecommendationFocus, refreshPersonalRecommendations, recommendationEvent, recommendationHistory,
-  PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem, type RecommendationBatch } from '../api/recommendations'
+import { personalRecommendations, saveRecommendationFocus, refreshPersonalRecommendations, recommendationEvent, recommendationHistory, recommendationStorage, cleanupRecommendationStorage,
+  PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem, type RecommendationBatch, type RecommendationStorage } from '../api/recommendations'
 import { importRecommendation, localRecommendationWorker, startWorkspaceRecommendationWorker, stopLocalRecommendationWorker } from '../api/client'
 
 const labels: Record<string, string> = { domain: '领域', problem: '研究问题', method: '方法', dataset: '数据集', team: '团队' }
@@ -143,6 +143,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
           onError={e => setError(errorMessage(e))} onAdopt={() => void action(item.arxiv_id, () => adopt(item, data.batch!.id))} />)}</div>
         </> }
         <p className="text-xs text-slate-500">已浏览 {data.metrics.viewed} 篇 · 已采纳 {data.metrics.adopted} 篇 · 14 天采纳率 {data.metrics.adoption_rate_14d === null ? '等待观察窗口完成' : `${Math.round(data.metrics.adoption_rate_14d * 100)}%`}（成熟样本 {data.metrics.mature_viewed}，目标 30%）。未采纳不会记为不喜欢。</p>
+        <RecommendationStoragePanel />
         <details className="rounded-xl border border-slate-800 p-4 text-sm">
           <summary className="cursor-pointer">本机执行节点与调用预算</summary>
           <p className="my-3 text-slate-400">月度付费调用预算 ¥{data.budget.limit_cny}；已预留上界 ¥{data.budget.reserved_cny.toFixed(2)}。CLI 费用未知时不显示为零费用。节点离线仅在站内提醒。</p>
@@ -253,4 +254,44 @@ function HistoryPicker({ selected, latest, disabled, onSelect }: {
     <p className="mt-2 text-xs text-slate-500">可回看最近 {retentionDays} 天的精选，按北京时间显示日期。超期后移出历史入口，已入库论文和采纳反馈继续保留。</p>
     {error && <p role="alert" className="mt-2 text-rose-200">{error}<button className="ml-3 underline" onClick={() => void fetchHistory()}>重试</button></p>}
   </section>
+}
+
+
+function formatBytes(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(2)} MB` : `${(bytes / 1024).toFixed(1)} KB`
+}
+
+function RecommendationStoragePanel() {
+  const [preview, setPreview] = useState<RecommendationStorage | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  async function inspect() {
+    setBusy(true); setError(''); setMessage('')
+    try { setPreview(await recommendationStorage()) }
+    catch (e) { setError(errorMessage(e)) }
+    finally { setBusy(false) }
+  }
+  async function clean() {
+    if (!preview || !window.confirm(`清理超过 ${preview.retention_days} 天的推荐缓存？将重新核对过期范围，保留知识库 PDF、采纳反馈和待入库请求。清理后无法回看被删除的推荐缓存。`)) return
+    setBusy(true); setError(''); setMessage('')
+    try {
+      const result = await cleanupRecommendationStorage()
+      setMessage(`已清理 ${result.deleted_batches} 期推荐和 ${result.deleted_candidates} 条候选缓存。${result.compacted ? `已整理数据库，释放 ${formatBytes(result.reclaimed_bytes)}。` : '数据已清理，数据库正在使用，空闲空间将供后续写入复用；可稍后再次整理。'}`)
+      setPreview(await recommendationStorage())
+    } catch (e) { setError(errorMessage(e)) }
+    finally { setBusy(false) }
+  }
+  return <details className="rounded-xl border border-slate-800 p-4 text-sm">
+    <summary className="cursor-pointer">推荐存储管理</summary>
+    <p className="mt-3 text-slate-400">清理过期的标题、摘要及推荐缓存，并整理数据库空间。知识库中的 PDF 和采纳反馈继续保留。</p>
+    <button className={`${button} mt-3`} disabled={busy} onClick={() => void inspect()}>{busy ? '处理中…' : '检查可清理空间'}</button>
+    {preview && <div className="mt-3 space-y-2 text-slate-400">
+      <p>推荐数据库占用 {formatBytes(preview.database_bytes)}；超过 {preview.retention_days} 天的可清理数据：{preview.expired_batches} 期推荐、{preview.expired_candidates} 条候选，内容约 {formatBytes(preview.estimated_payload_bytes)}（实际释放以整理结果为准）。</p>
+      {preview.protected_batches > 0 && <p>{preview.protected_batches} 期历史关联阅读、采纳反馈或入库请求，保留用于追溯。</p>}
+      <button className={button} disabled={busy} onClick={() => void clean()}>一键清理过期缓存并整理空间</button>
+    </div>}
+    {message && <p role="status" className="mt-3 text-emerald-300">{message}</p>}
+    {error && <p role="alert" className="mt-3 text-rose-200">{error}</p>}
+  </details>
 }

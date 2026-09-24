@@ -31,6 +31,16 @@ KNOWRA_DEPLOY_MODE=local .venv/bin/python -m uvicorn main:app --host 127.0.0.1 -
 - `GET /api/recommendations/personal/batches?offset=0&limit=20`：分页历史、下一页偏移和回顾天数（单页最多 100 期）。
 - `GET /api/recommendations/personal?batch_id=...`：指定本工作区已完成且在期限内的批次，包含当时画像版本和当前入库状态；不传 `batch_id` 返回最新有效精选。
 
+## 手动清理推荐缓存
+
+推荐页下方“推荐存储管理 → 检查可清理空间”显示推荐数据库及 WAL 占用、过期批次/候选数量和内容大小估计。点击“一键清理过期缓存并整理空间”后确认才执行删除。当前页面只管理推荐元数据；未采纳候选从不下载 PDF，已有知识库 PDF 不参与清理。
+
+清理范围为超过同一 90 天期限、没有关联事件的已完成/失败批次，以及超过 90 天未更新的候选缓存。关联阅读、曝光、采纳反馈或待入库请求的批次继续保留用于反馈核对；运行/排队任务、预算账本、画像和原论文库均保留。因而这是释放可清理缓存，不是给全部推荐数据设置硬容量上限。
+
+清理先取得 SQLite 写锁重新核对范围，提交后执行 VACUUM 和 WAL checkpoint 回收磁盘空间。若数据库忙无法完成整理，已删除的空间仍可供后续写入复用，页面提示稍后再整理。重复执行安全，页面报告实际释放量。预估是 JSON 内容字节量，不保证等于数据库文件缩减量。
+
+本机专用接口：`GET /api/recommendations/personal/storage` 只读预览；`POST /api/recommendations/personal/storage/cleanup` 执行清理和整理。两者均限制 loopback，未接到可选云端路由。
+
 ## 独立 worker 与 API 模式
 
 通常无需手动启动 worker。如果需要自己管理进程，先在页面停止自动节点，保持后端运行，再从仓库根目录执行：
