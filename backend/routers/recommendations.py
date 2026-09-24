@@ -39,10 +39,15 @@ Worker = Annotated[RecWorker, Depends(worker_identity)]
 
 @endpoints.get("")
 def personal_feed(
-    db: DB, user: User, batch_id: Optional[str] = Query(default=None, max_length=80)
+    db: DB,
+    user: User,
+    batch_id: Optional[str] = Query(default=None, max_length=80),
+    include_library: bool = False,
 ):
     try:
-        result = jobs.feed(db, user.user_id, batch_id=batch_id)
+        result = jobs.feed(
+            db, user.user_id, batch_id=batch_id, include_library=include_library
+        )
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
     db.commit()

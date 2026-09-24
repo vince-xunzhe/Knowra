@@ -138,6 +138,11 @@ def test_worker_and_adoption_complete_locally_without_sync(local):
     data = client.get("/personal").json()
     assert data["metrics"]["adopted"] == 1 and data["items"] == []
     assert data["pending_imports"] == []
+    retained = client.get("/personal?include_library=true").json()
+    assert len(retained["items"]) == 1
+    assert retained["items"][0]["arxiv_id"] == "2609.00001"
+    assert retained["items"][0]["in_library"] is True
+    assert retained["metrics"]["adopted"] == 1
     client.get("/personal")
     with store.session() as db:
         assert db.query(RecEvent).filter_by(kind="adopted").count() == 1

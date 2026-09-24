@@ -21,7 +21,7 @@ export class PersonalRecommendationsUnavailableError extends Error {
   }
 }
 export async function personalRecommendations(batchId?: string): Promise<PersonalFeed> {
-  try { return (await api.get<PersonalFeed>('', { params: batchId ? { batch_id: batchId } : undefined })).data }
+  try { return (await api.get<PersonalFeed>('', { params: { batch_id: batchId || undefined, include_library: true } })).data }
   catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404 && !batchId) throw new PersonalRecommendationsUnavailableError()
     throw error

@@ -558,7 +558,7 @@ def batch_history(db, user_id, offset=0, limit=20):
     }
 
 
-def feed(db, user_id, batch_id=None):
+def feed(db, user_id, batch_id=None, include_library=False):
     profile = refresh_profile(db, user_id)
     newest = (
         db.query(RecBatch)
@@ -604,8 +604,8 @@ def feed(db, user_id, batch_id=None):
             item["arxiv_id"] in library_ids
             or normalized_title(item["title"]) in library_titles
         )
-        # Explicit batch views preserve the original selection, including adopted papers.
-        if batch_id or not in_library:
+        # Desktop cards and explicit batch views retain imported papers as confirmation.
+        if include_library or batch_id or not in_library:
             items.append({**item, "in_library": in_library})
 
     requests = db.query(RecEvent).filter_by(user_id=user_id, kind="requested").all()

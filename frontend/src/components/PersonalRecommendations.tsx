@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Check, Loader2 } from 'lucide-react'
 import { personalRecommendations, saveRecommendationFocus, refreshPersonalRecommendations, recommendationEvent, recommendationHistory, recommendationStorage, cleanupRecommendationStorage,
   PersonalRecommendationsUnavailableError, type PersonalFeed, type PersonalRecItem, type RecommendationBatch, type RecommendationStorage } from '../api/recommendations'
 import { importRecommendation, localRecommendationWorker, startWorkspaceRecommendationWorker, stopLocalRecommendationWorker } from '../api/client'
@@ -12,6 +13,7 @@ const paperCategories: Record<string, string> = {
   'cs.DC': '分布式计算', 'stat.ML': '统计机器学习',
 }
 const button = 'rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-50'
+const addButton = 'inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-400 disabled:cursor-not-allowed disabled:opacity-50'
 function errorMessage(error: unknown) {
   const value = error as { response?: { data?: { detail?: unknown } }; message?: string }
   const detail = value.response?.data?.detail
@@ -81,7 +83,14 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
   async function adopt(item: { arxiv_id: string; title: string; authors?: string[] }, batchId: string) {
     await recommendationEvent(batchId, item.arxiv_id, 'requested')
     await importRecommendation(item)
-    setNotice('已加入本地知识库，正在更新本机采纳反馈。')
+    // Confirm success immediately, even if refreshing the feed subsequently fails.
+    requestVersion.current++
+    setData(previous => previous ? {
+      ...previous,
+      items: previous.items.map(entry => entry.arxiv_id === item.arxiv_id ? { ...entry, in_library: true } : entry),
+      pending_imports: previous.pending_imports.filter(entry => entry.arxiv_id !== item.arxiv_id),
+    } : previous)
+    setNotice('已添加至知识库，正在更新本机采纳反馈。')
   }
 
   return <div className="h-full overflow-y-auto bg-[#0b0d12] p-6 text-slate-200">
@@ -130,16 +139,15 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
           <textarea id="rec-focus" value={focus} maxLength={2000} onChange={e => setFocus(e.target.value)} rows={2} className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 p-3" placeholder="例如：关注低成本三维重建中的泛化方法" />
           <button className={button} disabled={!!busy} onClick={() => void action('focus', () => saveRecommendationFocus(focus))}>保存课题</button>
         </details>
-        {data.pending_imports.length > 0 && <section className="rounded-xl border border-indigo-500/30 p-4"><h2 className="font-medium">待入库请求</h2><p className="mt-1 text-xs text-slate-400">尚未完成的本机入库请求保留在这里，实际入库成功后才计入采纳。</p>{data.pending_imports.map(item => <div key={item.arxiv_id} className="mt-3 flex items-center gap-3 text-sm"><span className="flex-1">{item.title}</span><button className={button} disabled={!!busy} onClick={() => void action(item.arxiv_id, () => adopt(item, item.batch_id))}>{busy === item.arxiv_id ? '入库中…' : '完成入库'}</button></div>)}</section>}
+        {data.pending_imports.length > 0 && <section className="rounded-xl border border-indigo-500/30 p-4"><h2 className="font-medium">待入库请求</h2><p className="mt-1 text-xs text-slate-400">尚未完成的本机入库请求保留在这里，实际入库成功后才计入采纳。</p>{data.pending_imports.map(item => <div key={item.arxiv_id} className="mt-3 flex items-center gap-3 text-sm"><span className="flex-1">{item.title}</span><button className={addButton} disabled={!!busy} onClick={() => void action(item.arxiv_id, () => adopt(item, item.batch_id))}>{busy === item.arxiv_id ? '入库中…' : '完成入库'}</button></div>)}</section>}
         <HistoryPicker selected={selectedBatchId} latest={data.latest_batch} disabled={!!busy} onSelect={selectBatch} />
         {busy === 'history' ? <p role="status" className="text-sm text-slate-400">正在读取该期精选…</p> : selectedBatchId && data.batch?.id !== selectedBatchId ? <p className="text-sm text-slate-400">该期精选暂时无法读取，请重试或返回最新一期。</p> : <>
         {data.batch && <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-400">
           <p>{selectedBatchId ? batchLabel(data.batch) : '最新一期'} · {data.batch.count} 篇{selectedBatchId ? ` · 当时科研品味版本 ${data.batch.profile_version ?? '未知'}` : ''}</p>
-          {!selectedBatchId && <button className="text-indigo-300 hover:underline" onClick={() => selectBatch(data.batch!.id)}>查看本期全部（含已入库）</button>}
         </div>}
         {selectedBatchId && <p className="text-xs text-slate-500">保留本期生成时的论文顺序和推荐理由，入库状态按当前知识库更新。</p>}
-        {!data.items.length && <div className="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">{data.batch ? data.batch.count > 0 ? '本期精选已全部加入知识库，可查看本期全部或回看历史精选。' : '本期没有符合条件的精选，相关性不足时不会凑数。' : data.profile.paper_count ? '还没有符合条件的精选。连接执行节点后更新；相关性不足时不会凑数。' : '先加入本地论文，让推荐从你的知识库开始。'}</div>}
-        <div className="grid grid-cols-1 gap-4">{data.items.map(item => <RecommendationCard key={`${data.batch?.id}:${item.arxiv_id}`} item={item} batchId={data.batch!.id} busy={!!busy}
+        {!data.items.length && <div className="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">{data.batch ? '本期没有符合条件的精选，相关性不足时不会凑数。' : data.profile.paper_count ? '还没有符合条件的精选。连接执行节点后更新；相关性不足时不会凑数。' : '先加入本地论文，让推荐从你的知识库开始。'}</div>}
+        <div className="grid grid-cols-1 gap-4">{data.items.map(item => <RecommendationCard key={`${data.batch?.id}:${item.arxiv_id}`} item={item} batchId={data.batch!.id} busy={!!busy} adding={busy === item.arxiv_id}
           onError={e => setError(errorMessage(e))} onAdopt={() => void action(item.arxiv_id, () => adopt(item, data.batch!.id))} />)}</div>
         </> }
         <p className="text-xs text-slate-500">已浏览 {data.metrics.viewed} 篇 · 已采纳 {data.metrics.adopted} 篇 · 14 天采纳率 {data.metrics.adoption_rate_14d === null ? '等待观察窗口完成' : `${Math.round(data.metrics.adoption_rate_14d * 100)}%`}（成熟样本 {data.metrics.mature_viewed}，目标 30%）。未采纳不会记为不喜欢。</p>
@@ -163,7 +171,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
   </div>
 }
 
-function RecommendationCard({ item, batchId, busy, onAdopt, onError }: { item: PersonalRecItem; batchId: string; busy: boolean; onAdopt: () => void; onError: (e: unknown) => void }) {
+function RecommendationCard({ item, batchId, busy, adding, onAdopt, onError }: { item: PersonalRecItem; batchId: string; busy: boolean; adding: boolean; onAdopt: () => void; onError: (e: unknown) => void }) {
   const ref = useRef<HTMLElement>(null)
   const sent = useRef(false)
   useEffect(() => {
@@ -186,7 +194,9 @@ function RecommendationCard({ item, batchId, busy, onAdopt, onError }: { item: P
     {item.sources.length > 0 && <p className="mt-2 text-xs text-slate-500">关联库内论文：{item.sources.map(s => s.title).join('；')}</p>}
     <details className="mt-4 text-sm" onToggle={e => { if (e.currentTarget.open) void recommendationEvent(batchId, item.arxiv_id, 'viewed').catch(onError) }}><summary className="cursor-pointer text-slate-400">查看摘要与依据</summary><p className="mt-3 whitespace-pre-wrap leading-relaxed text-slate-300">{item.abstract || '暂无摘要'}</p>{item.evidence && <blockquote className="mt-3 border-l-2 border-indigo-500 pl-3 text-slate-400">{item.evidence}</blockquote>}</details>
     <div className="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3">
-      <button className={button} disabled={busy || item.in_library} onClick={onAdopt}>{item.in_library ? '已入库' : '加入知识库'}</button>
+      {item.in_library
+        ? <span role="status" className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm font-medium text-emerald-300"><Check size={16} aria-hidden="true" />已添加至知识库</span>
+        : <button className={addButton} disabled={busy} aria-busy={adding} onClick={onAdopt}>{adding && <Loader2 size={16} className="animate-spin" aria-hidden="true" />}{adding ? '正在添加…' : '加入知识库'}</button>}
       <a href={`https://arxiv.org/abs/${item.arxiv_id}`} target="_blank" rel="noreferrer" className="py-1.5 text-sm text-slate-400">arXiv ↗</a>
       <p className="text-xs text-indigo-300">{lanes[item.lane]} · {item.historical ? '历史补漏' : '近期论文'} · {item.ai ? 'AI 精选' : '基础排序'}</p>
       <span className="rounded-md border border-slate-700/70 px-2 py-1 text-xs text-slate-400" title={item.primary_category ? `arXiv 分类：${item.primary_category}` : '论文元数据暂无类别'}>类别：{item.primary_category ? paperCategories[item.primary_category] || item.primary_category : '未分类'}</span>
