@@ -121,7 +121,6 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
           </div>
           {data.workers.map(w => <p key={w.node_id} className="mt-1 text-xs text-slate-400">{w.node_id === 'desktop-local' ? '本机' : w.node_id} · {workerHealth[w.health] || w.health} · 最近在线 {w.last_seen_at ? new Date(w.last_seen_at).toLocaleString() : '尚未连接'}</p>)}
           {data.job && data.job.status !== 'completed' && <p className="mt-2 text-slate-400">当前任务：{{ queued: '等待执行', running: '正在生成', failed: '执行失败' }[data.job.status] || data.job.status} {data.job.error && `· ${data.job.error}`}</p>}
-          {data.batch?.error && <p className="mt-2 text-amber-200">{data.batch.error}</p>}
         </section>
         <details className="rounded-xl border border-slate-800 p-4">
           <summary className="cursor-pointer">科研品味 · {data.profile.paper_count} 篇论文 · 版本 {data.profile.version}</summary>
@@ -145,6 +144,7 @@ export default function PersonalRecommendations({ onBrowseAll }: { onBrowseAll: 
         {data.batch && <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-400">
           <p>{selectedBatchId ? batchLabel(data.batch) : '最新一期'} · {data.batch.count} 篇{selectedBatchId ? ` · 当时科研品味版本 ${data.batch.profile_version ?? '未知'}` : ''}</p>
         </div>}
+        {data.batch?.error && <p role="status" className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-sm text-amber-200">本期生成说明：{data.batch.error === '基础排序：模型暂不可用' ? '本期 AI 精排未完成，已使用基础排序（旧批次未记录具体原因）' : data.batch.error}</p>}
         {selectedBatchId && <p className="text-xs text-slate-500">保留本期生成时的论文顺序和推荐理由，入库状态按当前知识库更新。</p>}
         {!data.items.length && <div className="rounded-xl border border-dashed border-slate-700 p-10 text-center text-slate-400">{data.batch ? '本期没有符合条件的精选，相关性不足时不会凑数。' : data.profile.paper_count ? '还没有符合条件的精选。连接执行节点后更新；相关性不足时不会凑数。' : '先加入本地论文，让推荐从你的知识库开始。'}</div>}
         <div className="grid grid-cols-1 gap-4">{data.items.map(item => <RecommendationCard key={`${data.batch?.id}:${item.arxiv_id}`} item={item} batchId={data.batch!.id} busy={!!busy} adding={busy === item.arxiv_id}

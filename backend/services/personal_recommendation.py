@@ -366,6 +366,28 @@ def ai_shortlist(ranked):
     return select_diverse(ranked[:30], limit=12)
 
 
+def apply_ai_batches(ranked, output):
+    """Validate the exact partition; failed IDs retain honest non-AI baseline scores."""
+    if not isinstance(output, dict):
+        raise ValueError("AI 输出格式错误")  # noqa: TRY004 - shared validation error contract
+    fallback = output.get("fallback_ids", [])
+    if not isinstance(fallback, list) or any(
+        not isinstance(aid, str) for aid in fallback
+    ):
+        raise ValueError("AI 回退论文格式错误")
+    known = {item["arxiv_id"] for item in ranked}
+    if len(set(fallback)) != len(fallback) or not set(fallback).issubset(known):
+        raise ValueError("AI 回退包含未知或重复论文")
+    failed = set(fallback)
+    successful = apply_ai(
+        [item for item in ranked if item["arxiv_id"] not in failed], output
+    )
+    return sorted(
+        successful + [dict(item) for item in ranked if item["arxiv_id"] in failed],
+        key=lambda item: (-item["score"], item["arxiv_id"]),
+    )
+
+
 def apply_ai(ranked, output):
     """AI only adjusts scores for existing IDs and provides bounded explanations."""
     if not isinstance(output, dict) or not isinstance(output.get("items"), list):

@@ -21,7 +21,7 @@ from sqlalchemy import or_
 
 from services.personal_recommendation import (
     ai_shortlist,
-    apply_ai,
+    apply_ai_batches,
     aware,
     base_id,
     build_profile,
@@ -35,6 +35,8 @@ from services.personal_recommendation import (
 
 LEASE_MINUTES = 15
 MAX_ATTEMPTS = 3
+# Four groups of three per attempt, with at most three leased attempts.
+MAX_MODEL_CALLS = 12
 MONTHLY_BUDGET = 30.0
 HISTORY_DAYS = 90
 
@@ -394,7 +396,7 @@ def reserve_budget(db, worker, job_id, lease, amount, provider):
             calls=0,
         )
         db.add(usage)
-    if usage.calls >= MAX_ATTEMPTS:
+    if usage.calls >= MAX_MODEL_CALLS:
         raise ValueError("当前批次调用次数已达上限")
     usage.calls += 1
     usage.reserved_cny += amount
@@ -457,8 +459,10 @@ def complete(db, worker, job_id, lease, candidates, output=None, note=None):
     exclusions = job.snapshot.get("excluded", [])
     ranked = rank_candidates(job.snapshot, clean, excluded=exclusions, now=as_of)[:30]
     if output is not None:
-        ranked = apply_ai(ai_shortlist(ranked), output)
+        ranked = apply_ai_batches(ai_shortlist(ranked), output)
         for item in ranked:
+            if not item["ai"]:
+                continue
             db.query(RecCandidate).filter_by(arxiv_id=item["arxiv_id"]).update(
                 {
                     "features": {

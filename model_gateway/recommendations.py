@@ -7,6 +7,7 @@ import math
 import os
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from .config import (
@@ -20,6 +21,41 @@ from .runtime import (
     _resolve_codex_cli_command,
     create_openai_client_for_model,
 )
+
+
+class RecommendationInferenceError(ModelGatewayError):
+    """Stable safe diagnostic, never exposing CLI stderr, prompts or credentials."""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+def run_cli(args, **kwargs):
+    try:
+        return subprocess.run(args, check=kwargs.pop("check", False), **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise RecommendationInferenceError("timeout", "AI 精排超时") from exc
+    except FileNotFoundError as exc:
+        raise RecommendationInferenceError("cli_missing", "未找到 Codex CLI") from exc
+
+
+def cli_failure(stderr):
+    text = (stderr or "").lower()
+    if any(word in text for word in ("usage limit", "rate limit", "quota", "429")):
+        return RecommendationInferenceError("quota", "模型额度不足或请求受限")
+    if any(
+        word in text
+        for word in ("unauthorized", "401", "authentication", "token expired")
+    ):
+        return RecommendationInferenceError("auth", "模型登录已失效")
+    if any(
+        word in text
+        for word in ("unexpected argument", "unknown feature", "invalid value")
+    ):
+        return RecommendationInferenceError("cli_config", "CLI 版本或调用参数不兼容")
+    return RecommendationInferenceError("cli_failed", "Codex CLI 调用失败")
+
 
 OUTPUT_TOKENS = 9000
 SCHEMA = {
@@ -109,11 +145,12 @@ def resolve_route(cfg, provider_mode="cli"):
     model = get_model_entry(cfg, binding["model_id"])
     provider = get_provider_entry(cfg, model["provider_id"]) if model else None
     if not model or not provider or not provider.get("enabled", True):
-        raise ModelGatewayError("推荐模型未配置")
+        raise RecommendationInferenceError("config", "推荐模型未配置或未启用")
     is_cli = provider["provider_type"] == "codex_cli"
     if is_cli != (provider_mode == "cli"):
-        raise ModelGatewayError(
-            "推荐任务绑定与 worker --provider 不一致，请在设置中明确选择；不会自动切换付费 API"
+        raise RecommendationInferenceError(
+            "config",
+            "推荐任务绑定与 worker --provider 不一致，请在设置中明确选择；不会自动切换付费 API",
         )
     return cfg, binding, model, provider
 
@@ -139,29 +176,31 @@ def infer(
     output_rate=0.0,
     timeout=240,
 ):
+    deadline = time.monotonic() + timeout
     cfg, binding, model, provider = resolve_route(cfg, provider_mode)
     prompt = make_prompt(profile, candidates)
     if len(prompt.encode()) > 180000:
-        raise ModelGatewayError("推荐输入超过单次处理上限")
+        raise RecommendationInferenceError("input_limit", "推荐输入超过单次处理上限")
     if provider_mode == "cli":
         command = _resolve_codex_cli_command(provider.get("command", "codex"))
         env = dict(os.environ)
         env.pop("CODEX_API_KEY", None)
         env.pop("OPENAI_API_KEY", None)
-        login = subprocess.run(
+        login = run_cli(
             [command, "login", "status"],
             env=env,
             text=True,
             capture_output=True,
-            timeout=15,
+            timeout=min(15, max(0.1, deadline - time.monotonic())),
             check=False,
         )
         if (
             login.returncode
             or "logged in using chatgpt" not in (login.stdout + login.stderr).lower()
         ):
-            raise ModelGatewayError(
-                "推荐 CLI 需要 ChatGPT 登录；API 计费请显式选择 API 路径并配置预算价格"
+            raise RecommendationInferenceError(
+                "auth",
+                "推荐 CLI 需要 ChatGPT 登录；API 计费请显式选择 API 路径并配置预算价格",
             )
         reserve(0, "codex_cli")
         with tempfile.TemporaryDirectory(prefix="knowra-rec-") as directory:
@@ -207,20 +246,18 @@ def infer(
             ):
                 args += ["--disable", feature]
             args += ["-"]
-            completed = subprocess.run(
+            completed = run_cli(
                 args,
                 input=prompt,
                 text=True,
                 cwd=directory,
                 env=env,
                 capture_output=True,
-                timeout=timeout,
+                timeout=max(0.1, deadline - time.monotonic()),
                 check=False,
             )
             if completed.returncode or not output_file.exists():
-                raise ModelGatewayError(
-                    "Codex CLI 推荐调用失败，请在执行节点检查版本、登录或额度状态"
-                )
+                raise cli_failure(getattr(completed, "stderr", ""))
             raw = output_file.read_text()
     else:
         amount = price_upper_bound(prompt, input_rate, output_rate)
@@ -255,4 +292,6 @@ def infer(
     try:
         return json.loads(raw)
     except (ValueError, TypeError) as exc:
-        raise ModelGatewayError("模型输出不是有效 JSON") from exc
+        raise RecommendationInferenceError(
+            "invalid_output", "模型输出不是有效 JSON"
+        ) from exc

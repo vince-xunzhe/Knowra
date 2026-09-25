@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -21,6 +22,7 @@ from services.arxiv_service import search_arxiv
 from services.personal_recommendation import (
     ai_shortlist,
     apply_ai,
+    apply_ai_batches,
     aware,
     base_id,
     build_profile,
@@ -30,7 +32,7 @@ from services.personal_recommendation import (
     utcnow,
 )
 
-from model_gateway.recommendations import infer
+from model_gateway.recommendations import RecommendationInferenceError, infer
 
 
 class WorkerClient:
@@ -122,6 +124,47 @@ def fetch_candidates(job, *, search=search_arxiv, pause=time.sleep):
     return selected, failures
 
 
+AI_BATCH_SIZE = 3
+AI_CALL_TIMEOUT = 240
+PROCESS_BUDGET_SECONDS = (
+    660  # Includes retrieval; leave headroom in the 15-minute lease.
+)
+FAILURE_MESSAGES = {
+    "timeout": "AI 精排超时",
+    "time_budget": "本轮处理时间已达上限",
+    "auth": "模型登录已失效",
+    "quota": "模型额度不足或请求受限",
+    "budget": "本月推荐调用预算不足",
+    "call_limit": "本期调用次数已达上限",
+    "invalid_output": "模型输出或原文证据校验未通过",
+    "config": "推荐模型配置不匹配或未启用",
+    "cli_missing": "未找到 Codex CLI",
+    "cli_config": "CLI 版本或调用参数不兼容",
+    "cli_failed": "Codex CLI 调用失败",
+    "input_limit": "推荐输入超过单次处理上限",
+    "connection": "模型连接失败",
+    "model_error": "模型调用异常",
+}
+
+
+def failure_code(exc):
+    if isinstance(exc, RecommendationInferenceError):
+        return exc.code
+    if (
+        isinstance(exc, (subprocess.TimeoutExpired, TimeoutError))
+        or type(exc).__name__ == "APITimeoutError"
+    ):
+        return "timeout"
+    if isinstance(exc, ValueError):
+        return "invalid_output"
+    return {
+        "AuthenticationError": "auth",
+        "PermissionDeniedError": "auth",
+        "RateLimitError": "quota",
+        "APIConnectionError": "connection",
+    }.get(type(exc).__name__, "model_error")
+
+
 def process(
     job,
     cfg,
@@ -133,6 +176,7 @@ def process(
     input_rate=0,
     output_rate=0,
 ):
+    deadline = time.monotonic() + PROCESS_BUDGET_SECONDS
     failures = 0
     if candidates is None:
         candidates, failures = fetch_candidates(job)
@@ -148,25 +192,87 @@ def process(
         if provider == "api" and (input_rate <= 0 or output_rate <= 0):
             note = "基础排序：未配置可核算的 API 价格"
         else:
-            try:
-                output = infer(
-                    cfg,
-                    job["snapshot"],
-                    ai_shortlist(ranked),
-                    provider_mode=provider,
-                    reserve=reserve,
-                    input_rate=input_rate,
-                    output_rate=output_rate,
+            shortlist = ai_shortlist(ranked)
+            results, fallback, errors = [], [], []
+            for offset in range(0, len(shortlist), AI_BATCH_SIZE):
+                group = shortlist[offset : offset + AI_BATCH_SIZE]
+                remaining = deadline - time.monotonic()
+                if remaining < 20:
+                    fallback.extend(c["arxiv_id"] for c in shortlist[offset:])
+                    errors.append("time_budget")
+                    break
+                try:
+                    part = infer(
+                        cfg,
+                        job["snapshot"],
+                        group,
+                        provider_mode=provider,
+                        reserve=reserve,
+                        input_rate=input_rate,
+                        output_rate=output_rate,
+                        timeout=min(AI_CALL_TIMEOUT, remaining - 10),
+                    )
+                    apply_ai(
+                        group, part
+                    )  # Only validated groups enter the combined result.
+                    results.extend(part["items"])
+                except Exception as exc:
+                    if isinstance(exc, urllib.error.HTTPError):
+                        reason = str(exc.reason)
+                        if exc.code != 409:
+                            raise
+                        if "本月推荐调用预算不足" in reason:
+                            code = "budget"
+                        elif "当前批次调用次数已达上限" in reason:
+                            code = "call_limit"
+                        else:
+                            raise  # A stale lease must never publish results.
+                    else:
+                        code = failure_code(exc)
+                    errors.append(code)
+                    fallback.extend(c["arxiv_id"] for c in group)
+                    # Safe structured diagnostic: no raw exceptions, prompts, stderr or secrets.
+                    print(
+                        json.dumps(
+                            {
+                                "event": "recommendation_group_failed",
+                                "group": offset // AI_BATCH_SIZE + 1,
+                                "code": code,
+                                "exception_type": type(exc).__name__,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                    if code in {
+                        "auth",
+                        "quota",
+                        "budget",
+                        "call_limit",
+                        "config",
+                        "cli_missing",
+                        "cli_config",
+                    }:
+                        fallback.extend(
+                            c["arxiv_id"] for c in shortlist[offset + AI_BATCH_SIZE :]
+                        )
+                        break
+            if results:
+                output = {"items": results, "fallback_ids": fallback}
+                apply_ai_batches(shortlist, output)
+            if errors:
+                reasons = "；".join(
+                    FAILURE_MESSAGES.get(code, FAILURE_MESSAGES["model_error"])
+                    for code in dict.fromkeys(errors)
                 )
-                apply_ai(
-                    ai_shortlist(ranked), output
-                )  # Validate before publishing; no extra retries/cost.
-            except urllib.error.HTTPError as exc:
-                if exc.code != 409:
-                    raise
-                output, note = None, "基础排序：本月预算不足"
-            except Exception:  # noqa: BLE001 - external transport/model failures use a bounded fallback
-                output, note = None, "基础排序：模型暂不可用"
+                progress = (
+                    f"已完成 {len(results)}/{len(shortlist)} 篇，其余使用基础排序"
+                    if results
+                    else "未完成，已使用基础排序"
+                )
+                note = f"本期 AI 精排{progress}（{reasons}）"
+                if failures:
+                    note += "；部分检索失败，使用已获取元数据"
     elif no_ai:
         note = "基础排序：已关闭 AI"
     return {
@@ -235,7 +341,7 @@ def main():
         )
         ranked = rank_candidates(snapshot, data["candidates"], now=now)[:30]
         if result["ai_output"]:
-            ranked = apply_ai(ai_shortlist(ranked), result["ai_output"])
+            ranked = apply_ai_batches(ai_shortlist(ranked), result["ai_output"])
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(
             json.dumps(
@@ -304,11 +410,7 @@ def main():
                         output_rate=args.output_cny_per_million,
                     )
                     client.post(f"/{job['id']}/complete", result)
-                    state["health"] = (
-                        "model_unavailable"
-                        if result["note"] == "基础排序：模型暂不可用"
-                        else "ready"
-                    )
+                    state["health"] = "ready"
                     print(
                         "推荐批次已完成"
                         + (f"（{result['note']}）" if result["note"] else ""),

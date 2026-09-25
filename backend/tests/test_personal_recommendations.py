@@ -801,3 +801,176 @@ def test_explanation_refresh_preserves_selection_scores_and_order():
     output["items"][0]["evidence"] = "unsupported claim"
     with pytest.raises(ValueError, match="原文"):
         replace_explanations(original, output)
+
+
+def valid_group(group):
+    return {
+        "items": [
+            {
+                "arxiv_id": row["arxiv_id"],
+                "relevance": 0.9,
+                "reason": "与研究方向相关",
+                "evidence": "Gaussian splatting",
+                "features": [],
+            }
+            for row in group
+        ]
+    }
+
+
+def test_group_timeout_keeps_successes_and_publishes_mixed_cards(db):
+    import subprocess
+
+    from routers.recommendations import Result
+    from scripts.recommendation_worker import process
+
+    worker, _ = seed(db)
+    groups = []
+
+    def model(cfg, profile, group, **kwargs):
+        groups.append(group)
+        assert len(group) <= 3
+        assert kwargs["timeout"] <= 240
+        if len(groups) == 2:
+            raise subprocess.TimeoutExpired("codex", 240, stderr="SECRET-NEVER-LOG")
+        return valid_group(group)
+
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        with patch("scripts.recommendation_worker.infer", side_effect=model):
+            result = process(claim, {}, candidates=candidates(40))
+        assert len(groups) == 4
+        assert "9/12" in result["note"] and "超时" in result["note"]
+        assert "SECRET" not in result["note"]
+        assert len(result["ai_output"]["fallback_ids"]) == 3
+        body = Result(**result)
+        published = jobs.complete(
+            db,
+            worker,
+            claim["id"],
+            claim["lease"],
+            candidates(40),
+            body.ai_output,
+            body.note,
+        )
+        assert sum(item["ai"] for item in published.items) == 9
+        assert len(published.items) == 10
+        assert any(not item["ai"] for item in published.items)
+
+
+def test_bad_evidence_only_invalidates_its_group(db):
+    from scripts.recommendation_worker import process
+    from services.personal_recommendation import ai_shortlist, apply_ai_batches
+
+    worker, _ = seed(db)
+    groups = []
+
+    def model(cfg, profile, group, **kwargs):
+        groups.append(group)
+        output = valid_group(group)
+        if len(groups) == 1:
+            output["items"][0]["evidence"] = "Fabricated evidence"
+        return output
+
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        with patch("scripts.recommendation_worker.infer", side_effect=model):
+            result = process(claim, {}, candidates=candidates())
+        assert "校验未通过" in result["note"] and len(groups) == 4
+        shortlist = ai_shortlist(
+            rank_candidates(claim["snapshot"], candidates(), now=NOW)
+        )
+        combined = apply_ai_batches(shortlist, result["ai_output"])
+        assert sum(item["ai"] for item in combined) == 9
+        malformed = {**result["ai_output"], "fallback_ids": ["unknown"]}
+        with pytest.raises(ValueError):
+            apply_ai_batches(shortlist, malformed)
+        malformed = {
+            **result["ai_output"],
+            "fallback_ids": result["ai_output"]["fallback_ids"] * 2,
+        }
+        with pytest.raises(ValueError):
+            apply_ai_batches(shortlist, malformed)
+        with pytest.raises(ValueError, match="缺少"):
+            apply_ai_batches(shortlist, {"items": [], "fallback_ids": []})
+
+
+def test_overall_deadline_preserves_first_group_and_stops_calls(db):
+    from scripts.recommendation_worker import process
+
+    worker, _ = seed(db)
+    clock = [0.0]
+
+    def model(cfg, profile, group, **kwargs):
+        clock[0] = 661
+        return valid_group(group)
+
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        with (
+            patch(
+                "scripts.recommendation_worker.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            patch("scripts.recommendation_worker.infer", side_effect=model) as run,
+        ):
+            result = process(claim, {}, candidates=candidates())
+        assert run.call_count == 1
+        assert "3/12" in result["note"] and "时间已达上限" in result["note"]
+        assert len(result["ai_output"]["fallback_ids"]) == 9
+
+
+@pytest.mark.parametrize(
+    "code, expected", [("auth", "登录"), ("quota", "额度"), ("config", "配置")]
+)
+def test_non_retryable_model_failures_stop_further_groups(db, code, expected):
+    from scripts.recommendation_worker import process
+
+    from model_gateway.recommendations import RecommendationInferenceError
+
+    worker, _ = seed(db)
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        with patch(
+            "scripts.recommendation_worker.infer",
+            side_effect=RecommendationInferenceError(code, "private diagnostic"),
+        ) as run:
+            result = process(claim, {}, candidates=candidates())
+        assert run.call_count == 1
+        assert result["ai_output"] is None
+        assert expected in result["note"] and "private" not in result["note"]
+
+
+def test_four_groups_can_reserve_but_total_call_limit_still_applies(db):
+    worker, _ = seed(db)
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        claim = jobs.claim(db, worker, NOW)
+        for _ in range(jobs.MAX_MODEL_CALLS):
+            usage = jobs.reserve_budget(
+                db, worker, claim["id"], claim["lease"], 0, "codex_cli"
+            )
+            db.flush()
+        assert usage.calls == 12
+        with pytest.raises(ValueError, match="次数已达上限"):
+            jobs.reserve_budget(db, worker, claim["id"], claim["lease"], 0, "codex_cli")
+
+
+def test_cli_timeout_and_stderr_have_safe_error_codes():
+    import subprocess
+
+    from model_gateway.recommendations import (
+        RecommendationInferenceError,
+        cli_failure,
+        run_cli,
+    )
+
+    with patch(
+        "model_gateway.recommendations.subprocess.run",
+        side_effect=subprocess.TimeoutExpired("codex", 240, stderr="secret"),
+    ), pytest.raises(RecommendationInferenceError) as error:
+        run_cli(["codex"], timeout=240)
+    assert error.value.code == "timeout" and "secret" not in str(error.value)
+    assert cli_failure("401 authentication failed secret").code == "auth"
+    assert cli_failure("429 rate limit secret").code == "quota"
+    assert cli_failure("unexpected argument secret").code == "cli_config"
+    assert "secret" not in str(cli_failure("other failure secret"))
