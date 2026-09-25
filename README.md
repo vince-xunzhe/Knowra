@@ -10,6 +10,8 @@ For installation, environment setup, and startup commands, see [Install](INSTALL
 
 ## Highlights
 
+- **Personalized paper recommendations**: desktop profiles, scheduling, and adoption feedback run locally without cloud login or Fly.io. Rank arXiv metadata with your existing Codex CLI by default, or explicitly select an API; the service can later move to an SSH host. Mobile recommendations remain a separate optional cloud mode. See the [recommendation runbook](docs/RECOMMENDATION-RUNBOOK.md) for startup.
+
 - **Task-routed model gateway**: bind a different model to each task instead of using one global model everywhere. Settings now expose per-task routing for `paper_extract`, `paper_chat`, `embedding`, `wiki_compile`, `ask_agent`, `ask_synthesis`, and `promotion_judge`.
 - **Multi-provider support**: built-in support for `OpenAI`, OpenAI-compatible APIs (`Kimi`, `DeepSeek`, `Qwen`, `MiniMax`), and local `Codex CLI`, with provider health checks in Settings.
 - **Codex CLI across all non-embedding tasks**: paper extraction, paper follow-up chat, wiki compilation, Ask, Ask-to-concept synthesis, and concept promotion can now run through local Codex. Embeddings remain API-based.

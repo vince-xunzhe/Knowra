@@ -38,14 +38,16 @@ def search_arxiv(
     *,
     max_results: int = 40,
     since: Optional[datetime] = None,
+    start: int = 0,
+    sort_by: str = "submittedDate",
 ) -> list[dict]:
     """Run an arXiv search (newest first). Returns paper dicts. When ``since``
     is given, only entries published after it are kept."""
     params = {
         "search_query": query,
-        "start": 0,
+        "start": max(0, start),
         "max_results": max_results,
-        "sortBy": "submittedDate",
+        "sortBy": sort_by if sort_by in {"submittedDate", "relevance"} else "submittedDate",
         "sortOrder": "descending",
     }
     url = f"{_API}?{urllib.parse.urlencode(params)}"

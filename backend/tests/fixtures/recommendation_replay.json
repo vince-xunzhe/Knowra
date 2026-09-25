@@ -1,0 +1,449 @@
+{
+  "dataset": "synthetic-contract-fixtures-v1-not-quality-benchmark",
+  "cases": [
+    {
+      "id": "synthetic-0",
+      "cutoff": "2026-09-23T00:00:00+00:00",
+      "papers": [
+        {
+          "id": "library-0",
+          "filename": "arxiv_2501.00100.pdf",
+          "title": "Gaussian splatting reconstruction",
+          "created_at": "2026-09-01T00:00:00+00:00"
+        }
+      ],
+      "candidates": [
+        {
+          "arxiv_id": "2609.01000",
+          "title": "Particle detector calibration experiment 0",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01001",
+          "title": "Particle detector calibration experiment 1",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01002",
+          "title": "Particle detector calibration experiment 2",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01003",
+          "title": "Particle detector calibration experiment 3",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01004",
+          "title": "Particle detector calibration experiment 4",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01005",
+          "title": "Particle detector calibration experiment 5",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01006",
+          "title": "Particle detector calibration experiment 6",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01007",
+          "title": "Particle detector calibration experiment 7",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01008",
+          "title": "Particle detector calibration experiment 8",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01009",
+          "title": "Particle detector calibration experiment 9",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01010",
+          "title": "Particle detector calibration experiment 10",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01011",
+          "title": "Particle detector calibration experiment 11",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.00100",
+          "title": "Gaussian splatting reconstruction with efficient generalization",
+          "abstract": "We study gaussian splatting reconstruction using improved representations.",
+          "authors": [],
+          "published": "2026-09-20T00:00:00+00:00"
+        }
+      ],
+      "future_adoptions": [
+        {
+          "arxiv_id": "2609.00100",
+          "created_at": "2026-09-25T00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "synthetic-1",
+      "cutoff": "2026-09-23T00:00:00+00:00",
+      "papers": [
+        {
+          "id": "library-1",
+          "filename": "arxiv_2501.00101.pdf",
+          "title": "Robotics manipulation planning",
+          "created_at": "2026-09-01T00:00:00+00:00"
+        }
+      ],
+      "candidates": [
+        {
+          "arxiv_id": "2609.01020",
+          "title": "Particle detector calibration experiment 0",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01021",
+          "title": "Particle detector calibration experiment 1",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01022",
+          "title": "Particle detector calibration experiment 2",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01023",
+          "title": "Particle detector calibration experiment 3",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01024",
+          "title": "Particle detector calibration experiment 4",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01025",
+          "title": "Particle detector calibration experiment 5",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01026",
+          "title": "Particle detector calibration experiment 6",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01027",
+          "title": "Particle detector calibration experiment 7",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01028",
+          "title": "Particle detector calibration experiment 8",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01029",
+          "title": "Particle detector calibration experiment 9",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01030",
+          "title": "Particle detector calibration experiment 10",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01031",
+          "title": "Particle detector calibration experiment 11",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.00101",
+          "title": "Robotics manipulation planning with efficient generalization",
+          "abstract": "We study robotics manipulation planning using improved representations.",
+          "authors": [],
+          "published": "2026-09-20T00:00:00+00:00"
+        }
+      ],
+      "future_adoptions": [
+        {
+          "arxiv_id": "2609.00101",
+          "created_at": "2026-09-25T00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "synthetic-2",
+      "cutoff": "2026-09-23T00:00:00+00:00",
+      "papers": [
+        {
+          "id": "library-2",
+          "filename": "arxiv_2501.00102.pdf",
+          "title": "Diffusion image generation",
+          "created_at": "2026-09-01T00:00:00+00:00"
+        }
+      ],
+      "candidates": [
+        {
+          "arxiv_id": "2609.01040",
+          "title": "Particle detector calibration experiment 0",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01041",
+          "title": "Particle detector calibration experiment 1",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01042",
+          "title": "Particle detector calibration experiment 2",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01043",
+          "title": "Particle detector calibration experiment 3",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01044",
+          "title": "Particle detector calibration experiment 4",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01045",
+          "title": "Particle detector calibration experiment 5",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01046",
+          "title": "Particle detector calibration experiment 6",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01047",
+          "title": "Particle detector calibration experiment 7",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01048",
+          "title": "Particle detector calibration experiment 8",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01049",
+          "title": "Particle detector calibration experiment 9",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01050",
+          "title": "Particle detector calibration experiment 10",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01051",
+          "title": "Particle detector calibration experiment 11",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.00102",
+          "title": "Diffusion image generation with efficient generalization",
+          "abstract": "We study diffusion image generation using improved representations.",
+          "authors": [],
+          "published": "2026-09-20T00:00:00+00:00"
+        }
+      ],
+      "future_adoptions": [
+        {
+          "arxiv_id": "2609.00102",
+          "created_at": "2026-09-25T00:00:00+00:00"
+        }
+      ]
+    },
+    {
+      "id": "synthetic-3",
+      "cutoff": "2026-09-23T00:00:00+00:00",
+      "papers": [
+        {
+          "id": "library-3",
+          "filename": "arxiv_2501.00103.pdf",
+          "title": "Multimodal instruction alignment",
+          "created_at": "2026-09-01T00:00:00+00:00"
+        }
+      ],
+      "candidates": [
+        {
+          "arxiv_id": "2609.01060",
+          "title": "Particle detector calibration experiment 0",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01061",
+          "title": "Particle detector calibration experiment 1",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01062",
+          "title": "Particle detector calibration experiment 2",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01063",
+          "title": "Particle detector calibration experiment 3",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01064",
+          "title": "Particle detector calibration experiment 4",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01065",
+          "title": "Particle detector calibration experiment 5",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01066",
+          "title": "Particle detector calibration experiment 6",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01067",
+          "title": "Particle detector calibration experiment 7",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01068",
+          "title": "Particle detector calibration experiment 8",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01069",
+          "title": "Particle detector calibration experiment 9",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01070",
+          "title": "Particle detector calibration experiment 10",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.01071",
+          "title": "Particle detector calibration experiment 11",
+          "abstract": "Measurements of collider particle detectors.",
+          "authors": [],
+          "published": "2026-09-22T00:00:00+00:00"
+        },
+        {
+          "arxiv_id": "2609.00103",
+          "title": "Multimodal instruction alignment with efficient generalization",
+          "abstract": "We study multimodal instruction alignment using improved representations.",
+          "authors": [],
+          "published": "2026-09-20T00:00:00+00:00"
+        }
+      ],
+      "future_adoptions": [
+        {
+          "arxiv_id": "2609.00103",
+          "created_at": "2026-09-25T00:00:00+00:00"
+        }
+      ]
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import {
 import { Ionicons } from '@expo/vector-icons'
 
 import { useAuth } from '../contexts/AuthContext'
+import PersonalRecommendations from './PersonalRecommendations'
 import {
   cloudRecommendations, cloudRecMarks, cloudAddRecMark, cloudRemoveRecMark,
   type RecItem,
@@ -18,6 +19,18 @@ let feedCache: RecItem[] | null = null
 interface Section { title: string; data: RecItem[]; count: number }
 
 export default function RecommendScreen() {
+  const auth = useAuth()
+  const [tab, setTab] = useState<'personal' | 'public'>('personal')
+  if (!auth.user) return <View style={styles.centered}><Text style={styles.note}>请先登录云端账号</Text></View>
+  return <View style={styles.container}>
+    <View style={{ flexDirection: 'row', gap: 20, padding: 12 }}>
+      {(['personal', 'public'] as const).map(value => <TouchableOpacity key={value} onPress={() => setTab(value)}><Text style={{ color: tab === value ? '#a5b4fc' : '#64748b', fontWeight: '600' }}>{value === 'personal' ? '为你精选' : '全部论文'}</Text></TouchableOpacity>)}
+    </View>
+    {tab === 'personal' ? <PersonalRecommendations key={auth.user.id} onBrowseAll={() => setTab('public')} /> : <PublicRecommendScreen key={auth.user.id} />}
+  </View>
+}
+
+function PublicRecommendScreen() {
   const auth = useAuth()
   const [items, setItems] = useState<RecItem[]>(feedCache ?? [])
   const [marks, setMarks] = useState<Set<string>>(new Set())

@@ -155,6 +155,8 @@ def _loop() -> None:
         db = None
         try:
             db = cloud_db.cloud_session()
+            from services.recommendation_jobs import schedule_all
+            schedule_all(db)
             summary = run_search(db)
             if summary["added"] or summary["tags"]:
                 log.info("rec scheduler: %s", summary)

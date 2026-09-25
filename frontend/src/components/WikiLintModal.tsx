@@ -47,7 +47,7 @@ interface Props {
  */
 export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept }: Props) {
   const [status, setStatus] = useState<LintReportStatus | null>(null)
-  const { job, result, start } = useWikiLint()
+  const { job, result, start, dismissNotification } = useWikiLint()
   const [submitting, setSubmitting] = useState(false)
   const running = submitting || job?.status === 'running'
   const [useLlm, setUseLlm] = useState(true)
@@ -74,6 +74,14 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
     if (!open) return
     getWikiLintStatus().then(setStatus).catch(() => setStatus(null))
   }, [open])
+
+  const jobId = job?.job_id
+  const jobStatus = job?.status
+  useEffect(() => {
+    if (open && jobId && jobStatus !== 'running' && jobStatus !== 'idle') {
+      dismissNotification(jobId)
+    }
+  }, [open, jobId, jobStatus, dismissNotification])
 
   const handleRun = useCallback(async () => {
     setSubmitting(true)

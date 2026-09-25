@@ -1753,6 +1753,46 @@ class RecSummaryInput(BaseModel):
     abstract: Optional[str] = None
 
 
+class RecImportInput(BaseModel):
+    arxiv_id: str
+    title: Optional[str] = None
+    authors: list[str] = []
+
+
+@router.post("/recommendations/import")
+def import_recommendation(body: RecImportInput, db: Session = Depends(get_db)):
+    """Explicit adoption: persist a real local Paper, then normal sync confirms it."""
+    from config import is_cloud_mode
+    from path_utils import PAPERS_DIR
+    from services.personal_recommendation import base_id
+    from services.pdf_service import compute_hash
+    from sqlalchemy.exc import IntegrityError
+
+    if is_cloud_mode():
+        raise HTTPException(404, "论文文件入库在桌面端执行")
+    aid = base_id(body.arxiv_id)
+    if not aid:
+        raise HTTPException(400, "无效 arXiv ID")
+    result = download_recommendation(RecDownloadInput(arxiv_id=aid, pdf_url=f"https://arxiv.org/pdf/{aid}", title=body.title), db)
+    cfg = load_config()
+    path = resolve_papers_directory(cfg.get("scan_directory") or str(PAPERS_DIR)) / result["filename"]
+    digest = compute_hash(str(path))
+    paper = db.query(Paper).filter_by(file_hash=digest).first()
+    if paper is None:
+        paper = Paper(filepath=portable_data_path(path), filename=path.name, file_hash=digest,
+                      title=(body.title or "")[:500], authors=body.authors[:80], processed=False,
+                      processing_status="scanning")
+        db.add(paper)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            paper = db.query(Paper).filter_by(filepath=portable_data_path(path)).first()
+            if paper is None:
+                raise HTTPException(409, "论文入库冲突，请刷新后重试")
+    return {"status": "imported", "paper_id": paper.id, "arxiv_id": aid}
+
+
 @router.post("/recommendations/summarize")
 def summarize_recommendation(body: RecSummaryInput, db: Session = Depends(get_db)):
     """Condense a recommended paper's abstract with the user's LOCAL model

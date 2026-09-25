@@ -184,12 +184,12 @@ export default function SettingsPage() {
   }, [handleSave])
 
   const gateway = config.model_gateway || emptyGateway()
-  const providers = gateway.providers || []
+  const providers = useMemo(() => gateway.providers || [], [gateway.providers])
   const models = useMemo(
     () => mergeModels(gateway.models || [], config.available_model_gateway_models),
     [gateway.models, config.available_model_gateway_models],
   )
-  const taskSpecs = gateway.task_specs || []
+  const taskSpecs = useMemo(() => gateway.task_specs || [], [gateway.task_specs])
   const taskBindings = gateway.task_bindings || {}
   const modelById = useMemo(() => Object.fromEntries(models.map(model => [model.id, model])), [models])
   const providerById = useMemo(() => Object.fromEntries(providers.map(provider => [provider.id, provider])), [providers])
@@ -200,16 +200,6 @@ export default function SettingsPage() {
     return binding.model_id ? modelById[binding.model_id] || null : null
   }, [modelById, taskBindings.paper_extract, taskSpecs])
   const selectedProvider = providers.find(provider => provider.id === selectedProviderId) || providers[0] || null
-
-  useEffect(() => {
-    if (providers.length === 0) {
-      setSelectedProviderId('')
-      return
-    }
-    if (!providers.some(provider => provider.id === selectedProviderId)) {
-      setSelectedProviderId(providers[0].id)
-    }
-  }, [providers, selectedProviderId])
 
   const setTaskBinding = useCallback((taskId: string, next: Required<ModelGatewayTaskBinding>) => {
     updateGateway(current => ({
@@ -223,16 +213,20 @@ export default function SettingsPage() {
 
   // ── merged model selection ────────────────────────────────────────────
   // Settings used to render one card per task (8 of them — too fragmented).
-  // We collapse every NON-embedding task into a single 「主模型」 and keep
-  // embedding (图谱向量与相似边) on its own. Under the hood we still write
+  // Keep recommendation routing independent of the main model and embedding.
+  // Collapse the other tasks into 「主模型」. Under the hood we still write
   // per-task bindings (the backend resolves per task), but one picker drives
-  // the whole non-embedding set together.
+  // the main task group together.
   const mainTaskIds = useMemo(
-    () => taskSpecs.filter(task => task.task_type !== 'embedding').map(task => task.id),
+    () => taskSpecs.filter(task => task.task_type !== 'embedding' && task.id !== 'recommend_rank').map(task => task.id),
     [taskSpecs],
   )
   const embeddingTask = useMemo(
     () => taskSpecs.find(task => task.task_type === 'embedding') || null,
+    [taskSpecs],
+  )
+  const recommendationTask = useMemo(
+    () => taskSpecs.find(task => task.id === 'recommend_rank') || null,
     [taskSpecs],
   )
   const mainRepTaskId = mainTaskIds[0] || 'paper_extract'
@@ -270,7 +264,7 @@ export default function SettingsPage() {
     }))
   }, [updateGateway, mainTaskIds])
 
-  // The cards actually rendered: one synthetic 主模型 + the embedding task.
+  // Main, embedding, and recommendation each have a separate route.
   const displayTasks = useMemo<ModelGatewayTaskSpec[]>(() => {
     const list: ModelGatewayTaskSpec[] = []
     const rep = taskSpecs.find(task => task.id === mainRepTaskId)
@@ -280,12 +274,13 @@ export default function SettingsPage() {
         id: '__main__',
         label: '主模型',
         category: '通用',
-        description: '论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查 —— 除“图谱向量”外的全部任务共用此模型；改这里即全部生效。需支持视觉（论文抽取要读首页图）。',
+        description: '论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量与论文精选单独配置。',
       })
     }
     if (embeddingTask) list.push(embeddingTask)
+    if (recommendationTask) list.push(recommendationTask)
     return list
-  }, [taskSpecs, mainRepTaskId, embeddingTask])
+  }, [taskSpecs, mainRepTaskId, embeddingTask, recommendationTask])
 
   const handleTestProvider = useCallback(async (providerId: string) => {
     setTestingProviderId(providerId)
@@ -497,15 +492,15 @@ export default function SettingsPage() {
             <div className="mb-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">任务配置</p>
               <p className="mt-1 text-base font-semibold text-slate-100">模型选择</p>
-              <p className="text-xs text-slate-500 mt-1">除“图谱向量”外的任务共用「主模型」，向量单独配。`Provider` 决定走 `Codex` 还是 `OpenAPI`，`Brand`/`Model` 显示当前可用候选。</p>
+              <p className="text-xs text-slate-500 mt-1">主模型、图谱向量和论文精选分别配置。论文精选默认使用 Codex CLI；更换主模型不会改变推荐调用方式。</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
               {displayTasks.map(task => {
                 const isMain = task.id === '__main__'
                 const recommendedModel = task.recommended_model_id ? modelById[task.recommended_model_id] : null
-                const candidates = isMain ? mainCandidates : embeddingCandidates
-                const binding = isMain ? mainBinding : (embeddingBinding ?? mainBinding)
+                const candidates = isMain ? mainCandidates : task.task_type === 'embedding' ? embeddingCandidates : models.filter(model => model.supported_tasks.includes(task.id))
+                const binding = isMain ? mainBinding : task.task_type === 'embedding' ? (embeddingBinding ?? mainBinding) : normalizeTaskBinding(taskBindings[task.id], task.recommended_model_id || '')
                 const applyBinding = isMain
                   ? setMainBinding
                   : (next: Required<ModelGatewayTaskBinding>) => setTaskBinding(task.id, next)

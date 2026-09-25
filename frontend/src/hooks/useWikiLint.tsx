@@ -1,19 +1,29 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { getWikiLintJob, getWikiLintResult, runWikiLint, type LintJobState, type LintResult } from '../api/client'
 
 interface LintContextValue {
   job: LintJobState | null
   result: LintResult | null
   connectionError: boolean
+  dismissedJobId: string | null
+  dismissNotification: (jobId: string) => void
   start: (useLlm: boolean) => Promise<void>
 }
 
 const LintContext = createContext<LintContextValue | null>(null)
+const DISMISSED_JOB_KEY = 'knowra.wiki-lint.dismissed-job'
 
 export function WikiLintProvider({ children }: { children: ReactNode }) {
   const [job, setJob] = useState<LintJobState | null>(null)
   const [result, setResult] = useState<LintResult | null>(null)
   const [connectionError, setConnectionError] = useState(false)
+  const [dismissedJobId, setDismissedJobId] = useState<string | null>(() => {
+    try { return localStorage.getItem(DISMISSED_JOB_KEY) } catch { return null }
+  })
+  const dismissNotification = useCallback((jobId: string) => {
+    setDismissedJobId(jobId)
+    try { localStorage.setItem(DISMISSED_JOB_KEY, jobId) } catch { /* Keep session dismissal if storage is unavailable. */ }
+  }, [])
   const revision = useRef(0)
   const loadedResultId = useRef<string | null>(null)
 
@@ -58,7 +68,7 @@ export function WikiLintProvider({ children }: { children: ReactNode }) {
     setConnectionError(false)
   }
 
-  return <LintContext.Provider value={{ job, result, connectionError, start }}>{children}</LintContext.Provider>
+  return <LintContext.Provider value={{ job, result, connectionError, dismissedJobId, dismissNotification, start }}>{children}</LintContext.Provider>
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

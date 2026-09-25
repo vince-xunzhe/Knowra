@@ -767,3 +767,57 @@ export async function sha256Hex(data: ArrayBuffer | Uint8Array | string): Promis
     .map(b => b.toString(16).padStart(2, '0'))
     .join('')
 }
+
+export interface PersonalRecItem {
+  arxiv_id: string; title: string; abstract: string; authors: string[]; published: string | null;
+  primary_category?: string | null;
+  reason: string; evidence?: string; score: number; ai: boolean; historical: boolean;
+  lane: 'long_term' | 'recent' | 'explore'; matched_terms: string[]; matched_teams: string[];
+  sources: { id: string; title: string }[];
+}
+export interface PersonalFeed {
+  profile: { version: number; current_focus: string; paper_count: number; dimensions: Record<string, Record<string, number>> };
+  batch: { id: string; status: string; error: string | null; created_at: string; completed_at: string | null } | null;
+  job: { id: string; status: string; error: string | null; created_at: string; completed_at: string | null } | null;
+  items: PersonalRecItem[];
+  workers: { node_id: string; health: string; last_seen_at: string | null }[];
+  worker_status: 'not_configured' | 'online' | 'offline';
+  metrics: { viewed: number; mature_viewed: number; adopted: number; exposed: number; adoption_rate_14d: number | null; target: number };
+  pending_imports: { arxiv_id: string; batch_id: string; title: string }[];
+  budget: { limit_cny: number; reserved_cny: number };
+}
+
+const PERSONAL_REC = '/api/cloud/personal-recommendations'
+export class PersonalRecommendationsUnavailableError extends Error {
+  constructor() {
+    super('当前云端服务尚未启用个性化推荐。服务升级完成后即可使用，已有论文和全部论文推荐不受影响。')
+    this.name = 'PersonalRecommendationsUnavailableError'
+  }
+}
+
+export async function personalRecommendations(): Promise<PersonalFeed> {
+  try {
+    return (await cloudClient().get<PersonalFeed>(PERSONAL_REC)).data
+  } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      throw new PersonalRecommendationsUnavailableError()
+    }
+    throw error
+  }
+}
+export async function saveRecommendationFocus(current_focus: string) {
+  return cloudClient().put(PERSONAL_REC + '/focus', { current_focus }).then(r => r.data)
+}
+export async function refreshPersonalRecommendations() {
+  return cloudClient().post<{ id: string | null; status: string }>(PERSONAL_REC + '/refresh').then(r => r.data)
+}
+export async function recommendationEvent(batch_id: string, arxiv_id: string, kind: 'exposed' | 'viewed' | 'requested') {
+  return cloudClient().post(PERSONAL_REC + '/events', { batch_id, arxiv_id, kind }).then(r => r.data)
+}
+
+export async function registerRecommendationWorker(node_id: string) {
+  return cloudClient().post<{ node_id: string; token: string }>(PERSONAL_REC + '/workers', { node_id }).then(r => r.data)
+}
+export async function revokeRecommendationWorker(nodeId: string) {
+  return cloudClient().delete(PERSONAL_REC + '/workers/' + encodeURIComponent(nodeId))
+}

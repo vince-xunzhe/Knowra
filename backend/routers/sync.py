@@ -977,6 +977,10 @@ def commit(
     }
 
     try:
+        # Only persisted paper rows count as positive recommendation feedback.
+        db.flush()
+        from services.recommendation_jobs import reconcile_adoptions
+        reconcile_adoptions(db, user.user_id, now)
         db.commit()
     except IntegrityError as exc:
         db.rollback()

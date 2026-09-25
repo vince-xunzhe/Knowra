@@ -33,6 +33,9 @@ frontend/dist/
 data/wiki-lint-job.json
 data/.wiki-lint-*
 data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db.worker.lock
 data/*.sqlite
 data/*.sqlite3
 data/knowledge.db

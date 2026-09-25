@@ -49,7 +49,12 @@ app.include_router(dashboard.router)
 # start tidy.
 if not is_cloud_mode():
     from routers import sync_local
+    from routers import recommendation_local
     app.include_router(sync_local.router)
+    app.include_router(recommendation_local.router)
+    app.add_event_handler("shutdown", recommendation_local.shutdown_worker)
+    from routers.recommendation_workspace import create_workspace_app
+    app.mount("/api/recommendations", create_workspace_app())
 
 # Cloud-mode-only routers + DB wiring. Mounting these unconditionally would require
 # Supabase env vars even on desktop where they make no sense, so we
@@ -57,6 +62,7 @@ if not is_cloud_mode():
 if is_cloud_mode():
     from routers import sync as sync_router
     from routers import cloud as cloud_router
+    from routers import recommendations as recommendations_router
     import cloud_db
 
     # Boot the cloud DB engine and override the tests-only stub so
@@ -71,6 +77,7 @@ if is_cloud_mode():
 
     app.include_router(sync_router.router)
     app.include_router(cloud_router.router)
+    app.include_router(recommendations_router.router)
 
     # Mon/Wed/Fri arXiv recommendation scheduler — a daemon thread that's
     # catch-up friendly (runs due tags on the next hourly tick). Skipped on the
@@ -143,6 +150,11 @@ def startup():
         rebuild_index()
     except Exception as e:
         print(f"[wiki_search] startup index failed: {e}")
+
+
+if not is_cloud_mode():
+    # Registered after startup() so the existing library schema is ready first.
+    app.add_event_handler("startup", recommendation_local.start_local)
 
 
 @app.get("/")

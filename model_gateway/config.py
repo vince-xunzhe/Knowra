@@ -170,6 +170,17 @@ def ensure_model_gateway_config(cfg: dict[str, Any]) -> dict[str, Any]:
 
     bindings = _legacy_binding_defaults(cfg)
     raw_bindings = gateway.get("task_bindings") or {}
+    # New recommendation tasks inherit an already configured CLI text model.
+    # Existing explicit task choices (including API choices) always win.
+    if "recommend_rank" not in raw_bindings:
+        for task_id in ("wiki_compile", "paper_extract", "ask_agent"):
+            old_binding = raw_bindings.get(task_id)
+            old_model = old_binding.get("model_id", "") if isinstance(old_binding, dict) else str(old_binding or "")
+            entry = next((m for m in models if m["id"] == old_model), None)
+            provider = next((p for p in providers if entry and p["id"] == entry["provider_id"]), None)
+            if provider and provider["provider_type"] == "codex_cli":
+                bindings["recommend_rank"]["model_id"] = old_model
+                break
     for task_id in TASK_IDS:
         bindings[task_id] = _normalize_task_binding(
             raw_bindings.get(task_id),
