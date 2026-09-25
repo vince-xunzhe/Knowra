@@ -7,6 +7,7 @@ import {
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
   uploadPapers, listPaperCategories, updatePaperCategory,
+  getCachedPapers,
   type PaperRecord,
 } from '../api/client'
 import PromptPanel from '../components/PromptPanel'
@@ -64,8 +65,8 @@ interface PapersPageProps {
 }
 
 export default function PapersPage({ onOpenReview }: PapersPageProps) {
-  const [papers, setPapers] = useState<PaperRecord[]>([])
-  const [loading, setLoading] = useState(true)
+  const [papers, setPapers] = useState<PaperRecord[]>(() => getCachedPapers() ?? [])
+  const [loading, setLoading] = useState(() => getCachedPapers() === null)
   const [selected, setSelected] = useState<PaperRecord | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set())
   const [status, setStatus] = useState<ProcStatus | null>(null)
@@ -93,6 +94,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       const ps = await listPapers()
       setPapers(ps)
       setSelected(prev => prev ? ps.find(p => p.id === prev.id) || null : null)
+      setActionNotice(previous => previous?.title === '论文列表暂未刷新' ? null : previous)
     } catch (error) {
       console.error('Failed to load papers', error)
     }
@@ -109,6 +111,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         setSelected(prev => prev ? ps.find(p => p.id === prev.id) || null : null)
       } catch (error) {
         console.error('Failed to load papers', error)
+        if (!cancelled) setActionNotice({ tone: 'warning', title: '论文列表暂未刷新', detail: '保留已加载的论文；后端响应后会自动更新。' })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -130,11 +133,17 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 
   useEffect(() => {
     let cancelled = false
+    let polling = false
+    let lastProgress = ''
+    let lastListRefresh = 0
     const poll = async () => {
+      if (polling) return
+      polling = true
       try {
         const s = await getStatus()
         if (cancelled) return
         setStatus(s)
+        setActionNotice(previous => previous?.title === '状态暂未刷新' ? null : previous)
         if (wasRunningRef.current && !s.running) {
           setPendingIds(new Set())
           setActionNotice(
@@ -150,19 +159,26 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   detail: '所有任务已处理完成。',
                 },
           )
-          load()
-        } else if (s.running && s.current) {
-          load()
+          await load()
+        } else {
+          const progress = `${s.running}:${s.current}:${s.done}:${s.errors}`
+          if (progress !== lastProgress || Date.now() - lastListRefresh > 30000) {
+            await load()
+            lastProgress = progress
+            lastListRefresh = Date.now()
+          }
         }
         wasRunningRef.current = s.running
       } catch (error) {
+        if (cancelled) return
         console.error('Failed to poll processing status', error)
-        setPendingIds(new Set())
         setActionNotice({
-          tone: 'error',
-          title: '无法获取处理状态',
-          detail: getErrorMessage(error),
+          tone: 'warning',
+          title: '状态暂未刷新',
+          detail: '暂时无法连接后端，正在自动重试；这不代表后台论文任务失败。',
         })
+      } finally {
+        polling = false
       }
     }
     void poll()

@@ -86,8 +86,17 @@ def _backfill_promotion_status(conn) -> None:
 DB_PATH = Path(__file__).parent.parent / "data" / "knowledge.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 30})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
+def enable_sqlite_wal(bind) -> None:
+    # Run once at startup, outside a write transaction. Readers can keep
+    # browsing while a writer commits; SQLite still serializes writers.
+    with bind.connect() as conn:
+        mode = conn.exec_driver_sql("PRAGMA journal_mode=WAL").scalar()
+        if str(mode).lower() != "wal":
+            raise RuntimeError("Could not enable WAL for the local database")
 
 
 def _create_unique_index_if_clean(
@@ -319,6 +328,7 @@ def _migrate():
 
 def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    enable_sqlite_wal(engine)
     Base.metadata.create_all(bind=engine)
     _migrate()
 

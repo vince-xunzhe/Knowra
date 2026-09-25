@@ -235,16 +235,7 @@ class Result(BaseModel):
     lease: str = Field(max_length=80)
     candidates: list[Candidate] = Field(max_length=600)
     ai_output: Optional[dict] = None
-    note: Optional[
-        Literal[
-            "基础排序：未配置可核算的 API 价格",
-            "基础排序：模型暂不可用",
-            "基础排序：本月预算不足",
-            "基础排序：无可用模型",
-            "基础排序：已关闭 AI",
-            "部分检索失败，使用已获取元数据",
-        ]
-    ] = None
+    note: Optional[str] = Field(default=None, max_length=400)
 
 
 @endpoints.post("/worker/{job_id}/complete")

@@ -231,7 +231,13 @@ run_native() {
   echo ""
 
   cd "$BACKEND_DIR"
-  "$VENV_DIR/bin/uvicorn" main:app --host 127.0.0.1 --port "$BACKEND_PORT" --reload &
+  # Normal reading sessions must not be interrupted by source-file edits.
+  # Opt in explicitly while developing; reload can interrupt in-flight model work.
+  local backend_args=(main:app --host 127.0.0.1 --port "$BACKEND_PORT" --timeout-graceful-shutdown 10)
+  if [ "${BACKEND_RELOAD:-0}" = "1" ]; then
+    backend_args+=(--reload)
+  fi
+  "$VENV_DIR/bin/uvicorn" "${backend_args[@]}" &
   BACKEND_PID=$!
 
   cd "$FRONTEND_DIR"

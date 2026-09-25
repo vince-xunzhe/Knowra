@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import create_engine, text
+from services.sqlite_backup import backup_sqlite
 
 from multitenant_migration import (
     DEFAULT_LOCAL_USER_ID,
@@ -108,7 +108,7 @@ def main() -> int:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tf:
             tmp_path = Path(tf.name)
         try:
-            shutil.copy2(db_path, tmp_path)
+            backup_sqlite(db_path, tmp_path)
             print(f"[dry-run] working copy: {tmp_path}")
             engine = create_engine(f"sqlite:///{tmp_path}")
             with engine.connect() as conn:
@@ -135,7 +135,7 @@ def main() -> int:
     backup: Path | None = None
     if not args.no_backup:
         backup = _backup_path(db_path)
-        shutil.copy2(db_path, backup)
+        backup_sqlite(db_path, backup)
         print(f"backup written: {backup}")
 
     engine = create_engine(f"sqlite:///{db_path}")

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from config import load_config, task_reasoning_effort
@@ -39,6 +40,7 @@ from services.graph_service import (
     normalize_source_paper_ids,
 )
 from services.paper_category_service import effective_paper_category
+from services.db_snapshot import finish_read_snapshot
 
 
 def _log(msg: str) -> None:
@@ -528,6 +530,9 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
     """Generate / refresh wiki/papers/{id}-{slug}.md from this paper's
     extraction + notes. Returns None if there is nothing to compile yet
     (e.g. paper is unprocessed)."""
+    state = inspect(paper, raiseerr=False)
+    if state is not None and state.session is not None:
+        finish_read_snapshot(state.session)
     if not paper.processed or not paper.raw_llm_response:
         return None
 
@@ -655,6 +660,7 @@ def compile_concept_page(
         return None
 
     papers = _published_concept_source_papers(node, db)
+    finish_read_snapshot(db)
     snippets = [(p.id, _snippet_for_paper(p)) for p in papers]
     if not snippets:
         return None
@@ -738,6 +744,7 @@ def compile_all_paper_pages(
     per paper — used by the router to surface live status to the frontend.
     """
     papers = db.query(Paper).filter(Paper.processed.is_(True)).all()
+    finish_read_snapshot(db)
     total = len(papers)
     _log(f"compile_all_paper_pages start: {total} papers, model={model}")
     written: List[Path] = []

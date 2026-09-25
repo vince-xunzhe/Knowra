@@ -20,6 +20,7 @@ import {
   getWikiLintStatus,
   getWikiStatus,
   processAll,
+  retryFailedPapers,
   recompileAllConcepts,
   recompileAllPaperPages,
   runPromotion,
@@ -41,6 +42,7 @@ export interface ProcessingStatus {
   current: string
   succeeded: number
   pending: number | null
+  failedCount: number
   failedPapers: Array<{
     id: string
     filename: string
@@ -92,6 +94,7 @@ export interface NextStep {
 export interface PipelineActions {
   scan: () => Promise<PaperScanResult>
   process: () => Promise<void>
+  retryFailed: () => Promise<void>
   runPromotionRun: (
     params: { use_llm: boolean; force_all: boolean },
     onProgress?: (status: PromotionRunStatus) => void,
@@ -111,9 +114,7 @@ export interface PipelineState {
   compileStatus: WikiCompileState | null
   lintStatus: LintReportStatus | null
   promotionPromptConfigured: boolean | null
-  /** Number of unprocessed papers known to the backend. `/api/scan` is the
-   *  authoritative source; `/api/status` only refines it while a processing
-   *  run is active or finishing. */
+  /** Papers ready for first processing, excluding failures that require retry. */
   unprocessedHint: number
   loading: boolean
   /** Bumps every time any of the action handlers completes successfully.
@@ -245,6 +246,7 @@ export function usePipelineState({
           current: s.current ?? '',
           succeeded: s.succeeded ?? Math.max(0, (s.done ?? 0) - (s.errors ?? 0)),
           pending: typeof s.pending === 'number' ? s.pending : null,
+          failedCount: s.failed_count ?? 0,
           failedPapers: (s.failed_papers ?? []).map(item => ({
             id: item.id,
             filename: item.filename,
@@ -333,19 +335,21 @@ export function usePipelineState({
       label: '录入',
       tone: ingestRunning
         ? 'running'
-        : remaining > 0
+        : remaining > 0 || (processing?.failedCount ?? 0) > 0
           ? 'warning'
           : 'ok',
       headline: ingestRunning
         ? `处理中 ${processing?.done}/${processing?.total}`
         : remaining > 0
           ? `${remaining} 待处理 · ${totalProcessed} 已入库`
+          : (processing?.failedCount ?? 0) > 0
+            ? `${processing?.failedCount} 待重试 · ${totalProcessed} 已入库`
           : totalProcessed > 0
             ? `${totalProcessed} 已入库`
             : '无需处理论文',
       sub: ingestRunning && processing?.errors
         ? `${processing.errors} 失败`
-        : undefined,
+        : (processing?.failedCount ?? 0) > 0 ? `${processing?.failedCount} 篇失败，可重试` : undefined,
       isNext: false,
     }
 
@@ -475,7 +479,7 @@ export function usePipelineState({
       ingestRunning,
       compRunning,
       promotionRunning,
-      remaining,
+      remaining: remaining + (processing?.failedCount ?? 0),
       totalProcessed,
       pending,
       llmDecided,
@@ -515,14 +519,14 @@ export function usePipelineState({
 
   const scan = useCallback(async () => {
     const result = await scanPapers()
-    setUnprocessedHint(result.unprocessed)
+    setUnprocessedHint(result.pending ?? result.unprocessed)
     refresh()
     return result
   }, [refresh])
 
-  const process = useCallback(async () => {
+  const submitProcessing = useCallback(async (retry: boolean) => {
     await wrap(async () => {
-      const started = await processAll()
+      const started = await (retry ? retryFailedPapers() : processAll())
       const next: ProcessingStatus = {
         running: !!started.running,
         total: started.total ?? 0,
@@ -531,6 +535,7 @@ export function usePipelineState({
         current: started.current ?? '',
         succeeded: started.succeeded ?? 0,
         pending: typeof started.pending === 'number' ? started.pending : null,
+        failedCount: started.failed_count ?? 0,
         failedPapers: (started.failed_papers ?? []).map(item => ({
           id: item.id,
           filename: item.filename,
@@ -548,8 +553,14 @@ export function usePipelineState({
       } else if (next.running || next.total > 0) {
         setUnprocessedHint(Math.max(0, next.total - next.succeeded))
       }
+      if (started.accepted === false) {
+        throw new Error(started.message || '没有可提交的论文任务')
+      }
     })
   }, [wrap])
+
+  const process = useCallback(() => submitProcessing(false), [submitProcessing])
+  const retryFailed = useCallback(() => submitProcessing(true), [submitProcessing])
 
   const runPromotionRun = useCallback(
     async (
@@ -692,6 +703,16 @@ export function usePipelineState({
         busy: nextStepBusy,
       }
     }
+    if ((processing?.failedCount ?? 0) > 0) {
+      return {
+        stage: 'ingest',
+        label: `重试 ${processing?.failedCount} 篇失败论文`,
+        reason: '这些论文此前处理失败，需要重试，而不是提交新的待处理任务。',
+        tone: 'amber',
+        run: retryFailed,
+        busy: nextStepBusy,
+      }
+    }
     // 3) Pending promotion candidates — curate next.
     if (pending > 0) {
       return {
@@ -781,6 +802,7 @@ export function usePipelineState({
     nextStepBusy,
     process,
     scan,
+    retryFailed,
     runPromotionRun,
     acceptPromotion,
     recompilePapers,
@@ -804,6 +826,7 @@ export function usePipelineState({
     refresh,
     scan,
     process,
+    retryFailed,
     runPromotionRun,
     acceptPromotion,
     recompilePapers,

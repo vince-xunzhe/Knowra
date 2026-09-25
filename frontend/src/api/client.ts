@@ -246,6 +246,8 @@ export interface PaperScanResult {
   duplicate_files: DuplicatePaperFile[]
   total: number
   unprocessed: number
+  pending?: number
+  failed_count?: number
 }
 
 export const scanPapers = () =>
@@ -262,6 +264,8 @@ export const revealScannedFile = (path: string) =>
     .then(r => r.data)
 
 export interface ProcessStartResponse {
+  accepted?: boolean
+  failed_count?: number
   message?: string
   running: boolean
   total: number
@@ -301,9 +305,20 @@ export const processAll = () => api.post<ProcessStartResponse>('/process').then(
 export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
 export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
 export const retryFailedPapers = () =>
-  api.post<{ message: string; retried: number }>('/papers/retry_failed').then(r => r.data)
+  api.post<ProcessStartResponse & { retried: number }>('/papers/retry_failed').then(r => r.data)
 export const reprocessPaper = (id: number) => api.post(`/papers/${id}/reprocess`).then(r => r.data)
-export const listPapers = () => api.get<PaperRecord[]>('/papers').then(r => r.data)
+let paperListRequest: Promise<PaperRecord[]> | null = null
+let cachedPapers: PaperRecord[] | null = null
+export const getCachedPapers = () => cachedPapers
+export const listPapers = () => {
+  // Share in-flight reads across pages and polling; never cache a rejected request.
+  if (!paperListRequest) {
+    paperListRequest = api.get<PaperRecord[]>('/papers')
+      .then(r => { cachedPapers = r.data; return r.data })
+      .finally(() => { paperListRequest = null })
+  }
+  return paperListRequest
+}
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
 export const updatePaperResponse = (
   id: number | string,
@@ -468,8 +483,15 @@ export const restoreNode = (id: number) =>
 
 // Status — short timeout so a single slow tick doesn't block the next
 // polling round. The tick handler must tolerate timeouts gracefully.
-export const getStatus = () =>
-  api.get<ProcessStartResponse>('/status', { timeout: 8000 }).then(r => r.data)
+let statusRequest: Promise<ProcessStartResponse> | null = null
+export const getStatus = () => {
+  if (!statusRequest) {
+    statusRequest = api.get<ProcessStartResponse>('/status', { timeout: 8000 })
+      .then(r => r.data)
+      .finally(() => { statusRequest = null })
+  }
+  return statusRequest
+}
 
 // Wiki — Phase 1 LLM-compiled concept pages.
 // `compiled_at` is sourced from each .md's YAML frontmatter, so the wiki
