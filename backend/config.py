@@ -255,7 +255,7 @@ def _upgrade_extraction_prompt(prompt: str) -> str:
     return upgraded
 
 
-def load_config() -> dict:
+def load_config(*, resolve_presentation: bool = True) -> dict:
     defaults = {
         "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
         "scan_directory": str(PAPERS_DIR),
@@ -301,6 +301,9 @@ def load_config() -> dict:
             resolve_papers_directory(defaults["scan_directory"])
         )
     defaults = ensure_model_gateway_config(defaults)
+    if resolve_presentation:
+        from presentation_preferences import resolve_prompts
+        return resolve_prompts(defaults)
     return defaults
 
 
@@ -310,7 +313,7 @@ def save_config(updates: dict) -> dict:
             **updates,
             "scan_directory": portable_data_path(updates["scan_directory"]),
         }
-    current = load_config()
+    current = load_config(resolve_presentation=False)
     current.update(updates)
     if "extraction_prompt" in current:
         current["extraction_prompt"] = _upgrade_extraction_prompt(current["extraction_prompt"])

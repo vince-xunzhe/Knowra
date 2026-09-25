@@ -1,3 +1,4 @@
+from presentation_preferences import response_instructions
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import hashlib
@@ -1910,7 +1911,7 @@ def summarize_recommendation(body: RecSummaryInput, db: Session = Depends(get_db
         summary = call_text_model(
             cfg,
             model_id=model_id,
-            system=system,
+            system=response_instructions(system, cfg.get("prompt_locale", "zh")),
             user=user,
             max_tokens=320,
             # Condensing one abstract is a light task — force low reasoning so

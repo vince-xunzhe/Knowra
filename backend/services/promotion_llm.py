@@ -11,6 +11,8 @@ failure rather than randomly bouncing it between promoted/rejected).
 """
 from __future__ import annotations
 
+from presentation_preferences import response_instructions
+
 import json
 import logging
 from dataclasses import dataclass
@@ -192,7 +194,7 @@ def run_llm_pass(
         raise PromotionLLMUnavailable(
             "未配置剔除提示词 — 跳过 Agent，本次只跑启发式"
         )
-    system_prompt = user_prompt_template + PROMOTION_LLM_OUTPUT_CONTRACT
+    system_prompt = user_prompt_template + response_instructions(PROMOTION_LLM_OUTPUT_CONTRACT, cfg.get("prompt_locale", "zh"))
     model = task_model_id(cfg, "promotion_judge")
 
     candidates = _candidates_for_llm(db)

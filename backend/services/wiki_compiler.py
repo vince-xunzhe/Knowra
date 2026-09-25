@@ -26,6 +26,7 @@ from typing import Any, List, Optional, Tuple
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
+from presentation_preferences import response_instructions
 from config import load_config, task_reasoning_effort
 from path_setup import ensure_project_root_on_path
 
@@ -317,7 +318,7 @@ def _call_llm(
         return call_text_model(
             cfg,
             model_id=model,
-            system=system,
+            system=response_instructions(system, cfg.get("prompt_locale", "zh")),
             user=user,
             max_tokens=max_tokens,
             temperature=0.3,

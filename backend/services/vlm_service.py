@@ -16,6 +16,7 @@ from typing import Optional
 from openai import OpenAI
 from openai import NotFoundError, APIStatusError
 
+from presentation_preferences import response_instructions
 from config import load_config
 from path_setup import ensure_project_root_on_path
 from path_utils import resolve_artifact_path
@@ -799,7 +800,7 @@ def extract_knowledge_from_paper(
                 notes = call_text_model(
                     cfg,
                     model_id=model,
-                    system=LOCAL_EXTRACTION_NOTES_INSTRUCTIONS,
+                    system=response_instructions(LOCAL_EXTRACTION_NOTES_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
                     user=chunk_prompt,
                     reasoning_effort=reasoning_effort,
                     max_tokens=1200,
@@ -1046,7 +1047,7 @@ def run_chat_turn(
         reply = call_text_model(
             cfg,
             model_id=model,
-            system=LOCAL_CHAT_INSTRUCTIONS,
+            system=response_instructions(LOCAL_CHAT_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
             user=local_user,
             reasoning_effort=reasoning_effort,
             image_paths=_existing_image_paths(first_page_image_path),
@@ -1091,7 +1092,7 @@ def run_chat_turn(
                 response = track_call(
                     lambda: client.responses.create(
                         model=model,
-                        instructions=CHAT_INSTRUCTIONS,
+                        instructions=response_instructions(CHAT_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
                         input=history,
                         tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
                         **(
@@ -1118,7 +1119,7 @@ def run_chat_turn(
             response = track_call(
                 lambda: client.responses.create(
                     model=model,
-                    instructions=CHAT_INSTRUCTIONS,
+                    instructions=response_instructions(CHAT_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
                     input=history,
                     tools=[{"type": "file_search", "vector_store_ids": [vector_store_id]}],
                     **(
@@ -1151,7 +1152,7 @@ def run_chat_turn(
         thread_id=thread_id,
         assistant_id=assistant_id,
         poll_interval_ms=1500,
-        instructions=CHAT_INSTRUCTIONS,
+        instructions=response_instructions(CHAT_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
     )
     deadline = time.time() + timeout_s
     while run.status in ("queued", "in_progress") and time.time() < deadline:
