@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Users2, Plus, Trash2, Pencil, Check, X, Loader2, Save, RotateCw, ArrowRight,
@@ -37,6 +39,7 @@ function parseAuthors(s: string): string[] {
  * and move them to a team (override) or back to author-match. Saves together.
  */
 export default function TeamComposer({ onClose }: { onClose: () => void }) {
+  useLocale()
   const [teams, setTeams] = useState<PaperTeamItem[]>([])
   const [othersCount, setOthersCount] = useState(0)
   const [papers, setPapers] = useState<PaperRecord[]>([])
@@ -197,41 +200,38 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
     )
   }
 
-  const laneLabel = (name: string) => (name === OTHERS ? 'others（未匹配）' : name)
+  const laneLabel = (name: string) => (name === OTHERS ? tr("others（未匹配）") : name)
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12]">
-      <header className="flex items-center gap-3 border-b border-slate-800 bg-[#0f1117] px-5 py-3">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-0b0d12)]">
+      <header className="flex items-center gap-3 border-b border-slate-800 bg-[var(--surface-0f1117)] px-5 py-3">
         <Users2 size={15} className="text-indigo-300" />
-        <h2 className="text-sm font-semibold text-white">编排团队</h2>
+        <h2 className="text-sm font-semibold text-foreground">{tr("编排团队")}</h2>
         <span className="text-[11px] text-slate-500">
-          按核心作者自动归队；编辑作者后「重算」即可。右侧可手动把论文移入某队
-        </span>
+          {tr("按核心作者自动归队；编辑作者后「重算」即可。右侧可手动把论文移入某队")}</span>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => void runManage('recompute', async () => { await recomputePaperTeams() })}
             disabled={busy === 'recompute' || saving}
-            title="按当前作者名单重新归队所有论文"
+            title={tr("按当前作者名单重新归队所有论文")}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-40"
           >
             {busy === 'recompute' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-            重算
-          </button>
+            {tr("重算")}</button>
           <button
             onClick={() => setPending(new Map())}
             disabled={pending.size === 0 || saving}
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-40"
           >
             <RotateCw size={12} />
-            撤销
-          </button>
+            {tr("撤销")}</button>
           <button
             onClick={handleSave}
             disabled={pending.size === 0 || saving}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-400 disabled:opacity-40"
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-            保存{pending.size > 0 ? ` · ${pending.size} 处改动` : ''}
+            {tr("保存")}{' '}{pending.size > 0 ? tr(" · {0} 处改动", { 0: pending.size }) : ''}
           </button>
           <button
             onClick={onClose}
@@ -250,15 +250,13 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
 
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-slate-500">
-          <Loader2 size={18} className="mr-2 animate-spin" /> 加载中…
-        </div>
+          <Loader2 size={18} className="mr-2 animate-spin" /> {tr("加载中…")}</div>
       ) : (
         <div className="flex min-h-0 flex-1">
           {/* ── LEFT: teams (manage + authors) ─────────────────── */}
-          <aside className="flex w-96 shrink-0 flex-col border-r border-slate-800 bg-[#0d1016]">
+          <aside className="flex w-96 shrink-0 flex-col border-r border-slate-800 bg-[var(--surface-0d1016)]">
             <div className="border-b border-slate-800/70 px-4 py-2 text-[11px] font-medium text-slate-400">
-              团队（核心作者命中即自动归队）
-            </div>
+              {tr("团队（核心作者命中即自动归队）")}</div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1">
               {teams.map(team => {
                 const isEditing = editing === team.name
@@ -272,28 +270,26 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                           autoFocus
                           value={editName}
                           onChange={e => setEditName(e.target.value)}
-                          placeholder="团队名"
+                          placeholder={tr("团队名")}
                           className="w-full rounded border border-indigo-500/50 bg-slate-950/70 px-1.5 py-1 text-[12px] text-slate-100 focus:outline-none"
                         />
                         <textarea
                           value={editAuthors}
                           onChange={e => setEditAuthors(e.target.value)}
-                          placeholder="核心作者，逗号分隔（如：Kaiming He, Ross Girshick）"
+                          placeholder={tr("核心作者，逗号分隔（如：Kaiming He, Ross Girshick）")}
                           rows={2}
                           className="w-full resize-none rounded border border-slate-700 bg-slate-950/70 px-1.5 py-1 text-[11px] text-slate-200 focus:border-indigo-500/60 focus:outline-none"
                         />
                         <div className="flex items-center justify-end gap-2">
                           <button onClick={() => setEditing(null)} className="text-[11px] text-slate-500 hover:text-slate-300">
-                            取消
-                          </button>
+                            {tr("取消")}</button>
                           <button
                             onClick={() => saveEdit(team.name)}
                             disabled={rowBusy}
                             className="inline-flex items-center gap-1 rounded bg-indigo-500 px-2 py-0.5 text-[11px] text-white hover:bg-indigo-400 disabled:opacity-50"
                           >
                             {rowBusy ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
-                            保存并重算
-                          </button>
+                            {tr("保存并重算")}</button>
                         </div>
                       </div>
                     ) : (
@@ -301,10 +297,10 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                         <div className="flex items-center gap-2">
                           <button onClick={() => scrollToLane(team.name)} className="min-w-0 flex-1 text-left">
                             <span className="text-[12px] font-medium text-slate-100">{team.name}</span>
-                            {team.builtin && <span className="ml-1 text-[9px] text-slate-500">内置</span>}
+                            {team.builtin && <span className="ml-1 text-[9px] text-slate-500">{tr("内置")}</span>}
                           </button>
                           <span className="tabular-nums text-[11px] text-slate-500">{count}</span>
-                          <button onClick={() => startEdit(team)} title="编辑名称 / 核心作者" className="text-slate-500 hover:text-indigo-200">
+                          <button onClick={() => startEdit(team)} title={tr("编辑名称 / 核心作者")} className="text-slate-500 hover:text-indigo-200">
                             <Pencil size={11} />
                           </button>
                           {confirmDelete === team.name ? (
@@ -319,16 +315,14 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                                 disabled={rowBusy}
                                 className="text-[10px] text-rose-300 hover:text-rose-200"
                               >
-                                确认
-                              </button>
+                                {tr("确认")}</button>
                               <button onClick={() => setConfirmDelete(null)} className="text-[10px] text-slate-500">
-                                取消
-                              </button>
+                                {tr("取消")}</button>
                             </span>
                           ) : (
                             <button
                               onClick={() => setConfirmDelete(team.name)}
-                              title="删除（该队论文回退为 others / 跟随匹配）"
+                              title={tr("删除（该队论文回退为 others / 跟随匹配）")}
                               className="text-slate-500 hover:text-rose-300"
                             >
                               <Trash2 size={11} />
@@ -346,7 +340,7 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                 )
               })}
               <div className="rounded-lg border border-dashed border-slate-800 px-2.5 py-2 text-[11px] text-slate-500">
-                others（未匹配）<span className="ml-1 tabular-nums">{grouped.get(OTHERS)?.length ?? othersCount}</span>
+                {tr("others（未匹配）")}<span className="ml-1 tabular-nums">{grouped.get(OTHERS)?.length ?? othersCount}</span>
               </div>
             </div>
 
@@ -362,7 +356,7 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                         setNewName('')
                       })
                   }}
-                  placeholder="新增团队…（先建名，再编辑作者）"
+                  placeholder={tr("新增团队…（先建名，再编辑作者）")}
                   className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950/70 px-2 py-1 text-[12px] text-slate-100 focus:border-indigo-500/60 focus:outline-none"
                 />
                 <button
@@ -384,16 +378,15 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
           {/* ── RIGHT: collapsible board grouped by team ────────── */}
           <main className="relative flex min-h-0 flex-1 flex-col">
             {selected.size > 0 ? (
-              <div className="z-10 flex flex-wrap items-center gap-2 border-b border-indigo-500/30 bg-[#11131b] px-4 py-2">
-                <span className="text-[12px] text-indigo-100">已选 {selected.size} 篇</span>
+              <div className="z-10 flex flex-wrap items-center gap-2 border-b border-indigo-500/30 bg-[var(--surface-11131b)] px-4 py-2">
+                <span className="text-[12px] text-indigo-100">{tr("已选")}{' '}{selected.size} {tr("篇")}</span>
                 <ArrowRight size={13} className="text-slate-500" />
-                <span className="text-[11px] text-slate-400">移到：</span>
+                <span className="text-[11px] text-slate-400">{tr("移到：")}</span>
                 <button
                   onClick={() => moveSelectedTo(INHERIT)}
                   className="rounded border border-slate-600 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700"
                 >
-                  跟随作者匹配
-                </button>
+                  {tr("跟随作者匹配")}</button>
                 {teamNames.map(n => (
                   <button
                     key={n}
@@ -404,17 +397,16 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                   </button>
                 ))}
                 <button onClick={() => setSelected(new Set())} className="ml-auto text-[11px] text-slate-500 hover:text-slate-300">
-                  取消选择
-                </button>
+                  {tr("取消选择")}</button>
               </div>
             ) : (
               <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-2 text-[11px] text-slate-500">
-                <span>共 {papers.length} 篇 · 点团队展开，选中论文后移动</span>
+                <span>{tr("共")}{' '}{papers.length} {tr("篇 · 点团队展开，选中论文后移动")}</span>
                 <button
                   onClick={() => setExpanded(allExpanded ? new Set() : new Set(laneNames))}
                   className="ml-auto rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
                 >
-                  {allExpanded ? '全部收起' : '全部展开'}
+                  {allExpanded ? tr("全部收起") : tr("全部展开")}
                 </button>
               </div>
             )}
@@ -442,7 +434,7 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                     {isOpen && (
                       <div className="ml-[11px] mt-0.5 space-y-0.5 border-l border-slate-800 pl-2.5">
                         {lanePapers.length === 0 ? (
-                          <div className="px-2 py-1 text-[11px] text-slate-600">暂无论文</div>
+                          <div className="px-2 py-1 text-[11px] text-slate-600">{tr("暂无论文")}</div>
                         ) : (
                           lanePapers.map(p => {
                             const pid = String(p.id)
@@ -465,8 +457,8 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
                                 >
                                   <Check size={9} />
                                 </span>
-                                <span className="truncate">{p.title || '(无标题)'}</span>
-                                {changed && <span className="ml-auto shrink-0 text-[10px] text-indigo-300">● 未保存</span>}
+                                <span className="truncate">{p.title || tr("(无标题)")}</span>
+                                {changed && <span className="ml-auto shrink-0 text-[10px] text-indigo-300">{tr("● 未保存")}</span>}
                               </button>
                             )
                           })

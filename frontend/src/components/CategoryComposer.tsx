@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Tags, Plus, Trash2, Pencil, Check, X, Loader2, Save, RotateCw, ArrowRight,
@@ -26,6 +28,7 @@ function apiErr(e: unknown): string {
  * commit together on 保存.
  */
 export default function CategoryComposer({ onClose }: { onClose: () => void }) {
+  useLocale()
   const [cats, setCats] = useState<PaperCategoryItem[]>([])
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -175,14 +178,13 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#0b0d12]">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-0b0d12)]">
       {/* header */}
-      <header className="flex items-center gap-3 border-b border-slate-800 bg-[#0f1117] px-5 py-3">
+      <header className="flex items-center gap-3 border-b border-slate-800 bg-[var(--surface-0f1117)] px-5 py-3">
         <Tags size={15} className="text-indigo-300" />
-        <h2 className="text-sm font-semibold text-white">编排大类</h2>
+        <h2 className="text-sm font-semibold text-foreground">{tr("编排大类")}</h2>
         <span className="text-[11px] text-slate-500">
-          左侧管理大类；右侧选中论文卡片，移到目标大类，保存后生效
-        </span>
+          {tr("左侧管理大类；右侧选中论文卡片，移到目标大类，保存后生效")}</span>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setPending(new Map())}
@@ -190,15 +192,14 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
             className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-40"
           >
             <RotateCw size={12} />
-            撤销
-          </button>
+            {tr("撤销")}</button>
           <button
             onClick={handleSave}
             disabled={pending.size === 0 || saving}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-indigo-400 disabled:opacity-40"
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-            保存{pending.size > 0 ? ` · ${pending.size} 处改动` : ''}
+            {tr("保存")}{' '}{pending.size > 0 ? tr(" · {0} 处改动", { 0: pending.size }) : ''}
           </button>
           <button
             onClick={onClose}
@@ -217,15 +218,13 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
 
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-slate-500">
-          <Loader2 size={18} className="mr-2 animate-spin" /> 加载中…
-        </div>
+          <Loader2 size={18} className="mr-2 animate-spin" /> {tr("加载中…")}</div>
       ) : (
         <div className="flex min-h-0 flex-1">
           {/* ── LEFT: categories (manage) ──────────────────────── */}
-          <aside className="flex w-80 shrink-0 flex-col border-r border-slate-800 bg-[#0d1016]">
+          <aside className="flex w-80 shrink-0 flex-col border-r border-slate-800 bg-[var(--surface-0d1016)]">
             <div className="border-b border-slate-800/70 px-4 py-2 text-[11px] font-medium text-slate-400">
-              大类（点击跳到该组）
-            </div>
+              {tr("大类（点击跳到该组）")}</div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2 space-y-1">
               {cats.map(cat => {
                 const isEditing = editing === cat.name
@@ -275,7 +274,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                         <>
                           <button onClick={() => scrollToLane(cat.name)} className="min-w-0 flex-1 text-left">
                             <span className="text-[12px] font-medium text-slate-100">{cat.name}</span>
-                            {!cat.removable && <span className="ml-1 text-[9px] text-slate-500">保留</span>}
+                            {!cat.removable && <span className="ml-1 text-[9px] text-slate-500">{tr("保留")}</span>}
                           </button>
                           <span className="tabular-nums text-[11px] text-slate-500">{count}</span>
                           {cat.removable && (
@@ -285,7 +284,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                                   setEditing(cat.name)
                                   setEditName(cat.name)
                                 }}
-                                title="重命名（迁移该类所有论文）"
+                                title={tr("重命名（迁移该类所有论文）")}
                                 className="text-slate-500 hover:text-indigo-200"
                               >
                                 <Pencil size={11} />
@@ -302,16 +301,14 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                                     disabled={rowBusy}
                                     className="text-[10px] text-rose-300 hover:text-rose-200"
                                   >
-                                    确认
-                                  </button>
+                                    {tr("确认")}</button>
                                   <button onClick={() => setConfirmDelete(null)} className="text-[10px] text-slate-500">
-                                    取消
-                                  </button>
+                                    {tr("取消")}</button>
                                 </span>
                               ) : (
                                 <button
                                   onClick={() => setConfirmDelete(cat.name)}
-                                  title="删除（该类论文回退为跟随模型）"
+                                  title={tr("删除（该类论文回退为跟随模型）")}
                                   className="text-slate-500 hover:text-rose-300"
                                 >
                                   <Trash2 size={11} />
@@ -341,7 +338,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                         setNewName('')
                       })
                   }}
-                  placeholder="新增大类…"
+                  placeholder={tr("新增大类…")}
                   className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950/70 px-2 py-1 text-[12px] text-slate-100 focus:border-indigo-500/60 focus:outline-none"
                 />
                 <button
@@ -364,16 +361,15 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
           <main className="relative flex min-h-0 flex-1 flex-col">
             {/* toolbar — move bar when cards are selected, else expand/collapse-all */}
             {selected.size > 0 ? (
-              <div className="z-10 flex flex-wrap items-center gap-2 border-b border-indigo-500/30 bg-[#11131b] px-4 py-2">
-                <span className="text-[12px] text-indigo-100">已选 {selected.size} 篇</span>
+              <div className="z-10 flex flex-wrap items-center gap-2 border-b border-indigo-500/30 bg-[var(--surface-11131b)] px-4 py-2">
+                <span className="text-[12px] text-indigo-100">{tr("已选")}{' '}{selected.size} {tr("篇")}</span>
                 <ArrowRight size={13} className="text-slate-500" />
-                <span className="text-[11px] text-slate-400">移到：</span>
+                <span className="text-[11px] text-slate-400">{tr("移到：")}</span>
                 <button
                   onClick={() => moveSelectedTo(INHERIT)}
                   className="rounded border border-slate-600 bg-slate-800/70 px-2 py-0.5 text-[11px] text-slate-200 hover:bg-slate-700"
                 >
-                  跟随模型
-                </button>
+                  {tr("跟随模型")}</button>
                 {catNames.map(n => (
                   <button
                     key={n}
@@ -387,17 +383,16 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   onClick={() => setSelected(new Set())}
                   className="ml-auto text-[11px] text-slate-500 hover:text-slate-300"
                 >
-                  取消选择
-                </button>
+                  {tr("取消选择")}</button>
               </div>
             ) : (
               <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-2 text-[11px] text-slate-500">
-                <span>共 {papers.length} 篇 · 点大类展开，选中论文后移动</span>
+                <span>{tr("共")}{' '}{papers.length} {tr("篇 · 点大类展开，选中论文后移动")}</span>
                 <button
                   onClick={() => setExpanded(allExpanded ? new Set() : new Set(catNames))}
                   className="ml-auto rounded border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 hover:bg-slate-800"
                 >
-                  {allExpanded ? '全部收起' : '全部展开'}
+                  {allExpanded ? tr("全部收起") : tr("全部展开")}
                 </button>
               </div>
             )}
@@ -423,7 +418,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                     {isOpen && (
                       <div className="ml-[11px] mt-0.5 space-y-0.5 border-l border-slate-800 pl-2.5">
                         {lanePapers.length === 0 ? (
-                          <div className="px-2 py-1 text-[11px] text-slate-600">暂无论文</div>
+                          <div className="px-2 py-1 text-[11px] text-slate-600">{tr("暂无论文")}</div>
                         ) : (
                           lanePapers.map(p => {
                             const pid = String(p.id)
@@ -448,9 +443,9 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                                 >
                                   <Check size={9} />
                                 </span>
-                                <span className="truncate">{p.title || '(无标题)'}</span>
+                                <span className="truncate">{p.title || tr("(无标题)")}</span>
                                 {changed && (
-                                  <span className="ml-auto shrink-0 text-[10px] text-indigo-300">● 未保存</span>
+                                  <span className="ml-auto shrink-0 text-[10px] text-indigo-300">{tr("● 未保存")}</span>
                                 )}
                               </button>
                             )

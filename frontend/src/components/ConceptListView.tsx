@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Hand, Bot, Sparkles, Tag } from 'lucide-react'
 import type { GraphNode } from '../api/client'
@@ -11,9 +13,9 @@ interface Props {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  technique: '技术',
-  dataset: '数据集',
-  concept: '手动概念',
+  get technique() { return tr("技术") },
+  get dataset() { return tr("数据集") },
+  get concept() { return tr("手动概念") },
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -36,6 +38,7 @@ const STATUS_BADGE: Record<string, string> = {
  * NodeDetail drawer the host already owns.
  */
 export default function ConceptListView({ nodes, selectedId, onPick }: Props) {
+  useLocale()
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   const groups = useMemo(() => {
@@ -69,8 +72,7 @@ export default function ConceptListView({ nodes, selectedId, onPick }: Props) {
   if (nodes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-slate-500">
-        暂无概念候选 — 先去「论文」页处理 PDF
-      </div>
+        {tr("暂无概念候选 — 先去「论文」页处理 PDF")}</div>
     )
   }
 
@@ -93,7 +95,7 @@ export default function ConceptListView({ nodes, selectedId, onPick }: Props) {
                   className="w-2 h-2 rounded-full"
                   style={{ background: TYPE_COLORS[key] }}
                 />
-                <span className="text-[13px] font-semibold text-white tracking-tight">
+                <span className="text-[13px] font-semibold text-foreground tracking-tight">
                   {TYPE_LABELS[key] || key}
                 </span>
                 <span className="text-[11px] text-slate-500 tabular-nums">
@@ -129,6 +131,7 @@ function ConceptRow({
   active: boolean
   onClick: () => void
 }) {
+  useLocale()
   const status = node.promotion_status || 'promoted'
   const by = node.promoted_by
   const paperCount = node.source_paper_ids?.length ?? 0
@@ -152,12 +155,12 @@ function ConceptRow({
               className={`shrink-0 text-[9.5px] px-1 py-0 rounded border ${STATUS_BADGE[status]}`}
               title={`promotion status: ${status}`}
             >
-              {status === 'pending' ? '候选' : '淘汰'}
+              {status === 'pending' ? tr("候选") : tr("淘汰")}
             </span>
           )}
         </div>
         <div className="mt-1 flex items-center gap-2 text-[10.5px] text-slate-500 tabular-nums">
-          <span>引用 {paperCount}</span>
+          <span>{tr("引用")}{' '}{paperCount}</span>
           {by && (
             <>
               <span className="text-slate-700">·</span>

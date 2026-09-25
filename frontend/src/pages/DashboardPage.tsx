@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 // Data dashboard for the knowledge base project.
 //
 // Observational only — no action buttons (those live on the [知识] page
@@ -45,7 +48,7 @@ import {
   type DashboardSlice,
 } from '../api/client'
 
-// Palette — picked to read on the #0b0d12 canvas.
+// Palette — picked to read on the var(--surface-0b0d12) canvas.
 const SERIES_COLORS = {
   papers: '#6366f1',
   concepts: '#22c55e',
@@ -53,7 +56,7 @@ const SERIES_COLORS = {
 }
 const PIE_PALETTE = [
   '#6366f1', '#22c55e', '#f59e0b', '#ec4899',
-  '#14b8a6', '#a855f7', '#ef4444', '#94a3b8',
+  '#14b8a6', '#a855f7', '#ef4444', 'var(--color-slate-400)',
 ]
 
 // Shared tooltip styling for every recharts <Tooltip>. Recharts' default
@@ -62,16 +65,17 @@ const PIE_PALETTE = [
 // + values are readable. See the user-reported bug where pie-slice
 // hover showed a tooltip box with no visible content.
 const TOOLTIP_CONTENT_STYLE = {
-  background: '#0f1117',
-  border: '1px solid #334155',
+  background: 'var(--surface-0f1117)',
+  border: '1px solid var(--color-slate-700)',
   borderRadius: 6,
   fontSize: 12,
-  color: '#cbd5e1',
+  color: 'var(--color-slate-300)',
 } as const
-const TOOLTIP_ITEM_STYLE = { color: '#e2e8f0' } as const
-const TOOLTIP_LABEL_STYLE = { color: '#cbd5e1', fontWeight: 500 } as const
+const TOOLTIP_ITEM_STYLE = { color: 'var(--color-slate-200)' } as const
+const TOOLTIP_LABEL_STYLE = { color: 'var(--color-slate-300)', fontWeight: 500 } as const
 
 export default function DashboardPage() {
+  useLocale()
   const [data, setData] = useState<DashboardSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -97,8 +101,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full text-slate-400 text-sm">
-        <Loader2 size={14} className="animate-spin mr-2" /> 加载看板数据…
-      </div>
+        <Loader2 size={14} className="animate-spin mr-2" /> {tr("加载看板数据…")}</div>
     )
   }
   if (error) {
@@ -110,53 +113,52 @@ export default function DashboardPage() {
           onClick={() => load(true)}
           className="text-xs px-3 py-1.5 rounded-md border border-slate-700 hover:bg-slate-800"
         >
-          重试
-        </button>
+          {tr("重试")}</button>
       </div>
     )
   }
   if (!data) return null
 
-  const generatedAt = new Date(data.generated_at).toLocaleString()
+  const generatedAt = new Date(data.generated_at).toLocaleString(getFormattingLocale())
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Header */}
-      <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-2.5 flex items-center gap-3">
+      <header className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-2.5 flex items-center gap-3">
         <BarChart3 size={14} className="text-indigo-300" />
-        <h1 className="text-base font-semibold text-white tracking-tight">数据看板</h1>
+        <h1 className="text-base font-semibold text-foreground tracking-tight">{tr("数据看板")}</h1>
         <span className="text-xs text-slate-500">·</span>
-        <span className="text-xs text-slate-500 tabular-nums">生成于 {generatedAt}</span>
+        <span className="text-xs text-slate-500 tabular-nums">{tr("生成于")}{' '}{generatedAt}</span>
         <button
           onClick={() => load(false)}
           disabled={refreshing}
           className="ml-auto p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors disabled:opacity-50"
-          title="刷新数据"
+          title={tr("刷新数据")}
         >
           {refreshing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
         </button>
       </header>
 
       {/* Body */}
-      <div className="flex-1 overflow-y-auto bg-[#0b0d12] px-6 py-5 space-y-5">
+      <div className="flex-1 overflow-y-auto bg-[var(--surface-0b0d12)] px-6 py-5 space-y-5">
         {/* Row 1: Radar + overview small cards */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <Card className="xl:col-span-2" title="知识方向（Top-6 标签）" icon={<NetworkIcon size={13} />}>
+          <Card className="xl:col-span-2" title={tr("知识方向（Top-6 标签）")} icon={<NetworkIcon size={13} />}>
             {data.radar.length === 0 ? (
-              <EmptyState text="尚未生成标签 — 处理一些论文再回来" />
+              <EmptyState text={tr("尚未生成标签 — 处理一些论文再回来")} />
             ) : (
               <RadarPanel radar={data.radar} />
             )}
           </Card>
-          <Card title="总览" icon={<TrendingUp size={13} />}>
+          <Card title={tr("总览")} icon={<TrendingUp size={13} />}>
             <OverviewGrid overview={data.overview} pendingAgeDays={data.pending_age_days} />
           </Card>
         </div>
 
         {/* Row 2: Growth */}
-        <Card title="增长曲线（最近 12 周）" icon={<TrendingUp size={13} />}>
+        <Card title={tr("增长曲线（最近 12 周）")} icon={<TrendingUp size={13} />}>
           {data.growth.weeks.length === 0 ? (
-            <EmptyState text="暂无时间序列数据" />
+            <EmptyState text={tr("暂无时间序列数据")} />
           ) : (
             <GrowthPanel growth={data.growth} />
           )}
@@ -164,50 +166,50 @@ export default function DashboardPage() {
 
         {/* Row 3: Distribution + tag cloud */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <Card title="论文分类" icon={<TagIcon size={13} />}>
+          <Card title={tr("论文分类")} icon={<TagIcon size={13} />}>
             <DistPie data={data.distribution.paper_category} />
           </Card>
-          <Card title="节点类型" icon={<TagIcon size={13} />}>
+          <Card title={tr("节点类型")} icon={<TagIcon size={13} />}>
             <DistPie data={data.distribution.node_type} />
           </Card>
-          <Card title={`高频标签 Top ${data.top_tags.length}`} icon={<TagIcon size={13} />}>
+          <Card title={tr("高频标签 Top {0}", { 0: data.top_tags.length })} icon={<TagIcon size={13} />}>
             <TagCloud tags={data.top_tags} />
           </Card>
         </div>
 
         {/* Row 4: Curation + network */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-          <Card title="策展健康" icon={<Stethoscope size={13} />}>
+          <Card title={tr("策展健康")} icon={<Stethoscope size={13} />}>
             <CurationPanel
               cells={data.curation}
               pendingAgeDays={data.pending_age_days}
             />
           </Card>
-          <Card title={`中枢概念 Top ${data.network.hubs.length}`} icon={<NetworkIcon size={13} />}>
+          <Card title={tr("中枢概念 Top {0}", { 0: data.network.hubs.length })} icon={<NetworkIcon size={13} />}>
             <HubsPanel network={data.network} />
           </Card>
         </div>
 
         {/* Row 5: Compile + lint */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
-          <Card title="论文页编译" icon={<Stethoscope size={13} />}>
+          <Card title={tr("论文页编译")} icon={<Stethoscope size={13} />}>
             <CompileBucketView bucket={data.compile.papers} />
           </Card>
-          <Card title="概念页编译" icon={<Stethoscope size={13} />}>
+          <Card title={tr("概念页编译")} icon={<Stethoscope size={13} />}>
             <CompileBucketView bucket={data.compile.concepts} />
           </Card>
-          <Card title="健检报告" icon={<Stethoscope size={13} />}>
+          <Card title={tr("健检报告")} icon={<Stethoscope size={13} />}>
             <LintSummary lint={data.lint} />
           </Card>
         </div>
 
         {/* Row 6: LLM usage */}
         <Card
-          title={`LLM 使用（${data.llm_usage.window_days}d · ${data.llm_usage.total_calls} 次调用 · ${formatTokens(data.llm_usage.total_tokens)} tokens · 成功率 ${Math.round(data.llm_usage.success_rate * 100)}%）`}
+          title={tr("LLM 使用（{0}d · {1} 次调用 · {2} tokens · 成功率 {3}%）", { 0: data.llm_usage.window_days, 1: data.llm_usage.total_calls, 2: formatTokens(data.llm_usage.total_tokens), 3: Math.round(data.llm_usage.success_rate * 100) })}
           icon={<Cpu size={13} />}
         >
           {data.llm_usage.total_calls === 0 ? (
-            <EmptyState text="近 30 天暂无 LLM 调用记录（调用埋点已开启，跑一次处理 / 编译就会有数据）" />
+            <EmptyState text={tr("近 30 天暂无 LLM 调用记录（调用埋点已开启，跑一次处理 / 编译就会有数据）")} />
           ) : (
             <LLMUsagePanel usage={data.llm_usage} />
           )}
@@ -230,6 +232,7 @@ function Card({
   className?: string
   children: React.ReactNode
 }) {
+  useLocale()
   return (
     <section className={`rounded-xl border border-slate-800 bg-slate-900/40 ${className || ''}`}>
       <header className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-800/60">
@@ -244,6 +247,7 @@ function Card({
 }
 
 function EmptyState({ text }: { text: string }) {
+  useLocale()
   return (
     <div className="py-8 text-center text-[12px] text-slate-500">{text}</div>
   )
@@ -258,27 +262,28 @@ function OverviewGrid({
   overview: DashboardSummary['overview']
   pendingAgeDays: number | null
 }) {
+  useLocale()
   const cards = [
-    { label: '论文', value: overview.papers, sub: overview.papers_unprocessed > 0 ? `${overview.papers_unprocessed} 未处理` : undefined },
+    { label: tr("论文"), value: overview.papers, sub: overview.papers_unprocessed > 0 ? tr("{0} 未处理", { 0: overview.papers_unprocessed }) : undefined },
     {
-      label: '学习完成',
+      label: tr("学习完成"),
       value: overview.learning_completed,
-      sub: `${overview.learning} 正在 · ${overview.learning_not_started} 未学`,
+      sub: tr("{0} 正在 · {1} 未学", { 0: overview.learning, 1: overview.learning_not_started }),
       tone: overview.learning > 0 ? 'cyan' : 'slate',
     },
-    { label: '节点', value: overview.nodes, sub: `${overview.concepts_promoted} 已选中` },
-    { label: '边', value: overview.edges },
-    { label: '标签', value: overview.unique_tags },
+    { label: tr("节点"), value: overview.nodes, sub: tr("{0} 已选中", { 0: overview.concepts_promoted }) },
+    { label: tr("边"), value: overview.edges },
+    { label: tr("标签"), value: overview.unique_tags },
     {
-      label: '失败',
+      label: tr("失败"),
       value: overview.papers_failed,
-      sub: overview.papers_failed > 0 ? '需关注' : undefined,
+      sub: overview.papers_failed > 0 ? tr("需关注") : undefined,
       tone: overview.papers_failed > 0 ? 'rose' : 'slate',
     },
     {
-      label: '待评最久',
+      label: tr("待评最久"),
       value: pendingAgeDays ?? '—',
-      sub: pendingAgeDays != null ? '天' : undefined,
+      sub: pendingAgeDays != null ? tr("天") : undefined,
       tone: (pendingAgeDays ?? 0) > 30 ? 'amber' : 'slate',
     },
   ]
@@ -313,6 +318,7 @@ function OverviewGrid({
 }
 
 function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
+  useLocale()
   // Recharts radar needs one row per axis with each series as a key.
   // Series live on different scales (papers count vs edge_density 0-1)
   // so we normalize to a "fraction of max in this series" so all three
@@ -336,10 +342,10 @@ function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
     <div className="w-full h-[320px]">
       <ResponsiveContainer width="100%" height="100%">
         <RadarChart data={data}>
-          <PolarGrid stroke="#334155" />
+          <PolarGrid stroke="var(--color-slate-700)" />
           <PolarAngleAxis
             dataKey="tag"
-            tick={{ fill: '#94a3b8', fontSize: 11 }}
+            tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }}
           />
           <PolarRadiusAxis
             angle={90}
@@ -348,21 +354,21 @@ function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
             tickFormatter={() => ''}
           />
           <Radar
-            name="论文"
+            name={tr("论文")}
             dataKey="papers"
             stroke={SERIES_COLORS.papers}
             fill={SERIES_COLORS.papers}
             fillOpacity={0.25}
           />
           <Radar
-            name="概念"
+            name={tr("概念")}
             dataKey="concepts"
             stroke={SERIES_COLORS.concepts}
             fill={SERIES_COLORS.concepts}
             fillOpacity={0.18}
           />
           <Radar
-            name="边密度"
+            name={tr("边密度")}
             dataKey="edges"
             stroke={SERIES_COLORS.edges}
             fill={SERIES_COLORS.edges}
@@ -379,9 +385,9 @@ function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
                 (item as { payload?: Record<string, unknown> } | undefined)
                   ?.payload
               if (!row) return [value as React.ReactNode, name as string]
-              if (name === '论文') return [row.raw_papers as React.ReactNode, name as string]
-              if (name === '概念') return [row.raw_concepts as React.ReactNode, name as string]
-              if (name === '边密度') return [row.raw_edges as React.ReactNode, name as string]
+              if (name === tr("论文")) return [row.raw_papers as React.ReactNode, name as string]
+              if (name === tr("概念")) return [row.raw_concepts as React.ReactNode, name as string]
+              if (name === tr("边密度")) return [row.raw_edges as React.ReactNode, name as string]
               return [value as React.ReactNode, name as string]
             }) as never}
           />
@@ -393,6 +399,7 @@ function RadarPanel({ radar }: { radar: DashboardSummary['radar'] }) {
 }
 
 function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
+  useLocale()
   const data = growth.weeks.map((week, i) => ({
     week: week.slice(5),
     papers: growth.papers[i] ?? 0,
@@ -403,9 +410,9 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
     <div className="w-full h-[240px]">
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 5, right: 15, left: -10, bottom: 5 }}>
-          <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-          <XAxis dataKey="week" tick={{ fill: '#94a3b8', fontSize: 11 }} />
-          <YAxis tick={{ fill: '#94a3b8', fontSize: 11 }} />
+          <CartesianGrid stroke="var(--color-slate-800)" strokeDasharray="3 3" />
+          <XAxis dataKey="week" tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} />
+          <YAxis tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} />
           <Tooltip
             contentStyle={TOOLTIP_CONTENT_STYLE}
             itemStyle={TOOLTIP_ITEM_STYLE}
@@ -415,7 +422,7 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
           <Line
             type="monotone"
             dataKey="papers"
-            name="论文"
+            name={tr("论文")}
             stroke={SERIES_COLORS.papers}
             strokeWidth={2}
             dot={false}
@@ -423,7 +430,7 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
           <Line
             type="monotone"
             dataKey="concepts"
-            name="概念"
+            name={tr("概念")}
             stroke={SERIES_COLORS.concepts}
             strokeWidth={2}
             dot={false}
@@ -431,7 +438,7 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
           <Line
             type="monotone"
             dataKey="edges"
-            name="边"
+            name={tr("边")}
             stroke={SERIES_COLORS.edges}
             strokeWidth={2}
             dot={false}
@@ -443,7 +450,8 @@ function GrowthPanel({ growth }: { growth: DashboardSummary['growth'] }) {
 }
 
 function DistPie({ data }: { data: DashboardSlice[] }) {
-  if (data.length === 0) return <EmptyState text="暂无数据" />
+  useLocale()
+  if (data.length === 0) return <EmptyState text={tr("暂无数据")} />
   // Pre-compute total so the legend can show percentages. The recharts
   // tooltip already shows raw values, so percentages here are the
   // additive context the user actually misses.
@@ -460,7 +468,7 @@ function DistPie({ data }: { data: DashboardSlice[] }) {
               cx="50%"
               cy="50%"
               outerRadius="80%"
-              label={{ fill: '#cbd5e1', fontSize: 11 }}
+              label={{ fill: 'var(--color-slate-300)', fontSize: 11 }}
             >
               {data.map((_, i) => (
                 <Cell key={i} fill={PIE_PALETTE[i % PIE_PALETTE.length]} />
@@ -509,7 +517,8 @@ function DistPie({ data }: { data: DashboardSlice[] }) {
 }
 
 function TagCloud({ tags }: { tags: DashboardSlice[] }) {
-  if (tags.length === 0) return <EmptyState text="暂无标签" />
+  useLocale()
+  if (tags.length === 0) return <EmptyState text={tr("暂无标签")} />
   const max = Math.max(...tags.map(t => t.value))
   return (
     <div className="flex flex-wrap gap-1.5 items-baseline">
@@ -522,7 +531,7 @@ function TagCloud({ tags }: { tags: DashboardSlice[] }) {
             key={t.label}
             className="inline-flex items-baseline gap-1 px-2 py-0.5 rounded-md bg-slate-800/40 border border-slate-700/60"
             style={{ fontSize, opacity }}
-            title={`${t.value} 次`}
+            title={tr("{0} 次", { 0: t.value })}
           >
             <span className="text-slate-200">{t.label}</span>
             <span className="text-slate-500 text-[10px] tabular-nums">{t.value}</span>
@@ -540,6 +549,7 @@ function CurationPanel({
   cells: DashboardCurationCell[]
   pendingAgeDays: number | null
 }) {
+  useLocale()
   // Pivot the (status, by) cells into a stacked-bar payload.
   const statuses: Array<'pending' | 'promoted' | 'rejected'> = [
     'promoted',
@@ -564,14 +574,14 @@ function CurationPanel({
       <div className="w-full h-[200px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} layout="vertical" margin={{ left: 10, right: 20 }}>
-            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} />
+            <CartesianGrid stroke="var(--color-slate-800)" strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} />
             <YAxis
               type="category"
               dataKey="status"
-              tick={{ fill: '#cbd5e1', fontSize: 11 }}
+              tick={{ fill: 'var(--color-slate-300)', fontSize: 11 }}
               tickFormatter={(v) =>
-                ({ promoted: '已选中', pending: '待评', rejected: '淘汰' })[v as string] || v
+                ({ promoted: tr("已选中"), pending: tr("待评"), rejected: tr("淘汰") })[v as string] || v
               }
             />
             <Tooltip
@@ -587,7 +597,7 @@ function CurationPanel({
                 stackId="curation"
                 fill={PIE_PALETTE[i % PIE_PALETTE.length]}
                 name={
-                  { user: 'human', llm: 'agent', heuristic: 'heuristic', legacy: 'legacy', unset: '未决' }[
+                  { user: 'human', llm: 'agent', heuristic: 'heuristic', legacy: 'legacy', unset: tr("未决") }[
                     by
                   ] || by
                 }
@@ -598,16 +608,16 @@ function CurationPanel({
       </div>
       {pendingAgeDays != null && (
         <div className="mt-2 text-[11px] text-slate-500">
-          最早的待评候选已积压 <span className="text-amber-300 tabular-nums">{pendingAgeDays}</span> 天
-        </div>
+          {tr("最早的待评候选已积压")}<span className="text-amber-300 tabular-nums">{pendingAgeDays}</span> {tr("天")}</div>
       )}
     </div>
   )
 }
 
 function HubsPanel({ network }: { network: DashboardSummary['network'] }) {
+  useLocale()
   if (network.hubs.length === 0) {
-    return <EmptyState text="暂无可统计的中枢概念" />
+    return <EmptyState text={tr("暂无可统计的中枢概念")} />
   }
   const max = Math.max(...network.hubs.map(h => h.degree))
   return (
@@ -627,11 +637,10 @@ function HubsPanel({ network }: { network: DashboardSummary['network'] }) {
         </div>
       ))}
       <div className="mt-3 flex items-center gap-4 text-[11px] text-slate-500">
-        <span>孤儿节点：<span className="text-slate-300 tabular-nums">{network.orphan_count}</span></span>
-        <span>平均度：<span className="text-slate-300 tabular-nums">{network.avg_degree}</span></span>
+        <span>{tr("孤儿节点：")}<span className="text-slate-300 tabular-nums">{network.orphan_count}</span></span>
+        <span>{tr("平均度：")}<span className="text-slate-300 tabular-nums">{network.avg_degree}</span></span>
         <span className="ml-auto">
-          关系：
-          {network.relation_types.slice(0, 3).map(r => (
+          {tr("关系：")}{' '}{network.relation_types.slice(0, 3).map(r => (
             <span key={r.label} className="ml-2">
               {r.label} <span className="text-slate-400 tabular-nums">{r.value}</span>
             </span>
@@ -647,12 +656,13 @@ function CompileBucketView({
 }: {
   bucket: DashboardSummary['compile']['papers']
 }) {
+  useLocale()
   const total = bucket.total || 1
   const segments = [
-    { label: '就绪', value: bucket.ok, color: '#22c55e' },
-    { label: '待编译', value: bucket.missing, color: '#94a3b8' },
-    { label: '已过期', value: bucket.stale, color: '#f59e0b' },
-    { label: '孤儿', value: bucket.orphan, color: '#94a3b8' },
+    { label: tr("就绪"), value: bucket.ok, color: '#22c55e' },
+    { label: tr("待编译"), value: bucket.missing, color: 'var(--color-slate-400)' },
+    { label: tr("已过期"), value: bucket.stale, color: '#f59e0b' },
+    { label: tr("孤儿"), value: bucket.orphan, color: 'var(--color-slate-400)' },
   ]
   return (
     <div>
@@ -682,22 +692,23 @@ function CompileBucketView({
         ))}
       </div>
       <div className="mt-2 text-[11px] text-slate-500">
-        合计 <span className="text-slate-200 tabular-nums">{bucket.total}</span>
+        {tr("合计")}<span className="text-slate-200 tabular-nums">{bucket.total}</span>
       </div>
     </div>
   )
 }
 
 function LintSummary({ lint }: { lint: DashboardSummary['lint'] }) {
+  useLocale()
   if (!lint.exists) {
-    return <EmptyState text="尚未生成健检报告" />
+    return <EmptyState text={tr("尚未生成健检报告")} />
   }
   const counts = lint.counts || { stubs: 0, merges: 0, missing_crosscut: 0, followups: 0 }
   const items = [
-    { label: '短桩', value: counts.stubs, tone: 'amber' as const },
-    { label: '可合并', value: counts.merges, tone: 'amber' as const },
-    { label: '待建概念', value: counts.missing_crosscut, tone: 'amber' as const },
-    { label: '追问', value: counts.followups, tone: 'slate' as const },
+    { label: tr("短桩"), value: counts.stubs, tone: 'amber' as const },
+    { label: tr("可合并"), value: counts.merges, tone: 'amber' as const },
+    { label: tr("待建概念"), value: counts.missing_crosscut, tone: 'amber' as const },
+    { label: tr("追问"), value: counts.followups, tone: 'slate' as const },
   ]
   return (
     <div className="space-y-2">
@@ -722,7 +733,7 @@ function LintSummary({ lint }: { lint: DashboardSummary['lint'] }) {
       </div>
       {lint.modified_at && (
         <div className="text-[11px] text-slate-500">
-          报告更新于 {new Date(lint.modified_at).toLocaleString()}
+          {tr("报告更新于")}{' '}{new Date(lint.modified_at).toLocaleString(getFormattingLocale())}
         </div>
       )}
     </div>
@@ -730,6 +741,7 @@ function LintSummary({ lint }: { lint: DashboardSummary['lint'] }) {
 }
 
 function LLMUsagePanel({ usage }: { usage: DashboardSummary['llm_usage'] }) {
+  useLocale()
   // by-task: horizontal bar of token totals.
   const taskData = usage.by_task.slice(0, 8).map(t => ({
     task: t.task,
@@ -741,14 +753,13 @@ function LLMUsagePanel({ usage }: { usage: DashboardSummary['llm_usage'] }) {
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
       <div>
         <div className="text-[10.5px] uppercase tracking-wider text-slate-500 mb-1.5">
-          按任务（按 token 总量排序）
-        </div>
+          {tr("按任务（按 token 总量排序）")}</div>
         <div className="w-full h-[200px]">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={taskData} layout="vertical" margin={{ left: 10, right: 20 }}>
-              <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" horizontal={false} />
-              <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 11 }} tickFormatter={formatTokens} />
-              <YAxis type="category" dataKey="task" tick={{ fill: '#cbd5e1', fontSize: 11 }} width={100} />
+              <CartesianGrid stroke="var(--color-slate-800)" strokeDasharray="3 3" horizontal={false} />
+              <XAxis type="number" tick={{ fill: 'var(--color-slate-400)', fontSize: 11 }} tickFormatter={formatTokens} />
+              <YAxis type="category" dataKey="task" tick={{ fill: 'var(--color-slate-300)', fontSize: 11 }} width={100} />
               <Tooltip
                 contentStyle={TOOLTIP_CONTENT_STYLE}
                 itemStyle={TOOLTIP_ITEM_STYLE}
@@ -757,7 +768,7 @@ function LLMUsagePanel({ usage }: { usage: DashboardSummary['llm_usage'] }) {
                   if (name === 'tokens') {
                     const row = payload?.payload as Record<string, unknown> | undefined
                     return [
-                      `${formatTokens(Number(value))} · ${row?.calls} 调用 · 平均 ${row?.avg_latency_ms}ms`,
+                      tr("{0} · {1} 调用 · 平均 {2}ms", { 0: formatTokens(Number(value)), 1: row?.calls, 2: row?.avg_latency_ms }),
                       'tokens',
                     ]
                   }
@@ -771,8 +782,7 @@ function LLMUsagePanel({ usage }: { usage: DashboardSummary['llm_usage'] }) {
       </div>
       <div>
         <div className="text-[10.5px] uppercase tracking-wider text-slate-500 mb-1.5">
-          按模型
-        </div>
+          {tr("按模型")}</div>
         <div className="space-y-1.5 overflow-y-auto max-h-[200px] pr-1">
           {usage.by_model.map((m, i) => (
             <div

@@ -78,3 +78,7 @@ pnpm-debug.log*
 data/*.bak
 data/backups/
 supabase/.temp/
+
+# Frontend browser test artifacts
+frontend/test-results/
+frontend/playwright-report/

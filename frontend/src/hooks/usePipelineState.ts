@@ -1,3 +1,5 @@
+import { useLocale } from '../i18n/preferences'
+import { t as tr } from '../i18n/catalog'
 // Central polling + action surface for the [知识] page pipeline.
 //
 // One owner of all four lifecycle states (录入 / 筛选 / 编译 / 健检) so the
@@ -153,9 +155,9 @@ async function waitForPromotionRun(
     if (!status.running) {
       if (status.phase === 'done' && status.result) return status.result
       if (status.phase === 'error') {
-        throw new Error(status.error || '概念筛选后台任务失败')
+        throw new Error(status.error || tr("概念筛选后台任务失败"))
       }
-      throw new Error('概念筛选任务意外停止，未返回结果')
+      throw new Error(tr("概念筛选任务意外停止，未返回结果"))
     }
 
     await sleep(PROMOTION_POLL)
@@ -173,6 +175,7 @@ export function usePipelineState({
   onMutated,
   onOpenLint,
 }: UsePipelineStateOptions = {}): PipelineState & PipelineActions {
+  const locale = useLocale()
   const [freshness, setFreshness] = useState<WikiFreshnessSummary | null>(null)
   const [promotion, setPromotion] = useState<PromotionSummary | null>(null)
   const [promotionRunStatus, setPromotionRunStatus] = useState<PromotionRunStatus | null>(null)
@@ -332,24 +335,24 @@ export function usePipelineState({
     const ingest: StageSnapshot = {
       id: 'ingest',
       index: '①',
-      label: '录入',
+      label: tr("录入", {}, locale),
       tone: ingestRunning
         ? 'running'
         : remaining > 0 || (processing?.failedCount ?? 0) > 0
           ? 'warning'
           : 'ok',
       headline: ingestRunning
-        ? `处理中 ${processing?.done}/${processing?.total}`
+        ? tr("处理中 {0}/{1}", { 0: processing?.done, 1: processing?.total })
         : remaining > 0
-          ? `${remaining} 待处理 · ${totalProcessed} 已入库`
+          ? tr("{0} 待处理 · {1} 已入库", { 0: remaining, 1: totalProcessed })
           : (processing?.failedCount ?? 0) > 0
-            ? `${processing?.failedCount} 待重试 · ${totalProcessed} 已入库`
+            ? tr("{0} 待重试 · {1} 已入库", { 0: processing?.failedCount, 1: totalProcessed })
           : totalProcessed > 0
-            ? `${totalProcessed} 已入库`
-            : '无需处理论文',
+            ? tr("{0} 已入库", { 0: totalProcessed })
+            : tr("无需处理论文"),
       sub: ingestRunning && processing?.errors
-        ? `${processing.errors} 失败`
-        : (processing?.failedCount ?? 0) > 0 ? `${processing?.failedCount} 篇失败，可重试` : undefined,
+        ? tr("{0} 失败", { 0: processing.errors })
+        : (processing?.failedCount ?? 0) > 0 ? tr("{0} 篇失败，可重试", { 0: processing?.failedCount }) : undefined,
       isNext: false,
     }
 
@@ -362,7 +365,7 @@ export function usePipelineState({
     const curate: StageSnapshot = {
       id: 'curate',
       index: '②',
-      label: '筛选',
+      label: tr("筛选"),
       tone:
         promotionRunning
           ? 'running'
@@ -378,21 +381,21 @@ export function usePipelineState({
       headline:
         promotionRunning
           ? promotionRunStatus?.phase === 'llm' && (promotionRunStatus.total ?? 0) > 0
-            ? `Agent 判断 ${promotionRunStatus.done}/${promotionRunStatus.total}`
+            ? tr("Agent 判断 {0}/{1}", { 0: promotionRunStatus.done, 1: promotionRunStatus.total })
             : promotionPhaseLabel(promotionRunStatus?.phase)
           : promotionFailed
-            ? '筛选失败'
+            ? tr("筛选失败")
           : pending > 0
-          ? `${pending} 待评`
+          ? tr("{0} 待评", { 0: pending })
           : llmDecided > 0
-            ? `${llmDecided} Agent 待确认`
+            ? tr("{0} Agent 待确认", { 0: llmDecided })
             : promoted > 0
-              ? `${promoted} 已选中`
-              : '尚无候选',
+              ? tr("{0} 已选中", { 0: promoted })
+              : tr("尚无候选"),
       sub: promotionFailed
-        ? promotionRunStatus?.error || '请重试筛选'
+        ? promotionRunStatus?.error || tr("请重试筛选")
         : promotion
-          ? `选中 ${promotion.counts.promoted} · 淘汰 ${promotion.counts.rejected}`
+          ? tr("选中 {0} · 淘汰 {1}", { 0: promotion.counts.promoted, 1: promotion.counts.rejected })
           : undefined,
       isNext: false,
     }
@@ -409,7 +412,7 @@ export function usePipelineState({
     const compile: StageSnapshot = {
       id: 'compile',
       index: '③',
-      label: '编译',
+      label: tr("编译"),
       tone: compRunning
         ? 'running'
         : compileTotalNodes === 0
@@ -418,20 +421,20 @@ export function usePipelineState({
             ? 'warning'
             : 'ok',
       headline: compRunning
-        ? `编译中 ${compileStatus?.done}/${compileStatus?.total}`
+        ? tr("编译中 {0}/{1}", { 0: compileStatus?.done, 1: compileStatus?.total })
         : compileTotalNodes === 0
-          ? '尚未编译'
+          ? tr("尚未编译")
           : compileTotalIssues > 0
-            ? `${compileTotalIssues} 待编译`
-            : '全部就绪',
+            ? tr("{0} 待编译", { 0: compileTotalIssues })
+            : tr("全部就绪"),
       sub:
         !compRunning && compileTotalIssues > 0
           ? [
               paperMissing + paperStale > 0
-                ? `论文页 ${paperMissing + paperStale}`
+                ? tr("论文页 {0}", { 0: paperMissing + paperStale })
                 : null,
               conceptMissing + conceptStale > 0
-                ? `概念页 ${conceptMissing + conceptStale}`
+                ? tr("概念页 {0}", { 0: conceptMissing + conceptStale })
                 : null,
             ]
               .filter(Boolean)
@@ -453,7 +456,7 @@ export function usePipelineState({
     const maintain: StageSnapshot = {
       id: 'maintain',
       index: '④',
-      label: '健检',
+      label: tr("健检"),
       tone: lintExists
         ? lintStale
           ? 'warning'
@@ -463,13 +466,13 @@ export function usePipelineState({
           : 'idle',
       headline: lintExists
         ? lintStale
-          ? '报告已过期'
-          : '报告就绪'
+          ? tr("报告已过期")
+          : tr("报告就绪")
         : compileTotalNodes > 0
-          ? '尚未运行'
-          : '暂无可检',
+          ? tr("尚未运行")
+          : tr("暂无可检"),
       sub: lintExists && lintModified
-        ? `更新于 ${relativeTime(lintModified)}`
+        ? tr("更新于 {0}", { 0: relativeTime(lintModified) })
         : undefined,
       isNext: false,
     }
@@ -492,6 +495,7 @@ export function usePipelineState({
     const stagesArr = [ingest, curate, compile, maintain]
     return stagesArr.map(s => (s.id === winner ? { ...s, isNext: true } : s))
   }, [
+    locale,
     processing,
     freshness,
     promotion,
@@ -554,7 +558,7 @@ export function usePipelineState({
         setUnprocessedHint(Math.max(0, next.total - next.succeeded))
       }
       if (started.accepted === false) {
-        throw new Error(started.message || '没有可提交的论文任务')
+        throw new Error(started.message || tr("没有可提交的论文任务"))
       }
     })
   }, [wrap])
@@ -659,8 +663,8 @@ export function usePipelineState({
     if (ingestRunning) {
       return {
         stage: 'ingest',
-        label: `处理中 ${processing?.done}/${processing?.total}`,
-        reason: '正在解析论文，编译会在结束后自动接力。',
+        label: tr("处理中 {0}/{1}", { 0: processing?.done, 1: processing?.total }),
+        reason: tr("正在解析论文，编译会在结束后自动接力。"),
         tone: 'indigo',
         run: async () => {},
         busy: true,
@@ -670,8 +674,8 @@ export function usePipelineState({
     if (compRunning) {
       return {
         stage: 'compile',
-        label: `编译中 ${compileStatus?.done}/${compileStatus?.total}`,
-        reason: '正在写入 wiki .md，请稍候。',
+        label: tr("编译中 {0}/{1}", { 0: compileStatus?.done, 1: compileStatus?.total }),
+        reason: tr("正在写入 wiki .md，请稍候。"),
         tone: 'indigo',
         run: async () => {},
         busy: true,
@@ -683,9 +687,9 @@ export function usePipelineState({
       return {
         stage: 'curate',
         label: hasProgress
-          ? `Agent 判断 ${promotionRunStatus.done}/${promotionRunStatus.total}`
+          ? tr("Agent 判断 {0}/{1}", { 0: promotionRunStatus.done, 1: promotionRunStatus.total })
           : promotionPhaseLabel(promotionRunStatus.phase),
-        reason: '概念筛选正在后台运行，可以切换页面，任务不会中断。',
+        reason: tr("概念筛选正在后台运行，可以切换页面，任务不会中断。"),
         tone: 'indigo',
         run: async () => {},
         busy: true,
@@ -696,8 +700,8 @@ export function usePipelineState({
     if (remaining > 0) {
       return {
         stage: 'ingest',
-        label: `处理 ${remaining} 篇论文`,
-        reason: `有 ${remaining} 篇新论文待解析，先把它们入库再做后续步骤。`,
+        label: tr("处理 {0} 篇论文", { 0: remaining }),
+        reason: tr("有 {0} 篇新论文待解析，先把它们入库再做后续步骤。", { 0: remaining }),
         tone: 'indigo',
         run: process,
         busy: nextStepBusy,
@@ -706,8 +710,8 @@ export function usePipelineState({
     if ((processing?.failedCount ?? 0) > 0) {
       return {
         stage: 'ingest',
-        label: `重试 ${processing?.failedCount} 篇失败论文`,
-        reason: '这些论文此前处理失败，需要重试，而不是提交新的待处理任务。',
+        label: tr("重试 {0} 篇失败论文", { 0: processing?.failedCount }),
+        reason: tr("这些论文此前处理失败，需要重试，而不是提交新的待处理任务。"),
         tone: 'amber',
         run: retryFailed,
         busy: nextStepBusy,
@@ -717,8 +721,8 @@ export function usePipelineState({
     if (pending > 0) {
       return {
         stage: 'curate',
-        label: `评审 ${pending} 个候选`,
-        reason: `有 ${pending} 个待评候选节点，建议先跑「自动剔除」筛掉无效条目。`,
+        label: tr("评审 {0} 个候选", { 0: pending }),
+        reason: tr("有 {0} 个待评候选节点，建议先跑「自动剔除」筛掉无效条目。", { 0: pending }),
         tone: 'amber',
         run: () => runPromotionRun({ use_llm: true, force_all: false }).then(() => {}),
         busy: nextStepBusy,
@@ -728,8 +732,8 @@ export function usePipelineState({
     if (llmDecided > 0) {
       return {
         stage: 'curate',
-        label: `确认 ${llmDecided} 个 Agent 判断`,
-        reason: `Agent 已给出 ${llmDecided} 个剔除判断，确认后下次自动剔除不会再覆盖。`,
+        label: tr("确认 {0} 个 Agent 判断", { 0: llmDecided }),
+        reason: tr("Agent 已给出 {0} 个剔除判断，确认后下次自动剔除不会再覆盖。", { 0: llmDecided }),
         tone: 'amber',
         run: acceptPromotion,
         busy: nextStepBusy,
@@ -739,8 +743,8 @@ export function usePipelineState({
     if (paperIssues > 0) {
       return {
         stage: 'compile',
-        label: `编译 ${paperIssues} 个论文页`,
-        reason: `有 ${paperIssues} 个论文页待编译或已过期。`,
+        label: tr("编译 {0} 个论文页", { 0: paperIssues }),
+        reason: tr("有 {0} 个论文页待编译或已过期。", { 0: paperIssues }),
         tone: 'amber',
         run: recompilePapers,
         busy: nextStepBusy,
@@ -749,8 +753,8 @@ export function usePipelineState({
     if (conceptIssues > 0) {
       return {
         stage: 'compile',
-        label: `编译 ${conceptIssues} 个概念页`,
-        reason: `有 ${conceptIssues} 个概念页待编译或已过期。`,
+        label: tr("编译 {0} 个概念页", { 0: conceptIssues }),
+        reason: tr("有 {0} 个概念页待编译或已过期。", { 0: conceptIssues }),
         tone: 'amber',
         run: recompileConcepts,
         busy: nextStepBusy,
@@ -760,10 +764,10 @@ export function usePipelineState({
     if (compileTotalNodes > 0 && (!lintExists || lintStale)) {
       return {
         stage: 'maintain',
-        label: lintExists ? '重新运行健康检查' : '运行健康检查',
+        label: lintExists ? tr("重新运行健康检查") : tr("运行健康检查"),
         reason: lintExists
-          ? '已编译内容有过更新，健康检查报告需要刷新。'
-          : '已编译概念 ≥ 1，建议跑一次健康检查找出短桩 / 可合并项。',
+          ? tr("已编译内容有过更新，健康检查报告需要刷新。")
+          : tr("已编译概念 ≥ 1，建议跑一次健康检查找出短桩 / 可合并项。"),
         tone: 'amber',
         run: async () => {
           openLint()
@@ -774,8 +778,8 @@ export function usePipelineState({
     if (promoted === 0 && compileTotalNodes === 0) {
       return {
         stage: 'ingest',
-        label: '扫描目录',
-        reason: '从零开始：先扫描论文目录。',
+        label: tr("扫描目录"),
+        reason: tr("从零开始：先扫描论文目录。"),
         tone: 'indigo',
         run: async () => { await scan() },
         busy: nextStepBusy,
@@ -784,14 +788,15 @@ export function usePipelineState({
     // 7) All clean.
     return {
       stage: 'maintain',
-      label: '全部就绪 · 去提问',
-      reason: '所有阶段都已完成，可以打开 Ask 提问或继续添加论文。',
+      label: tr("全部就绪 · 去提问", {}, locale),
+      reason: tr("所有阶段都已完成，可以打开 Ask 提问或继续添加论文。"),
       tone: 'emerald',
       run: async () => {},
       busy: false,
       disabled: true,
     }
   }, [
+    locale,
     processing,
     compileStatus,
     unprocessedHint,
@@ -838,13 +843,13 @@ export function usePipelineState({
 function promotionPhaseLabel(phase?: PromotionRunStatus['phase']): string {
   switch (phase) {
     case 'heuristic':
-      return '启发式筛选中'
+      return tr("启发式筛选中")
     case 'llm':
-      return '准备 Agent 判断'
+      return tr("准备 Agent 判断")
     case 'reconcile':
-      return '同步概念页'
+      return tr("同步概念页")
     default:
-      return '筛选中'
+      return tr("筛选中")
   }
 }
 
@@ -878,14 +883,14 @@ function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return iso
   const diff = Date.now() - then
-  if (diff < 0) return '刚刚'
+  if (diff < 0) return tr("刚刚")
   const sec = Math.floor(diff / 1000)
-  if (sec < 60) return `${sec} 秒前`
+  if (sec < 60) return tr("{0} 秒前", { 0: sec })
   const min = Math.floor(sec / 60)
-  if (min < 60) return `${min} 分钟前`
+  if (min < 60) return tr("{0} 分钟前", { 0: min })
   const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr} 小时前`
+  if (hr < 24) return tr("{0} 小时前", { 0: hr })
   const day = Math.floor(hr / 24)
-  if (day < 30) return `${day} 天前`
+  if (day < 30) return tr("{0} 天前", { 0: day })
   return new Date(iso).toLocaleDateString()
 }

@@ -1,3 +1,4 @@
+import { t as tr } from '../i18n/catalog'
 /**
  * Desktop → cloud sync agent.
  *
@@ -240,7 +241,7 @@ export async function runSync(
 ): Promise<CommitResponse> {
   const session = getStoredSession()
   if (!session) {
-    const err = new SyncError('未登录云端账号', 'error')
+    const err = new SyncError(tr("未登录云端账号"), 'error')
     onProgress({ stage: 'error', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0, error: err.message })
     throw err
   }
@@ -268,13 +269,13 @@ export async function runSync(
       deletions: snapshot.deletions,
     })
   } catch (err) {
-    const message = (err as Error).message || 'prepare 失败'
+    const message = (err as Error).message || tr("prepare 失败")
     onProgress({ stage: 'error', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0, error: message })
     throw new SyncError(message, 'preparing')
   }
 
   if (prepResp.validation_errors.length > 0) {
-    const message = `校验失败：${prepResp.validation_errors.map(v => `${v.table}/${v.id ?? '?'} ${v.reason}`).join('; ')}`
+    const message = tr("校验失败：{0}", { 0: prepResp.validation_errors.map(v => `${v.table}/${v.id ?? '?'} ${v.reason}`).join('; ') })
     onProgress({ stage: 'error', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0, error: message })
     throw new SyncError(message, 'preparing')
   }
@@ -314,7 +315,7 @@ export async function runSync(
   })
 
   if (failures.length > 0 && uploaded.length === 0) {
-    const message = `上传全部失败：${failures.slice(0, 3).join('; ')}`
+    const message = tr("上传全部失败：{0}", { 0: failures.slice(0, 3).join('; ') })
     onProgress({ stage: 'error', uploadsDone: uploaded.length, uploadsTotal, uploadsSkipped, error: message })
     throw new SyncError(message, 'uploading')
   }
@@ -329,7 +330,7 @@ export async function runSync(
       uploaded,
     })
   } catch (err) {
-    const message = (err as Error).message || 'commit 失败'
+    const message = (err as Error).message || tr("commit 失败")
     onProgress({ stage: 'error', uploadsDone: uploaded.length, uploadsTotal, uploadsSkipped, error: message })
     throw new SyncError(message, 'committing')
   }
@@ -346,10 +347,10 @@ export async function runSync(
       .slice(0, 3)
       .map(r => `${r.rel_path || r.table}（${r.code}）：${r.reason}`)
       .join('；')
-    const more = rj.length > 3 ? ` 等共 ${rj.length} 项` : ''
+    const more = rj.length > 3 ? tr(" 等共 {0} 项", { 0: rj.length }) : ''
     const message = rj.length > 0
-      ? `云端拒收，未写入任何数据：${head}${more}`
-      : '云端未写入任何数据（revision 0）'
+      ? tr("云端拒收，未写入任何数据：{0}{1}", { 0: head, 1: more })
+      : tr("云端未写入任何数据（revision 0）")
     onProgress({ stage: 'error', uploadsDone: uploaded.length, uploadsTotal, uploadsSkipped, error: message })
     throw new SyncError(message, 'committing')
   }
@@ -419,7 +420,7 @@ export async function resumeCommit(
     })
     return commitResp
   } catch (err) {
-    const message = (err as Error).message || 'resume commit 失败'
+    const message = (err as Error).message || tr("resume commit 失败")
     onProgress({
       stage: 'error',
       uploadsDone: pending.uploaded.length,

@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 // Left-rail control panel for the [知识] page. Replaces the previous
 // PipelineStatusBar (top) + CandidatePanel (bottom-left floating). All
 // pipeline actions now live in one vertical stack of stage cards so the
@@ -98,6 +100,7 @@ export default function PipelineConsole({
   onOpenRescue,
   onOpenAsk,
 }: Props) {
+  useLocale()
   const auth = useCloudAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [expandedStages, setExpandedStages] = useState<Set<ConsoleStageId>>(() => new Set())
@@ -124,7 +127,7 @@ export default function PipelineConsole({
   const scanForDirectory = state.scan
   const [runAllStatus, setRunAllStatus] = useState<RunAllStatus>({
     running: false,
-    label: '全流程编排',
+    label: tr("全流程编排"),
     tone: 'idle',
   })
 
@@ -192,7 +195,7 @@ export default function PipelineConsole({
       } : result)
     } catch (reason) {
       if (revision === scanRevision.current) {
-        setDuplicateCheckError('重新检查失败，当前显示上次扫描结果，请稍后重试。')
+        setDuplicateCheckError(tr("重新检查失败，当前显示上次扫描结果，请稍后重试。"))
       }
       console.warn('duplicate files refresh failed', reason)
     } finally {
@@ -238,76 +241,76 @@ export default function PipelineConsole({
       state.promotionRunStatus?.running
     ) return
     setError(null)
-    setRunAllStep('扫描论文目录')
+    setRunAllStep(tr("扫描论文目录"))
     try {
       const scanResult = await state.scan()
       showScanResult(scanResult)
 
       const pendingPapers = scanResult.pending ?? scanResult.unprocessed
       if (pendingPapers > 0) {
-        setRunAllStep('处理论文', `${pendingPapers} 篇待处理`)
+        setRunAllStep(tr("处理论文"), tr("{0} 篇待处理", { 0: pendingPapers }))
         await state.process()
         const processingResult = await waitForProcessingDone(s => {
-          if (s.running) setRunAllStep('处理论文', `${s.done}/${s.total}`)
+          if (s.running) setRunAllStep(tr("处理论文"), `${s.done}/${s.total}`)
         })
         if (processingResult.errors > 0) {
           const firstFailure = processingResult.failedPapers[0]
           throw new Error(
             firstFailure?.reason ||
               processingResult.batchError ||
-              `${processingResult.errors} 篇论文处理失败`,
+              tr("{0} 篇论文处理失败", { 0: processingResult.errors }),
           )
         }
       }
 
       const afterProcessing = await getStatus()
       if ((afterProcessing.failed_count ?? 0) > 0) {
-        throw new Error(`有 ${afterProcessing.failed_count} 篇失败论文，请先在录入阶段点击“重试失败”。`)
+        throw new Error(tr("有 {0} 篇失败论文，请先在录入阶段点击“重试失败”。", { 0: afterProcessing.failed_count }))
       }
-      setRunAllStep('自动筛选候选概念')
+      setRunAllStep(tr("自动筛选候选概念"))
       const beforePromotion = await getPromotionCounts()
       if ((beforePromotion.summary.counts.pending ?? 0) > 0) {
         await state.runPromotionRun(
           { use_llm: true, force_all: false },
           status => {
             if (status.phase === 'heuristic') {
-              setRunAllStep('自动筛选候选概念', '启发式预筛选')
+              setRunAllStep(tr("自动筛选候选概念"), tr("启发式预筛选"))
             } else if (status.phase === 'llm') {
               setRunAllStep(
-                '自动筛选候选概念',
+                tr("自动筛选候选概念"),
                 status.total > 0
-                  ? `Agent 判断 ${status.done}/${status.total}`
-                  : '准备 Agent 判断',
+                  ? tr("Agent 判断 {0}/{1}", { 0: status.done, 1: status.total })
+                  : tr("准备 Agent 判断"),
               )
             } else if (status.phase === 'reconcile') {
-              setRunAllStep('自动筛选候选概念', '同步概念页与搜索索引')
+              setRunAllStep(tr("自动筛选候选概念"), tr("同步概念页与搜索索引"))
             }
           },
         )
       }
       const afterPromotion = await getPromotionCounts()
       if ((afterPromotion.summary.by.llm ?? 0) > 0) {
-        setRunAllStep('确认 Agent 筛选结果', `${afterPromotion.summary.by.llm} 个判断`)
+        setRunAllStep(tr("确认 Agent 筛选结果"), tr("{0} 个判断", { 0: afterPromotion.summary.by.llm }))
         await state.acceptPromotion()
       }
 
       let freshness = await getWikiFreshness()
       const paperIssues = freshness.papers.missing_count + freshness.papers.stale_count
       if (paperIssues > 0) {
-        setRunAllStep('编译论文页', `${paperIssues} 个待处理`)
+        setRunAllStep(tr("编译论文页"), tr("{0} 个待处理", { 0: paperIssues }))
         await state.recompilePapers()
         await waitForWikiCompileDone(s => {
-          if (s.running) setRunAllStep('编译论文页', `${s.done}/${s.total}`)
+          if (s.running) setRunAllStep(tr("编译论文页"), `${s.done}/${s.total}`)
         })
       }
 
       freshness = await getWikiFreshness()
       const conceptIssues = freshness.concepts.missing_count + freshness.concepts.stale_count
       if (conceptIssues > 0) {
-        setRunAllStep('编译概念页', `${conceptIssues} 个待处理`)
+        setRunAllStep(tr("编译概念页"), tr("{0} 个待处理", { 0: conceptIssues }))
         await state.recompileConcepts()
         await waitForWikiCompileDone(s => {
-          if (s.running) setRunAllStep('编译概念页', `${s.done}/${s.total}`)
+          if (s.running) setRunAllStep(tr("编译概念页"), `${s.done}/${s.total}`)
         })
       }
 
@@ -316,31 +319,31 @@ export default function PipelineConsole({
         (freshness.papers.total_processed ?? 0) +
         (freshness.concepts.total_nodes ?? 0)
       if (compileTotalNodes > 0) {
-        setRunAllStep('运行健康检查', '规则 + Agent')
+        setRunAllStep(tr("运行健康检查"), tr("规则 + Agent"))
         await waitForWikiLint(await runWikiLint(true))
       }
 
       if (auth.configured && auth.user) {
-        setRunAllStep('同步到云端', '准备快照')
+        setRunAllStep(tr("同步到云端"), tr("准备快照"))
         const snapshot = await gatherLocalSnapshot({ since: getLastSyncAt() })
         await runSync(snapshot, progress => {
           if (progress.stage === 'uploading' && progress.uploadsTotal > 0) {
-            setRunAllStep('同步到云端', `上传 ${progress.uploadsDone}/${progress.uploadsTotal}`)
+            setRunAllStep(tr("同步到云端"), tr("上传 {0}/{1}", { 0: progress.uploadsDone, 1: progress.uploadsTotal }))
           } else if (progress.stage !== 'idle') {
-            setRunAllStep('同步到云端', syncStageLabel(progress.stage))
+            setRunAllStep(tr("同步到云端"), syncStageLabel(progress.stage))
           }
         })
         setRunAllStatus({
           running: false,
-          label: '流水线已全部完成',
-          detail: '已同步到云端',
+          label: tr("流水线已全部完成"),
+          detail: tr("已同步到云端"),
           tone: 'success',
         })
       } else {
         setRunAllStatus({
           running: false,
-          label: '本地流水线已完成',
-          detail: '同步已跳过：请先登录云端账号',
+          label: tr("本地流水线已完成"),
+          detail: tr("同步已跳过：请先登录云端账号"),
           tone: 'warning',
         })
       }
@@ -350,7 +353,7 @@ export default function PipelineConsole({
       setError(message)
       setRunAllStatus({
         running: false,
-        label: '全流程编排中断',
+        label: tr("全流程编排中断"),
         detail: message,
         tone: 'warning',
       })
@@ -372,12 +375,12 @@ export default function PipelineConsole({
 
   // Scan reports its result inline (new vs. skipped-duplicate counts).
   const scanNotice = scanSummary
-    ? `扫描完成：新增 ${scanSummary.new_found} 篇` +
-      (duplicateFiles.length > 0 ? ` · 当前重复文件 ${duplicateFiles.length} 个（已跳过，不参与处理）`
-        : scanSummary.duplicates > 0 ? ' · 重复文件已清理' : '') +
-      ` · 待处理 ${state.processing?.pending ?? scanSummary.pending ?? scanSummary.unprocessed} 篇` +
+    ? tr("扫描完成：新增 {0} 篇", { 0: scanSummary.new_found }) +
+      (duplicateFiles.length > 0 ? tr(" · 当前重复文件 {0} 个（已跳过，不参与处理）", { 0: duplicateFiles.length })
+        : scanSummary.duplicates > 0 ? tr(" · 重复文件已清理") : '') +
+      tr(" · 待处理 {0} 篇", { 0: state.processing?.pending ?? scanSummary.pending ?? scanSummary.unprocessed }) +
       ((state.processing?.failedCount ?? scanSummary.failed_count ?? 0) > 0
-        ? ` · 失败待重试 ${state.processing?.failedCount ?? scanSummary.failed_count} 篇` : '') +
+        ? tr(" · 失败待重试 {0} 篇", { 0: state.processing?.failedCount ?? scanSummary.failed_count }) : '') +
       (duplicateCheckError ? ` · ${duplicateCheckError}` : '')
     : null
   const runScan = async () => {
@@ -401,11 +404,11 @@ export default function PipelineConsole({
   if (collapsed) {
     return (
       <>
-        <aside className="shrink-0 w-12 border-r border-slate-800/80 bg-[#0d1016] flex flex-col items-center py-3 gap-3">
+        <aside className="shrink-0 w-12 border-r border-slate-800/80 bg-[var(--surface-0d1016)] flex flex-col items-center py-3 gap-3">
           <button
             onClick={() => setCollapsed(false)}
-            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800/60"
-            title="展开流水线控制台"
+            className="p-1.5 text-slate-400 hover:text-foreground rounded-md hover:bg-slate-800/60"
+            title={tr("展开流水线控制台")}
           >
             <PanelLeftOpen size={16} />
           </button>
@@ -428,15 +431,15 @@ export default function PipelineConsole({
           <button
             onClick={() => openFromIconRail('sync')}
             className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
-            title="⑤ 同步 — 推送到云端"
+            title={tr("⑤ 同步 — 推送到云端")}
           >
             <CloudUpload size={14} />
           </button>
           <div className="mt-auto" />
           <button
             onClick={onOpenAsk}
-            className="p-1.5 text-indigo-300 hover:text-white rounded-md hover:bg-indigo-500/20"
-            title="向知识库提问"
+            className="p-1.5 text-indigo-300 hover:text-foreground rounded-md hover:bg-indigo-500/20"
+            title={tr("向知识库提问")}
           >
             <Sparkles size={16} />
           </button>
@@ -447,17 +450,16 @@ export default function PipelineConsole({
   }
 
   return (
-    <aside className="shrink-0 w-[19rem] border-r border-slate-800/80 bg-[#0d1016] flex flex-col">
+    <aside className="shrink-0 w-[19rem] border-r border-slate-800/80 bg-[var(--surface-0d1016)] flex flex-col">
       {/* Header */}
       <header className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-800/60">
         <Sparkles size={12} className="text-indigo-300" />
         <span className="text-[11px] tracking-wider uppercase text-slate-400 font-semibold">
-          流水线控制台
-        </span>
+          {tr("流水线控制台")}</span>
         <button
           onClick={() => setCollapsed(true)}
           className="ml-auto p-1 rounded-md text-slate-500 hover:text-slate-200 hover:bg-slate-800/60"
-          title="折叠为图标条"
+          title={tr("折叠为图标条")}
         >
           <PanelLeftClose size={14} />
         </button>
@@ -468,7 +470,7 @@ export default function PipelineConsole({
           onClick={runAll}
           disabled={runAllStatus.running || busyKey !== null || !!state.processing?.running || !!state.compileStatus?.running}
           className={`w-full inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${runAllButtonClass(runAllStatus.tone)}`}
-          title="按顺序执行：扫描、处理、筛选、编译、健检，并在已登录时同步到云端"
+          title={tr("按顺序执行：扫描、处理、筛选、编译、健检，并在已登录时同步到云端")}
         >
           {runAllStatus.running ? (
             <Loader2 size={13} className="animate-spin" />
@@ -477,7 +479,7 @@ export default function PipelineConsole({
           ) : (
             <Sparkles size={13} />
           )}
-          {runAllStatus.running ? runAllStatus.label : '全流程编排'}
+          {runAllStatus.running ? runAllStatus.label : tr("全流程编排")}
         </button>
         {(runAllStatus.detail || runAllStatus.tone !== 'idle') && (
           <p className={`mt-1 text-[11px] leading-relaxed ${runAllTextClass(runAllStatus.tone)}`}>
@@ -559,8 +561,7 @@ export default function PipelineConsole({
           className="w-full inline-flex items-center justify-center gap-1.5 text-[13px] font-medium text-white bg-gradient-to-br from-indigo-500 to-violet-500 hover:from-indigo-400 hover:to-violet-400 px-3 py-2 rounded-xl transition-colors shadow-lg shadow-indigo-500/20"
         >
           <Sparkles size={14} />
-          Ask · 跨论文提问
-        </button>
+          {tr("Ask · 跨论文提问")}</button>
       </div>
 
       <PromotionPromptEditor
@@ -585,6 +586,7 @@ function StageCard({
   onToggle: () => void
   children: ReactNode
 }) {
+  useLocale()
   const palette = stagePalette(stage.tone)
   return (
     <section
@@ -597,7 +599,7 @@ function StageCard({
       <button
         onClick={onToggle}
         aria-expanded={expanded}
-        title={expanded ? `收起${stage.label}` : `展开${stage.label}`}
+        title={expanded ? tr("收起{0}", { 0: stage.label }) : tr("展开{0}", { 0: stage.label })}
         className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
       >
         <span className="flex min-w-0 items-center gap-2">
@@ -617,8 +619,7 @@ function StageCard({
           </span>
           {stage.isNext && (
             <span className="shrink-0 rounded-full border border-indigo-400/40 bg-indigo-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-indigo-200">
-              建议
-            </span>
+              {tr("建议")}</span>
           )}
         </span>
         <span
@@ -659,6 +660,7 @@ function IngestActions({
   onProcess: () => void
   onRetry: () => void
 }) {
+  useLocale()
   const running = !!state.processing?.running
   const anyBusy = busyKey !== null
   const submitting = busyKey === 'process' || busyKey === 'retry'
@@ -672,8 +674,7 @@ function IngestActions({
   return (
     <div className="space-y-2">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
-        扫描本地 PDF 目录，把新论文喂给 LLM 抽取，并落入数据库。
-      </p>
+        {tr("扫描本地 PDF 目录，把新论文喂给 LLM 抽取，并落入数据库。")}</p>
       <div className="flex flex-wrap gap-2">
         <ActionButton
           onClick={onScan}
@@ -682,11 +683,10 @@ function IngestActions({
           variant="ghost"
           disabled={running || anyBusy}
           loading={busyKey === 'scan'}
-          loadingLabel="扫描中"
-          title="扫描 data/papers 目录，找出未入库的 PDF"
+          loadingLabel={tr("扫描中")}
+          title={tr("扫描 data/papers 目录，找出未入库的 PDF")}
         >
-          扫描目录
-        </ActionButton>
+          {tr("扫描目录")}</ActionButton>
         <ActionButton
           onClick={retryOnly ? onRetry : onProcess}
           className="flex-[1_0_max-content]"
@@ -694,10 +694,10 @@ function IngestActions({
           variant="primary"
           disabled={running || anyBusy || (remaining === 0 && failedCount === 0)}
           loading={submitting}
-          loadingLabel="提交中"
-          title={state.processing?.current || (retryOnly ? '重新处理失败论文' : remaining > 0 ? '处理新的待处理论文' : '暂无待处理论文')}
+          loadingLabel={tr("提交中")}
+          title={state.processing?.current || (retryOnly ? tr("重新处理失败论文") : remaining > 0 ? tr("处理新的待处理论文") : tr("暂无待处理论文"))}
         >
-          {running ? '处理中' : retryOnly ? `重试失败 ${failedCount} 篇` : remaining > 0 ? `处理 ${remaining} 篇` : '处理论文'}
+          {running ? tr("处理中") : retryOnly ? tr("重试失败 {0} 篇", { 0: failedCount }) : remaining > 0 ? tr("处理 {0} 篇", { 0: remaining }) : tr("处理论文")}
         </ActionButton>
       </div>
       {scanNotice && !running && (
@@ -707,16 +707,15 @@ function IngestActions({
       )}
       {!running && remaining > 0 && failedCount > 0 && (
         <ActionButton onClick={onRetry} icon={<Play size={12} />} variant="ghost" disabled={anyBusy}>
-          重试失败 {failedCount} 篇
-        </ActionButton>
+          {tr("重试失败")}{' '}{failedCount} {tr("篇")}</ActionButton>
       )}
       {!running && (state.processing?.errors ?? 0) > 0 && (
         <div className="rounded-md border border-rose-500/35 bg-rose-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-rose-200">
           <div className="flex items-start gap-1.5">
             <AlertTriangle size={12} className="mt-0.5 shrink-0" />
             <span>
-              {state.processing?.lastMessage || `有 ${state.processing?.errors} 篇处理失败`}
-              {firstFailure?.filename ? `；首篇：${firstFailure.filename}` : ''}
+              {state.processing?.lastMessage || tr("有 {0} 篇处理失败", { 0: state.processing?.errors })}
+              {firstFailure?.filename ? tr("；首篇：{0}", { 0: firstFailure.filename }) : ''}
               {failureReason ? `；${failureReason}` : ''}
             </span>
           </div>
@@ -763,6 +762,7 @@ function CurateActions({
   onRun: () => void
   onAccept: () => void
 }) {
+  useLocale()
   const pending = state.promotion?.counts.pending ?? 0
   const llmDecided = state.promotion?.by.llm ?? 0
   const rejected = state.promotion?.counts.rejected ?? 0
@@ -774,14 +774,13 @@ function CurateActions({
   return (
     <div className="space-y-2.5">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
-        启发式 + Agent 自动剔除无效候选；人工抽查后再「确认 Agent 剔除」锁定。
-      </p>
+        {tr("启发式 + Agent 自动剔除无效候选；人工抽查后再「确认 Agent 剔除」锁定。")}</p>
 
       {/* Counts strip */}
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
-        <Stat label="待评" value={pending} tone="amber" />
-        <Stat label="已选" value={state.promotion?.counts.promoted ?? 0} tone="emerald" />
-        <Stat label="淘汰" value={rejected} tone="rose" />
+        <Stat label={tr("待评")} value={pending} tone="amber" />
+        <Stat label={tr("已选")} value={state.promotion?.counts.promoted ?? 0} tone="emerald" />
+        <Stat label={tr("淘汰")} value={rejected} tone="rose" />
         <span className="text-slate-700">·</span>
         <Stat label="human" value={userPinned} tone="slate" icon={<Hand size={9} />} />
         <Stat label="agent" value={llmDecided} tone="slate" icon={<Bot size={9} />} />
@@ -789,7 +788,7 @@ function CurateActions({
 
       {state.promotionRunStatus?.phase === 'error' && (
         <p className="rounded-md border border-rose-500/30 bg-rose-500/10 px-2 py-1.5 text-[10.5px] text-rose-200 break-words">
-          {state.promotionRunStatus.error || '概念筛选后台任务失败，请重试。'}
+          {state.promotionRunStatus.error || tr("概念筛选后台任务失败，请重试。")}
         </p>
       )}
 
@@ -805,12 +804,11 @@ function CurateActions({
           loadingLabel={
             promotionRunning && state.promotionRunStatus?.phase === 'llm' && state.promotionRunStatus.total > 0
               ? `${state.promotionRunStatus.done}/${state.promotionRunStatus.total}`
-              : '剔除中'
+              : tr("剔除中")
           }
-          title="对所有候选节点跑启发式 + Agent 剔除"
+          title={tr("对所有候选节点跑启发式 + Agent 剔除")}
         >
-          自动剔除
-        </ActionButton>
+          {tr("自动剔除")}</ActionButton>
         <ActionButton
           onClick={onAccept}
           className="flex-[1_0_max-content]"
@@ -818,10 +816,10 @@ function CurateActions({
           variant="ghost"
           disabled={llmDecided === 0 || anyBusy}
           loading={busyKey === 'curate-accept'}
-          loadingLabel="确认中"
-          title="把 Agent 的剔除结果锁成 human 确定"
+          loadingLabel={tr("确认中")}
+          title={tr("把 Agent 的剔除结果锁成 human 确定")}
         >
-          确认 Agent {llmDecided > 0 ? `(${llmDecided})` : ''}
+          {tr("确认 Agent")}{' '}{llmDecided > 0 ? `(${llmDecided})` : ''}
         </ActionButton>
       </div>
 
@@ -831,8 +829,8 @@ function CurateActions({
           className="inline-flex items-center gap-1 cursor-pointer"
           title={
             promptEmpty
-              ? '提示词未配置，即使勾上 Agent 也会被跳过'
-              : '不勾时只跑启发式，速度快但灰色地带保留待修订'
+              ? tr("提示词未配置，即使勾上 Agent 也会被跳过")
+              : tr("不勾时只跑启发式，速度快但灰色地带保留待修订")
           }
         >
           <input
@@ -842,45 +840,43 @@ function CurateActions({
             className="accent-indigo-500 h-3 w-3"
           />
           <span className={promptEmpty ? 'text-amber-300/90' : undefined}>
-            调用 Agent{promptEmpty ? '（未配置）' : ''}
+            {tr("调用 Agent")}{' '}{promptEmpty ? tr("（未配置）") : ''}
           </span>
         </label>
-        <label className="inline-flex items-center gap-1 cursor-pointer" title="忽略 30 天冷却期">
+        <label className="inline-flex items-center gap-1 cursor-pointer" title={tr("忽略 30 天冷却期")}>
           <input
             type="checkbox"
             checked={forceAll}
             onChange={e => setForceAll(e.target.checked)}
             className="accent-indigo-500 h-3 w-3"
           />
-          <span>强制重剔</span>
+          <span>{tr("强制重剔")}</span>
         </label>
         <button
           onClick={onOpenPromptEditor}
           className="inline-flex items-center gap-1 text-slate-400 hover:text-slate-200"
-          title="编辑发给 Agent 的剔除提示词"
+          title={tr("编辑发给 Agent 的剔除提示词")}
         >
-          <Pencil size={10} /> 提示词
-        </button>
+          <Pencil size={10} /> {tr("提示词")}</button>
       </div>
 
       {/* Candidate visibility mode */}
       <div className="pt-1.5">
         <div className="text-[10.5px] uppercase tracking-wider text-slate-500 mb-1">
-          图谱可见范围
-        </div>
+          {tr("图谱可见范围")}</div>
         <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-950/60 p-1 border border-slate-800">
           {(
             [
-              { id: 'off', label: '仅选中', icon: <EyeOff size={10} />, disabled: false },
+              { id: 'off', label: tr("仅选中"), icon: <EyeOff size={10} />, disabled: false },
               {
                 id: 'pending',
-                label: pending > 0 ? `候选(${pending})` : '候选',
+                label: pending > 0 ? tr("候选({0})", { 0: pending }) : tr("候选"),
                 icon: <Eye size={10} />,
                 disabled: pending === 0,
               },
               {
                 id: 'all',
-                label: '全量',
+                label: tr("全量"),
                 icon: <Eye size={10} />,
                 disabled: pending === 0 && rejected === 0,
               },
@@ -894,7 +890,7 @@ function CurateActions({
                 disabled={opt.disabled && !active}
                 className={`inline-flex items-center justify-center gap-1 text-[10.5px] py-1 px-1 rounded-md transition-colors ${
                   active
-                    ? 'bg-slate-800 text-white shadow-inner'
+                    ? 'bg-slate-800 text-foreground shadow-inner'
                     : opt.disabled
                       ? 'text-slate-700 cursor-not-allowed'
                       : 'text-slate-500 hover:text-slate-200'
@@ -913,10 +909,10 @@ function CurateActions({
         icon={<Trash2 size={11} />}
         variant="ghost"
         disabled={rejected === 0}
-        title="打开回收站，召回误剔节点"
+        title={tr("打开回收站，召回误剔节点")}
         className="w-full"
       >
-        召回误剔{rejected > 0 ? ` (${rejected})` : ''}
+        {tr("召回误剔")}{' '}{rejected > 0 ? ` (${rejected})` : ''}
       </ActionButton>
     </div>
   )
@@ -935,6 +931,7 @@ function CompileActions({
   onCompilePapers: () => void
   onCompileConcepts: () => void
 }) {
+  useLocale()
   const running = !!state.compileStatus?.running
   const runningKind = state.compileStatus?.kind
   const anyBusy = busyKey !== null
@@ -946,12 +943,11 @@ function CompileActions({
   return (
     <div className="space-y-2">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
-        把 DB 里的论文与概念编译为可读的 wiki .md（被 Ask / 全文搜索使用）。
-      </p>
+        {tr("把 DB 里的论文与概念编译为可读的 wiki .md（被 Ask / 全文搜索使用）。")}</p>
       <div className="space-y-1.5">
         <CompileRow
           icon={<FileText size={12} />}
-          label="论文页"
+          label={tr("论文页")}
           ok={f?.papers.ok ?? 0}
           total={f?.papers.total_processed ?? 0}
           missing={f?.papers.missing_count ?? 0}
@@ -964,7 +960,7 @@ function CompileActions({
         />
         <CompileRow
           icon={<BookMarked size={12} />}
-          label="概念页"
+          label={tr("概念页")}
           ok={f?.concepts.ok ?? 0}
           total={f?.concepts.total_nodes ?? 0}
           missing={f?.concepts.missing_count ?? 0}
@@ -1005,6 +1001,7 @@ function CompileRow({
   onClick: () => void
   disabled: boolean
 }) {
+  useLocale()
   const issues = missing + stale + orphan
   // Three terminal states: running (compiling now) → pending (something
   // to compile) → done (total>0 and everything ok). total==0 means
@@ -1016,14 +1013,14 @@ function CompileRow({
         <span className="text-slate-400">{icon}</span>
         <span className="text-[12px] text-slate-200 font-medium">{label}</span>
         <span className={`ml-auto text-[11px] tabular-nums ${allOk && !runningHere ? 'text-emerald-300' : 'text-slate-400'}`}>
-          {total === 0 ? '尚未编译' : `${ok}/${total}`}
+          {total === 0 ? tr("尚未编译") : `${ok}/${total}`}
         </span>
       </div>
       {issues > 0 && !runningHere && (
         <div className="mt-0.5 text-[10.5px] text-slate-500 tabular-nums">
-          {missing > 0 && `${missing} 待编译 `}
-          {stale > 0 && `${stale} 已过期 `}
-          {orphan > 0 && `${orphan} 孤儿`}
+          {missing > 0 && tr("{0} 待编译 ", { 0: missing })}
+          {stale > 0 && tr("{0} 已过期 ", { 0: stale })}
+          {orphan > 0 && tr("{0} 孤儿", { 0: orphan })}
         </div>
       )}
       {runningHere ? (
@@ -1032,16 +1029,14 @@ function CompileRow({
           className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-indigo-500/40 bg-indigo-500/10 text-indigo-200 cursor-not-allowed"
         >
           <Loader2 size={11} className="animate-spin" />
-          编译中…
-        </button>
+          {tr("编译中…")}</button>
       ) : allOk ? (
         // Done state: green "up to date" pill. Stays until the next
         // freshness poll surfaces new missing/stale items, which flips
         // this back to the amber 重编译 button.
         <div className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 text-emerald-300">
           <CheckCircle2 size={11} />
-          已是最新
-        </div>
+          {tr("已是最新")}</div>
       ) : total > 0 ? (
         <button
           onClick={onClick}
@@ -1049,7 +1044,7 @@ function CompileRow({
           className="mt-1.5 w-full inline-flex items-center justify-center gap-1.5 text-[11px] px-2 py-1 rounded-md border border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
         >
           <Sparkles size={11} />
-          {missing === total ? '编译' : '重编译'}
+          {missing === total ? tr("编译") : tr("重编译")}
         </button>
       ) : null}
       {runningHere && progress && progress.total > 0 && (
@@ -1073,6 +1068,7 @@ function MaintainActions({
   state: PipelineState & PipelineActions
   onOpenLint: () => void
 }) {
+  useLocale()
   const lint = state.lintStatus
   const compileTotalNodes =
     (state.freshness?.papers.total_processed ?? 0) +
@@ -1081,17 +1077,16 @@ function MaintainActions({
   return (
     <div className="space-y-2">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
-        扫描 wiki .md，找出短桩 / 可合并 / 待建概念 / 追问建议，并给出可执行操作。
-      </p>
+        {tr("扫描 wiki .md，找出短桩 / 可合并 / 待建概念 / 追问建议，并给出可执行操作。")}</p>
       <div className="grid grid-cols-1 gap-2">
         <ActionButton
           onClick={onOpenLint}
           icon={<Stethoscope size={12} />}
           variant="primary"
           disabled={empty}
-          title={empty ? '尚无可检的编译内容' : '运行健康检查（自动 + Agent）'}
+          title={empty ? tr("尚无可检的编译内容") : tr("运行健康检查（自动 + Agent）")}
         >
-          {lint?.exists ? '查看 / 重跑健康检查' : '运行健康检查'}
+          {lint?.exists ? tr("查看 / 重跑健康检查") : tr("运行健康检查")}
         </ActionButton>
         {lint?.exists && (
           <button
@@ -1099,8 +1094,7 @@ function MaintainActions({
             className="inline-flex items-center justify-center gap-1.5 text-[11px] text-slate-400 hover:text-slate-200 px-2 py-1 rounded-md border border-slate-700/80 bg-slate-900/40"
             title={lint.rel_path}
           >
-            <FileSearch size={11} /> 查看最新报告
-          </button>
+            <FileSearch size={11} /> {tr("查看最新报告")}</button>
         )}
       </div>
     </div>
@@ -1110,6 +1104,7 @@ function MaintainActions({
 // --- shared subcomponents --------------------------------------------
 
 function StageIcon({ stage, tone }: { stage: StageId; tone: StageSnapshot['tone'] }) {
+  useLocale()
   const palette = stagePalette(tone)
   const base = (() => {
     switch (stage) {
@@ -1149,6 +1144,7 @@ function ActionButton({
   className?: string
   children: ReactNode
 }) {
+  useLocale()
   const cls =
     variant === 'primary'
       ? 'bg-indigo-500 hover:bg-indigo-400 text-white border-indigo-400/60'
@@ -1179,6 +1175,7 @@ function Stat({
   tone: 'amber' | 'emerald' | 'rose' | 'slate'
   icon?: ReactNode
 }) {
+  useLocale()
   const palette = {
     amber: 'text-amber-300',
     emerald: 'text-emerald-300',
@@ -1205,6 +1202,7 @@ function ProgressLine({
   errors: number
   label?: string
 }) {
+  useLocale()
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
   return (
     <div>
@@ -1218,7 +1216,7 @@ function ProgressLine({
         <span className="truncate max-w-[14rem]" title={label}>{label || ' '}</span>
         <span>
           {done}/{total}
-          {errors > 0 ? ` · ${errors} 失败` : ''}
+          {errors > 0 ? tr(" · {0} 失败", { 0: errors }) : ''}
         </span>
       </div>
     </div>
@@ -1327,17 +1325,17 @@ async function waitForWikiCompileDone(onTick: (status: WikiCompileState) => void
 function syncStageLabel(stage: string): string {
   switch (stage) {
     case 'preparing':
-      return '准备中'
+      return tr("准备中")
     case 'uploading':
-      return '上传中'
+      return tr("上传中")
     case 'committing':
-      return '提交中'
+      return tr("提交中")
     case 'done':
-      return '提交完成'
+      return tr("提交完成")
     case 'error':
-      return '同步失败'
+      return tr("同步失败")
     default:
-      return '同步中'
+      return tr("同步中")
   }
 }
 

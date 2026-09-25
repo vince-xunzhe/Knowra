@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   X,
@@ -23,32 +25,32 @@ interface Props {
 }
 
 const TYPE_LABELS: Record<string, string> = {
-  technique: '方法',
-  dataset: '数据集',
-  problem_area: '研究领域',
-  concept: '概念',
+  get technique() { return tr("方法") },
+  get dataset() { return tr("数据集") },
+  get problem_area() { return tr("研究领域") },
+  get concept() { return tr("概念") },
 }
 
 const REJECTOR_LABELS: Record<string, { label: string; hint: string }> = {
   user: {
-    label: '你淘汰的',
-    hint: '通常不需要再看 —— 你之前明确说不要',
+    get label() { return tr("你淘汰的") },
+    get hint() { return tr("通常不需要再看 —— 你之前明确说不要") },
   },
   llm: {
-    label: 'LLM 淘汰的',
-    hint: '可能有误判，值得抽查',
+    get label() { return tr("LLM 淘汰的") },
+    get hint() { return tr("可能有误判，值得抽查") },
   },
   heuristic: {
-    label: '启发式淘汰的',
-    hint: '空标题、纯数字或没有来源 —— 一般是噪音',
+    get label() { return tr("启发式淘汰的") },
+    get hint() { return tr("空标题、纯数字或没有来源 —— 一般是噪音") },
   },
   legacy: {
-    label: '历史淘汰',
-    hint: '迁移自旧 hidden 标记',
+    get label() { return tr("历史淘汰") },
+    get hint() { return tr("迁移自旧 hidden 标记") },
   },
   unknown: {
-    label: '未标记',
-    hint: '迁移或异常路径产生',
+    get label() { return tr("未标记") },
+    get hint() { return tr("迁移或异常路径产生") },
   },
 }
 
@@ -62,6 +64,7 @@ const REJECTOR_LABELS: Record<string, { label: string; hint: string }> = {
  * bulk recall button so you don't have to click 80 times.
  */
 export default function RejectedRescueModal({ open, onClose, onRecalled }: Props) {
+  useLocale()
   const [items, setItems] = useState<PromotionCandidate[]>([])
   const [loading, setLoading] = useState(false)
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
@@ -214,18 +217,16 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
 
   return (
     <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6">
-      <div className="w-full max-w-3xl max-h-[80vh] bg-[#0f1117] border border-slate-800 rounded-2xl shadow-2xl flex flex-col">
+      <div className="w-full max-w-3xl max-h-[80vh] bg-[var(--surface-0f1117)] border border-slate-800 rounded-2xl shadow-2xl flex flex-col">
         <header className="px-5 py-4 border-b border-slate-800 flex items-start gap-3">
           <div className="flex-1 min-w-0">
-            <h2 className="text-base font-semibold text-white">召回已淘汰节点</h2>
+            <h2 className="text-base font-semibold text-foreground">{tr("召回已淘汰节点")}</h2>
             <p className="text-[12px] text-slate-500 mt-1">
-              按淘汰来源分组：LLM 的判定最可能误伤，启发式的几乎都是噪音。点节点 → 召回到待评审；
-              选中多个 → 整批召回。
-            </p>
+              {tr("按淘汰来源分组：LLM 的判定最可能误伤，启发式的几乎都是噪音。点节点 → 召回到待评审； 选中多个 → 整批召回。")}</p>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-500 hover:text-white p-1.5 -mr-1 rounded-lg hover:bg-slate-800/60"
+            className="text-slate-500 hover:text-foreground p-1.5 -mr-1 rounded-lg hover:bg-slate-800/60"
           >
             <X size={16} />
           </button>
@@ -237,7 +238,7 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="按标题 / 标签 / 理由过滤"
+              placeholder={tr("按标题 / 标签 / 理由过滤")}
               className="w-full pl-8 pr-3 py-1.5 text-[12px] bg-slate-900 border border-slate-800 rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
           </div>
@@ -252,7 +253,7 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
               ) : (
                 <RotateCcw size={12} />
               )}
-              召回选中 ({selected.size})
+              {tr("召回选中 (")}{' '}{selected.size})
             </button>
           )}
         </div>
@@ -265,12 +266,10 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
           )}
           {loading ? (
             <div className="py-12 flex items-center justify-center text-slate-500 text-[12px]">
-              <Loader2 size={12} className="animate-spin mr-2" /> 加载中…
-            </div>
+              <Loader2 size={12} className="animate-spin mr-2" /> {tr("加载中…")}</div>
           ) : filtered.length === 0 ? (
             <div className="py-12 text-center text-slate-500 text-[12px]">
-              没有匹配的已淘汰节点。
-            </div>
+              {tr("没有匹配的已淘汰节点。")}</div>
           ) : (
             orderedRejectors.map(rej => {
               const types = groups[rej]
@@ -309,8 +308,7 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
                       ) : (
                         <RotateCcw size={10} />
                       )}
-                      整组召回
-                    </button>
+                      {tr("整组召回")}</button>
                   </header>
 
                   {!groupCollapsed && typeKeys.map(typ => {
@@ -340,8 +338,7 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
                             ) : (
                               <RotateCcw size={9} />
                             )}
-                            召回此类
-                          </button>
+                            {tr("召回此类")}</button>
                         </div>
                         {!subCollapsed && (
                           <ul className="space-y-1">
@@ -383,12 +380,13 @@ function RescueRow({
   onToggle: () => void
   onRecall: () => void
 }) {
+  useLocale()
   return (
     <li className="flex items-start gap-2 px-2.5 py-2 rounded-lg border border-slate-800 hover:border-slate-700 bg-slate-950/40">
       <button
         onClick={onToggle}
         className="text-slate-500 hover:text-slate-200 mt-0.5"
-        title={selected ? '取消选择' : '选择'}
+        title={selected ? tr("取消选择") : tr("选择")}
       >
         {selected ? <CheckSquare size={13} className="text-emerald-300" /> : <Square size={13} />}
       </button>
@@ -396,7 +394,7 @@ function RescueRow({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[12.5px] text-slate-200 text-safe-wrap">{item.title}</span>
           <span className="text-[10px] text-slate-500">
-            引用 {item.source_paper_ids.length}
+            {tr("引用")}{' '}{item.source_paper_ids.length}
           </span>
         </div>
         {item.promotion_reason && (
@@ -411,8 +409,7 @@ function RescueRow({
         className="text-[11px] text-emerald-300 hover:text-emerald-200 hover:bg-emerald-500/10 px-2 py-1 rounded-md inline-flex items-center gap-1 disabled:opacity-50 transition-colors"
       >
         {busy ? <Loader2 size={10} className="animate-spin" /> : <RotateCcw size={10} />}
-        召回
-      </button>
+        {tr("召回")}</button>
     </li>
   )
 }

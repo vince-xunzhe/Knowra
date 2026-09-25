@@ -1,3 +1,5 @@
+import { t as tr, matchesMessage } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -106,7 +108,7 @@ function normalizeSessions(sessions: AskSession[]): AskSession[] {
   return normalized
 }
 
-function createAskSession(title = '新对话'): AskSession {
+function createAskSession(title = tr("新对话")): AskSession {
   const now = new Date().toISOString()
   return {
     id: `ask-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
@@ -126,7 +128,7 @@ function hydrateSession(raw: unknown): AskSession | null {
   const now = new Date().toISOString()
   return {
     id,
-    title: typeof value.title === 'string' && value.title.trim() ? value.title : '新对话',
+    title: typeof value.title === 'string' && value.title.trim() ? value.title : tr("新对话"),
     turns: Array.isArray(value.turns) ? value.turns : [],
     question: typeof value.question === 'string' ? value.question : '',
     createdAt: typeof value.createdAt === 'string' ? value.createdAt : now,
@@ -201,7 +203,7 @@ function buildSessionSynthesisBody(rounds: AnsweredRound[]): string {
   if (!finalRound) return ''
 
   const parts: string[] = [
-    `> 由 Ask 多轮会话整理而成，共 ${rounds.length} 轮问答。`,
+    tr("> 由 Ask 多轮会话整理而成，共 {0} 轮问答。", { 0: rounds.length }),
   ]
 
   const questions = rounds
@@ -209,30 +211,30 @@ function buildSessionSynthesisBody(rounds: AnsweredRound[]): string {
     .filter(Boolean)
   if (questions.length > 0) {
     parts.push([
-      '## 问题演进',
+      tr("## 问题演进"),
       '',
       ...questions.map((question, index) => `${index + 1}. ${question}`),
     ].join('\n'))
   }
 
   parts.push([
-    '## 最终综合结论',
+    tr("## 最终综合结论"),
     '',
     trimAskAnswerHeading(finalRound.answer.content),
   ].join('\n'))
 
   if (rounds.length > 1) {
     parts.push([
-      '## 对话摘录',
+      tr("## 对话摘录"),
       '',
       rounds.map((round, index) => [
-        `### 第 ${index + 1} 轮`,
+        tr("### 第 {0} 轮", { 0: index + 1 }),
         '',
-        '**问题**',
+        tr("**问题**"),
         '',
-        round.question || '（未记录问题）',
+        round.question || tr("（未记录问题）"),
         '',
-        '**回答**',
+        tr("**回答**"),
         '',
         trimAskAnswerHeading(round.answer.content),
       ].join('\n')).join('\n\n'),
@@ -296,7 +298,7 @@ function extractDuplicateConceptConflict(error: unknown): DuplicateConceptConfli
 
 function getApiErrorDetail(error: unknown): string {
   const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
-  return apiError.response?.data?.detail || apiError.message || '未知错误'
+  return apiError.response?.data?.detail || apiError.message || tr("未知错误")
 }
 
 /**
@@ -311,6 +313,7 @@ function getApiErrorDetail(error: unknown): string {
  * new blank thread when none remain).
  */
 export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) {
+  useLocale()
   const [askState, setAskState] = useState<PersistedAskState>(() => loadPersistedState())
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -431,7 +434,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
       updateSessionById(sessionId, session => ({
         ...session,
         title:
-          session.title === '新对话'
+          matchesMessage(session.title, "新对话")
           && session.turns.length === 1
           && session.turns[0]?.role === 'user'
           && (result.session_title || '').trim()
@@ -501,8 +504,8 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     setRebuilding(true)
     setIndexNotice({
       tone: 'info',
-      title: '正在重建 index.md…',
-      detail: 'Ask 会在重建完成后自动读取最新索引。',
+      title: tr("正在重建 index.md…"),
+      detail: tr("Ask 会在重建完成后自动读取最新索引。"),
     })
     try {
       await rebuildWikiIndex()
@@ -510,13 +513,13 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
       setIndexStatus(fresh)
       setIndexNotice({
         tone: 'success',
-        title: 'index.md 重建完成',
-        detail: `${fresh.current_papers ?? 0} 论文 · ${fresh.current_concepts ?? 0} 概念 · ${(fresh.size / 1024).toFixed(1)} KB`,
+        title: tr("index.md 重建完成"),
+        detail: tr("{0} 论文 · {1} 概念 · {2} KB", { 0: fresh.current_papers ?? 0, 1: fresh.current_concepts ?? 0, 2: (fresh.size / 1024).toFixed(1) }),
       })
     } catch (e) {
       setIndexNotice({
         tone: 'error',
-        title: '重建索引失败',
+        title: tr("重建索引失败"),
         detail: getApiErrorDetail(e),
       })
     } finally {
@@ -536,25 +539,23 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
         className="flex-1 bg-black/30 pointer-events-auto"
         onClick={onClose}
       />
-      <aside className="w-[40rem] max-w-[60vw] h-full bg-[#0d1016] border-l border-slate-800 flex flex-col pointer-events-auto shadow-[0_0_60px_rgba(0,0,0,0.6)]">
+      <aside className="w-[40rem] max-w-[60vw] h-full bg-[var(--surface-0d1016)] border-l border-slate-800 flex flex-col pointer-events-auto shadow-[0_0_60px_rgba(0,0,0,0.6)]">
         <header className="px-5 py-3 border-b border-slate-800/80 flex items-center gap-2">
           <Sparkles size={13} className="text-indigo-300" />
           <span className="text-[10px] tracking-[0.12em] uppercase text-indigo-300/70 font-mono">
-            知识库
-          </span>
+            {tr("知识库")}</span>
           <span className="text-slate-700">/</span>
-          <h2 className="text-[13px] font-semibold text-white tracking-tight">
+          <h2 className="text-[13px] font-semibold text-foreground tracking-tight">
             Ask
           </h2>
           {askState.sessions.length > 1 && (
             <span className="text-[10.5px] text-slate-500">
-              · {askState.sessions.length} 个会话
-            </span>
+              · {askState.sessions.length} {tr("个会话")}</span>
           )}
           <button
             onClick={onClose}
             className="ml-auto text-slate-500 hover:text-slate-200 p-1 rounded hover:bg-slate-800/60 transition-colors"
-            title="关闭"
+            title={tr("关闭")}
           >
             <X size={13} />
           </button>
@@ -566,94 +567,84 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             onChange={e => handleSessionSelect(e.target.value)}
             disabled={submitting}
             className="min-w-0 flex-1 rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[12px] text-slate-200 focus:outline-none focus:border-indigo-500/60 disabled:opacity-50"
-            title="切换已保存会话"
+            title={tr("切换已保存会话")}
           >
             {sessionsForSelect.map(session => (
               <option key={session.id} value={session.id}>
-                {session.title} · {session.turns.filter(turn => turn.role === 'user').length} 轮
-              </option>
+                {session.title} · {session.turns.filter(turn => turn.role === 'user').length} {tr("轮")}</option>
             ))}
           </select>
           <button
             onClick={handleNewChat}
             disabled={submitting}
             className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-2 text-[11.5px] font-medium text-indigo-100 hover:bg-indigo-500/20 disabled:opacity-50 transition-colors"
-            title="开启一个新的 Ask 会话"
+            title={tr("开启一个新的 Ask 会话")}
           >
             <Plus size={11} />
-            新建聊天
-          </button>
+            {tr("新建聊天")}</button>
           <button
             onClick={handleClear}
             disabled={submitting || (turns.length === 0 && question.trim().length === 0)}
             className="text-[10.5px] px-2 py-1 rounded text-slate-500 hover:text-slate-200 hover:bg-slate-800/60 disabled:opacity-40 transition-colors"
-            title="删除当前会话"
+            title={tr("删除当前会话")}
           >
-            清空
-          </button>
+            {tr("清空")}</button>
         </div>
 
         <div className="px-5 py-1.5 border-b border-slate-800/70 flex items-center gap-2 text-[10.5px] text-slate-500">
           <span className="truncate">
-            当前会话 · {turns.filter(t => t.role === 'user').length} 轮对话
-          </span>
+            {tr("当前会话 ·")}{' '}{turns.filter(t => t.role === 'user').length} {tr("轮对话")}</span>
           <span className="text-slate-700">·</span>
-          <span className="truncate">保存在本机浏览器</span>
+          <span className="truncate">{tr("保存在本机浏览器")}</span>
         </div>
 
         {/* index.md status strip */}
         <div className="px-5 py-1.5 border-b border-slate-800/70 flex items-center gap-2 text-[10.5px] text-slate-500">
           {indexStatus === null ? (
-            <span className="text-slate-600">索引状态加载中…</span>
+            <span className="text-slate-600">{tr("索引状态加载中…")}</span>
           ) : indexMissing ? (
             <>
               <AlertTriangle size={11} className="text-amber-400" />
               <span className="text-amber-200">
-                index.md 未生成，agent 会跳过总览这一步
-              </span>
+                {tr("index.md 未生成，agent 会跳过总览这一步")}</span>
               <button
                 onClick={handleRebuildIndex}
                 disabled={rebuilding}
                 className="ml-auto inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 disabled:opacity-50 transition-colors"
               >
                 {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                生成索引
-              </button>
+                {tr("生成索引")}</button>
             </>
           ) : indexStatus.stale ? (
             <>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
               <span className="text-amber-200">
-                索引过期 · {indexStatus.indexed_papers ?? '?'} → {indexStatus.current_papers ?? '?'} 论文 ·{' '}
-                {indexStatus.indexed_concepts ?? '?'} → {indexStatus.current_concepts ?? '?'} 概念
-              </span>
+                {tr("索引过期 ·")}{' '}{indexStatus.indexed_papers ?? '?'} → {indexStatus.current_papers ?? '?'} {tr("论文 ·")}{' '}{' '}
+                {indexStatus.indexed_concepts ?? '?'} → {indexStatus.current_concepts ?? '?'} {tr("概念")}</span>
               <button
                 onClick={handleRebuildIndex}
                 disabled={rebuilding}
                 className="ml-auto inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 disabled:opacity-50 transition-colors"
-                title="知识库内容自上次索引后变了，建议重建以让 agent 看到全部新条目"
+                title={tr("知识库内容自上次索引后变了，建议重建以让 agent 看到全部新条目")}
               >
                 {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                重建索引
-              </button>
+                {tr("重建索引")}</button>
             </>
           ) : (
             <>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               <span>
                 index.md · {(indexStatus.size / 1024).toFixed(1)} KB ·{' '}
-                {indexStatus.current_papers ?? 0} 论文 ·{' '}
-                {indexStatus.current_concepts ?? 0} 概念
-              </span>
+                {indexStatus.current_papers ?? 0} {tr("论文 ·")}{' '}{' '}
+                {indexStatus.current_concepts ?? 0} {tr("概念")}</span>
               <button
                 onClick={handleRebuildIndex}
                 disabled={rebuilding}
                 className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-slate-500 hover:text-slate-200 disabled:opacity-50 transition-colors"
-                title="重新生成索引（LLM 全量改写）"
+                title={tr("重新生成索引（LLM 全量改写）")}
               >
                 {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                重建索引
-              </button>
+                {tr("重建索引")}</button>
             </>
           )}
         </div>
@@ -666,7 +657,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
               detail={indexNotice.detail}
               busy={rebuilding && indexNotice.tone === 'info'}
               onRetry={indexNotice.tone === 'error' ? () => { void handleRebuildIndex() } : undefined}
-              retryLabel="重试重建"
+              retryLabel={tr("重试重建")}
             />
           </div>
         )}
@@ -708,14 +699,12 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                             format: fmt,
                             title:
                               precedingQuestion.slice(0, 40) ||
-                              (fmt === 'marp' ? '幻灯导出' : '报告导出'),
+                              (fmt === 'marp' ? tr("幻灯导出") : tr("报告导出")),
                             source_question: precedingQuestion,
                           })
                           setNotice({
                             tone: 'emerald',
-                            text: `已生成${
-                              fmt === 'marp' ? ' Marp 幻灯' : '报告'
-                            }：${result.rel_path}`,
+                            text: tr("已生成{0}：{1}", { 0: fmt === 'marp' ? tr(' Marp 幻灯') : tr('报告'), 1: result.rel_path }),
                           })
                         } catch (e: unknown) {
                           const msg =
@@ -754,7 +743,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             onSaved={(result, scope) => {
               setSynthesisDraft(null)
               const relatedSuffix = result.related_concepts_added && result.related_concepts_added > 0
-                ? `，并连到了 ${result.related_concepts_added} 个已有概念`
+                ? tr("，并连到了 {0} 个已有概念", { 0: result.related_concepts_added })
                 : ''
               setNotice(
                 result.forced_create
@@ -762,8 +751,8 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                       tone: 'amber',
                       text:
                         scope === 'session'
-                          ? '你已忽略同名提示，强制创建了一份新的会话归纳概念页。'
-                          : '你已忽略同名提示，强制创建了一份新的概念页。',
+                          ? tr("你已忽略同名提示，强制创建了一份新的会话归纳概念页。")
+                          : tr("你已忽略同名提示，强制创建了一份新的概念页。"),
                     }
                   : {
                       tone: 'emerald',
@@ -771,13 +760,13 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                         result.analysis_used
                           ? (
                               scope === 'session'
-                                ? `已用模型把当前会话整理成概念页，并同步加入知识图谱${relatedSuffix}。`
-                                : `已用模型整理当前回答并创建概念页，已加入知识图谱${relatedSuffix}。`
+                                ? tr("已用模型把当前会话整理成概念页，并同步加入知识图谱{0}。", { 0: relatedSuffix })
+                                : tr("已用模型整理当前回答并创建概念页，已加入知识图谱{0}。", { 0: relatedSuffix })
                             )
                           : (
                               scope === 'session'
-                                ? '已把当前会话整理成概念页，并加入知识图谱。'
-                                : '已创建新的概念页，并加入知识图谱。'
+                                ? tr("已把当前会话整理成概念页，并加入知识图谱。")
+                                : tr("已创建新的概念页，并加入知识图谱。")
                             ),
                     },
               )
@@ -794,15 +783,14 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
               value={question}
               onChange={e => setQuestion(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="问点什么 — 比如：MASt3R 和 DUSt3R 的关系？跨论文比较 X 方法 …"
+              placeholder={tr("问点什么 — 比如：MASt3R 和 DUSt3R 的关系？跨论文比较 X 方法 …")}
               rows={3}
               className="w-full resize-none bg-transparent px-3 py-2 text-[12.5px] leading-6 text-slate-100 placeholder-slate-600 focus:outline-none"
               spellCheck={false}
             />
             <div className="px-3 py-1.5 border-t border-slate-800/70 flex items-center gap-2">
               <span className="text-[10px] text-slate-600 tabular-nums">
-                {question.length} 字 · ⌘ Enter 发送
-              </span>
+                {question.length} {tr("字 · ⌘ Enter 发送")}</span>
               <button
                 onClick={handleSend}
                 disabled={submitting || question.trim().length === 0}
@@ -813,8 +801,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                 ) : (
                   <Send size={11} />
                 )}
-                发送
-              </button>
+                {tr("发送")}</button>
             </div>
           </div>
         </footer>
@@ -824,19 +811,19 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
 }
 
 function EmptyHint() {
+  useLocale()
   const examples = [
-    'MASt3R 和 DUSt3R 在匹配任务上有什么区别？',
-    '我的库里哪些论文用 InfoNCE？',
-    '总结所有关于 3D Gaussian 的概念',
-    '哪些数据集出现在 ≥3 篇论文里？',
+    tr("MASt3R 和 DUSt3R 在匹配任务上有什么区别？"),
+    tr("我的库里哪些论文用 InfoNCE？"),
+    tr("总结所有关于 3D Gaussian 的概念"),
+    tr("哪些数据集出现在 ≥3 篇论文里？"),
   ]
   return (
     <div className="text-center text-slate-500 py-10 px-4">
       <Sparkles size={18} className="mx-auto text-indigo-400/70 mb-3" />
-      <p className="text-[12.5px] mb-1">问任何关于这个知识库的问题</p>
+      <p className="text-[12.5px] mb-1">{tr("问任何关于这个知识库的问题")}</p>
       <p className="text-[11px] text-slate-600 mb-4 leading-relaxed">
-        Agent 会先读 index 找方向，再 search / read 具体 .md 综合答复。
-      </p>
+        {tr("Agent 会先读 index 找方向，再 search / read 具体 .md 综合答复。")}</p>
       <div className="flex flex-col items-center gap-1.5">
         {examples.map(e => (
           <span
@@ -852,10 +839,11 @@ function EmptyHint() {
 }
 
 function ThinkingIndicator() {
+  useLocale()
   return (
     <div className="flex items-center gap-2 text-[11px] text-slate-500">
       <Loader2 size={11} className="animate-spin text-indigo-300" />
-      <span>Agent 正在读取知识库…</span>
+      <span>{tr("Agent 正在读取知识库…")}</span>
     </div>
   )
 }
@@ -869,6 +857,7 @@ function TurnView({
   onFileBack?: () => void
   onExport?: (fmt: WikiOutputFormat) => Promise<void>
 }) {
+  useLocale()
   if (turn.role === 'user') {
     return (
       <div className="flex justify-end">
@@ -890,6 +879,7 @@ function AssistantTurn({
   onFileBack?: () => void
   onExport?: (fmt: WikiOutputFormat) => Promise<void>
 }) {
+  useLocale()
   const [traceOpen, setTraceOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [exporting, setExporting] = useState<WikiOutputFormat | null>(null)
@@ -933,7 +923,7 @@ function AssistantTurn({
             className="w-full flex items-center gap-1.5 px-2.5 py-1 text-[10.5px] text-slate-500 hover:text-slate-300 transition-colors"
           >
             {traceOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-            <span>工具调用 · {turn.trace.length} 步</span>
+            <span>{tr("工具调用 ·")}{' '}{turn.trace.length} {tr("步")}</span>
             {turn.durationMs != null && (
               <span className="ml-auto tabular-nums text-slate-600">
                 {(turn.durationMs / 1000).toFixed(1)}s
@@ -968,7 +958,7 @@ function AssistantTurn({
         </div>
         {citations.length > 0 && (
           <div className="mt-3 rounded-md border border-slate-800/70 bg-slate-950/60 px-2.5 py-2">
-            <div className="text-[10px] font-medium text-slate-400">引用来源</div>
+            <div className="text-[10px] font-medium text-slate-400">{tr("引用来源")}</div>
             <ul className="mt-1.5 space-y-1 text-[10.5px] text-slate-500">
               {citations.map((citation, index) => (
                 <li key={`${citation.ref}-${index}`} className="truncate">
@@ -981,15 +971,14 @@ function AssistantTurn({
         <div className="mt-3 pt-2 border-t border-slate-800/60 flex items-center gap-2 text-[10.5px] text-slate-500">
           {citations.length > 0 && (
             <span className="truncate">
-              📚 {citations.length} 处引用
-            </span>
+              📚 {citations.length} {tr("处引用")}</span>
           )}
           <button
             onClick={handleCopy}
             className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-slate-800/60 hover:text-slate-200 transition-colors"
           >
             <Copy size={10} />
-            {copied ? '已复制' : '复制'}
+            {copied ? tr("已复制") : tr("复制")}
           </button>
           {onExport && (
             <>
@@ -997,39 +986,36 @@ function AssistantTurn({
                 onClick={() => handleExport('marp')}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors"
-                title="整理成 Marp 幻灯，存入 data/wiki/decks/"
+                title={tr("整理成 Marp 幻灯，存入 data/wiki/decks/")}
               >
                 {exporting === 'marp' ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
                   <Presentation size={10} />
                 )}
-                幻灯
-              </button>
+                {tr("幻灯")}</button>
               <button
                 onClick={() => handleExport('report')}
                 disabled={exporting !== null}
                 className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800 disabled:opacity-50 transition-colors"
-                title="整理成结构化报告，存入 data/wiki/reports/"
+                title={tr("整理成结构化报告，存入 data/wiki/reports/")}
               >
                 {exporting === 'report' ? (
                   <Loader2 size={10} className="animate-spin" />
                 ) : (
                   <FileText size={10} />
                 )}
-                报告
-              </button>
+                {tr("报告")}</button>
             </>
           )}
           {onFileBack && (
             <button
               onClick={onFileBack}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20 transition-colors"
-              title="把这个答案存为概念页，下次自动剔除会把它纳入图谱"
+              title={tr("把这个答案存为概念页，下次自动剔除会把它纳入图谱")}
             >
               <Pin size={10} />
-              存为概念页
-            </button>
+              {tr("存为概念页")}</button>
           )}
         </div>
       </div>
@@ -1068,6 +1054,7 @@ function SynthesisSaveModal({
   onClose: () => void
   onSaved: (result: SynthesisConceptResult, scope: SynthesisScope) => void
 }) {
+  useLocale()
   const rounds = useMemo(() => buildAnsweredRounds(draft.sessionTurns), [draft.sessionTurns])
   const currentRound = rounds[rounds.length - 1]
   const sessionQuestions = useMemo(
@@ -1082,7 +1069,7 @@ function SynthesisSaveModal({
       draft.sessionTitle ||
       'Ask归纳'
     const sessionBase =
-      draft.sessionTitle && draft.sessionTitle !== '新对话'
+      draft.sessionTitle && !matchesMessage(draft.sessionTitle, "新对话")
         ? draft.sessionTitle
         : sessionQuestions[0] || currentRound?.question || 'Ask归纳'
     return {
@@ -1203,10 +1190,10 @@ function SynthesisSaveModal({
 
   return (
     <div className="absolute inset-0 z-10 bg-black/55 backdrop-blur-sm flex items-center justify-center p-6">
-      <div className="w-full max-w-md bg-[#0d1016] border border-slate-800 rounded-xl shadow-2xl flex flex-col">
+      <div className="w-full max-w-md bg-[var(--surface-0d1016)] border border-slate-800 rounded-xl shadow-2xl flex flex-col">
         <header className="px-4 py-3 border-b border-slate-800 flex items-center gap-2">
           <Pin size={12} className="text-emerald-300" />
-          <h3 className="text-[13px] font-semibold text-white">存为概念页</h3>
+          <h3 className="text-[13px] font-semibold text-foreground">{tr("存为概念页")}</h3>
           <button
             onClick={onClose}
             className="ml-auto text-slate-500 hover:text-slate-200 p-1 rounded hover:bg-slate-800/60"
@@ -1217,7 +1204,7 @@ function SynthesisSaveModal({
         <div className="px-4 py-3 space-y-2.5">
           {hasSessionScope && (
             <div>
-              <label className="text-[10.5px] text-slate-500">保存范围</label>
+              <label className="text-[10.5px] text-slate-500">{tr("保存范围")}</label>
               <div className="mt-1 grid grid-cols-2 gap-2">
                 <button
                   onClick={() => setScope('turn')}
@@ -1227,8 +1214,7 @@ function SynthesisSaveModal({
                       : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  当前回答
-                </button>
+                  {tr("当前回答")}</button>
                 <button
                   onClick={() => setScope('session')}
                   className={`rounded-md border px-2.5 py-2 text-[11.5px] transition-colors ${
@@ -1237,18 +1223,17 @@ function SynthesisSaveModal({
                       : 'border-slate-800 bg-slate-950 text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  当前会话
-                </button>
+                  {tr("当前会话")}</button>
               </div>
               <div className="mt-1.5 text-[10.5px] text-slate-500 leading-relaxed">
                 {scope === 'session'
-                  ? '会先用模型整理截至当前的多轮问答，再生成一个更像概念条目的页面，保留问题演进、最终结论和来源论文。'
-                  : '会先用模型把当前回答整理成概念摘要与条目正文；前面的多轮上下文只通过这轮答案间接体现。'}
+                  ? tr("会先用模型整理截至当前的多轮问答，再生成一个更像概念条目的页面，保留问题演进、最终结论和来源论文。")
+                  : tr("会先用模型把当前回答整理成概念摘要与条目正文；前面的多轮上下文只通过这轮答案间接体现。")}
               </div>
             </div>
           )}
           <div>
-            <label className="text-[10.5px] text-slate-500">标题</label>
+            <label className="text-[10.5px] text-slate-500">{tr("标题")}</label>
             <input
               value={title}
               onChange={(e) => {
@@ -1257,53 +1242,48 @@ function SynthesisSaveModal({
                 setDuplicateConflict(null)
                 setErr(null)
               }}
-              placeholder="给这个综合答案起个名字"
+              placeholder={tr("给这个综合答案起个名字")}
               className="mt-1 w-full px-2.5 py-1.5 text-[12px] bg-slate-950 border border-slate-800 rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
           </div>
           <div>
             <label className="text-[10.5px] text-slate-500">
-              标签（逗号分隔）
-            </label>
+              {tr("标签（逗号分隔）")}</label>
             <input
               value={tagsInput}
               onChange={e => setTagsInput(e.target.value)}
-              placeholder="ask归纳, …"
+              placeholder={tr("ask归纳, …")}
               className="mt-1 w-full px-2.5 py-1.5 text-[12px] bg-slate-950 border border-slate-800 rounded-md text-slate-200 placeholder-slate-600 focus:outline-none focus:border-slate-700"
             />
           </div>
           <div className="text-[10.5px] text-slate-500 leading-relaxed">
-            将创建 <code className="text-slate-400">data/wiki/concepts/{`{id}-{slug}`}.md</code>，
-            origin = <code className="text-slate-400">manual</code>，并自动 promoted。
-            {scope === 'session' ? `本次会话的 ${selectedQuestions.length} 个问题` : '当前问题'}
-            {' '}+ {sourcePaperIds.length} 篇引用论文会写入 frontmatter。
-          </div>
+            {tr("将创建")}<code className="text-slate-400">data/wiki/concepts/{`{id}-{slug}`}.md</code>，
+            origin = <code className="text-slate-400">manual</code>{tr("，并自动 promoted。")}{' '}{scope === 'session' ? tr("本次会话的 {0} 个问题", { 0: selectedQuestions.length }) : tr("当前问题")}
+            {' '}+ {sourcePaperIds.length} {tr("篇引用论文会写入 frontmatter。")}</div>
           <div className="text-[10.5px] text-slate-500 leading-relaxed">
-            如果检测到同名概念，系统会先提示现有概念；如果你确认这是误判，也可以强制新增。
-          </div>
+            {tr("如果检测到同名概念，系统会先提示现有概念；如果你确认这是误判，也可以强制新增。")}</div>
           <div className="rounded-md border border-slate-800/80 bg-slate-950/60 px-2.5 py-2 text-[10.5px] text-slate-500 leading-relaxed">
             {scope === 'session'
-              ? `将整理 ${rounds.length} 轮问答，并同步生成图谱节点摘要、概念正文与来源论文列表。`
-              : '将整理当前回答，生成图谱节点摘要与结构化概念正文，不会把整个 session 原样抄进去。'}
+              ? tr("将整理 {0} 轮问答，并同步生成图谱节点摘要、概念正文与来源论文列表。", { 0: rounds.length })
+              : tr("将整理当前回答，生成图谱节点摘要与结构化概念正文，不会把整个 session 原样抄进去。")}
           </div>
           {duplicateConflict && (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-100 leading-relaxed space-y-1.5">
               <div>{duplicateConflict.message}</div>
               {duplicateConflict.reason && (
                 <div className="text-amber-200/80">
-                  判重依据：{duplicateConflict.reason}
+                  {tr("判重依据：")}{' '}{duplicateConflict.reason}
                 </div>
               )}
               <div>
-                已有概念：<span className="font-medium">{duplicateConflict.title}</span>{' '}
+                {tr("已有概念：")}<span className="font-medium">{duplicateConflict.title}</span>{' '}
                 <span className="text-amber-200/80">#{duplicateConflict.concept_id}</span>
               </div>
               <div className="text-amber-200/80">
-                文件：<code>{duplicateConflict.filename}</code>
+                {tr("文件：")}<code>{duplicateConflict.filename}</code>
               </div>
               <div className="text-amber-200/70">
-                如果你确认这不是重复概念，可以点下方“仍然创建”，系统会保留两个同名概念。
-              </div>
+                {tr("如果你确认这不是重复概念，可以点下方“仍然创建”，系统会保留两个同名概念。")}</div>
             </div>
           )}
           {err && (
@@ -1317,8 +1297,7 @@ function SynthesisSaveModal({
             onClick={onClose}
             className="text-[11.5px] px-2.5 py-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
           >
-            取消
-          </button>
+            {tr("取消")}</button>
           {duplicateConflict && (
             <button
               onClick={() => void submitSave(true)}
@@ -1326,8 +1305,7 @@ function SynthesisSaveModal({
               className="inline-flex items-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1 rounded border border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20 disabled:opacity-50 transition-colors"
             >
               {saving ? <Loader2 size={11} className="animate-spin" /> : <Pin size={11} />}
-              仍然创建
-            </button>
+              {tr("仍然创建")}</button>
           )}
           <button
             onClick={() => void submitSave(false)}
@@ -1335,7 +1313,7 @@ function SynthesisSaveModal({
             className="ml-auto inline-flex items-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/40 disabled:opacity-50 transition-colors"
           >
             {saving ? <Loader2 size={11} className="animate-spin" /> : <Pin size={11} />}
-            {scope === 'session' ? '整理并存为概念页' : '存为概念页'}
+            {scope === 'session' ? tr("整理并存为概念页") : tr("存为概念页")}
           </button>
         </footer>
       </div>

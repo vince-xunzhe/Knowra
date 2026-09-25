@@ -1,3 +1,5 @@
+import { t as tr } from './i18n/catalog'
+import { useLocale } from './i18n/preferences'
 import { useState } from 'react'
 import { Network, BookOpen, FileText, Settings, BarChart3, Sparkles } from 'lucide-react'
 import GraphPage from './pages/GraphPage'
@@ -32,20 +34,22 @@ type NavItem =
 // finished artifact (graph) and synthesis (review) before the raw
 // inventory (materials).
 const NAV: NavItem[] = [
-  { id: 'graph', icon: Network, label: '知识' },
-  { id: 'review', icon: FileText, label: '回顾' },
-  { id: 'recommend', icon: Sparkles, label: '推荐' },
-  { id: 'papers', icon: BookOpen, label: '资料' },
-  { id: 'dashboard', icon: BarChart3, label: '看板' },
+  { id: 'graph', icon: Network, get label() { return tr("知识") } },
+  { id: 'review', icon: FileText, get label() { return tr("回顾") } },
+  { id: 'recommend', icon: Sparkles, get label() { return tr("推荐") } },
+  { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
+  { id: 'dashboard', icon: BarChart3, get label() { return tr("看板") } },
   { divider: true },
-  { id: 'settings', icon: Settings, label: '设置' },
+  { id: 'settings', icon: Settings, get label() { return tr("设置") } },
 ]
 
 export default function App() {
+  useLocale()
   return <WikiLintProvider><AppContent /></WikiLintProvider>
 }
 
 function AppContent() {
+  useLocale()
   const [page, setPage] = useState<Page>('graph')
   const [lintOpen, setLintOpen] = useState(false)
   const [reviewPaperId, setReviewPaperId] = useState<number | null>(null)
@@ -61,11 +65,11 @@ function AppContent() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0b0d12] text-slate-200">
+    <div className="flex h-screen overflow-hidden bg-[var(--surface-0b0d12)] text-slate-200">
       {/* Sidebar */}
-      <nav className="w-[4.75rem] bg-[#0f1117] border-r border-slate-800/80 flex flex-col items-center py-4 gap-1 shrink-0">
+      <nav className="w-[6.5rem] bg-[var(--surface-0f1117)] border-r border-slate-800/80 flex flex-col items-center py-4 gap-1 shrink-0">
         <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/20">
-          <Network size={18} className="text-white" />
+          <Network size={18} className="text-foreground" />
         </div>
         {NAV.map((item, idx) => {
           if ('divider' in item) {
@@ -78,7 +82,7 @@ function AppContent() {
               key={id}
               onClick={() => openPage(id)}
               title={label}
-              className={`relative group w-14 h-14 px-1 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
+              className={`relative group w-[5.75rem] h-14 px-1 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
                 active
                   ? 'bg-indigo-500/15 text-indigo-100 shadow-inner shadow-indigo-500/10'
                   : 'text-slate-600 hover:text-slate-100 hover:bg-slate-800/50'

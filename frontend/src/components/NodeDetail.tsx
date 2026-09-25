@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -33,27 +36,27 @@ import {
 } from '../api/client'
 
 const TYPE_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  paper: { bg: 'bg-indigo-500/15', text: 'text-indigo-300', label: '论文' },
-  technique: { bg: 'bg-emerald-500/15', text: 'text-emerald-300', label: '技术' },
-  dataset: { bg: 'bg-amber-500/15', text: 'text-amber-300', label: '数据集' },
-  problem_area: { bg: 'bg-cyan-500/15', text: 'text-cyan-300', label: '研究领域' },
-  concept: { bg: 'bg-teal-500/15', text: 'text-teal-300', label: '概念' },
-  entity: { bg: 'bg-pink-500/15', text: 'text-pink-300', label: '实体' },
-  topic: { bg: 'bg-indigo-500/15', text: 'text-indigo-300', label: '主题' },
-  fact: { bg: 'bg-amber-500/15', text: 'text-amber-300', label: '事实' },
+  paper: { bg: 'bg-indigo-500/15', text: 'text-indigo-300', get label() { return tr("论文") } },
+  technique: { bg: 'bg-emerald-500/15', text: 'text-emerald-300', get label() { return tr("技术") } },
+  dataset: { bg: 'bg-amber-500/15', text: 'text-amber-300', get label() { return tr("数据集") } },
+  problem_area: { bg: 'bg-cyan-500/15', text: 'text-cyan-300', get label() { return tr("研究领域") } },
+  concept: { bg: 'bg-teal-500/15', text: 'text-teal-300', get label() { return tr("概念") } },
+  entity: { bg: 'bg-pink-500/15', text: 'text-pink-300', get label() { return tr("实体") } },
+  topic: { bg: 'bg-indigo-500/15', text: 'text-indigo-300', get label() { return tr("主题") } },
+  fact: { bg: 'bg-amber-500/15', text: 'text-amber-300', get label() { return tr("事实") } },
 }
 
 const RELATION_LABELS: Record<string, string> = {
-  uses: '使用',
-  builds_on: '基于',
-  trained_on: '训练于',
-  evaluated_on: '评测于',
-  compared_to: '对比',
-  similar: '相似',
-  related: '相关',
-  contrasts_with: '对照',
-  belongs_to: '属于',
-  curated_link: '人工关联',
+  get uses() { return tr("使用") },
+  get builds_on() { return tr("基于") },
+  get trained_on() { return tr("训练于") },
+  get evaluated_on() { return tr("评测于") },
+  get compared_to() { return tr("对比") },
+  get similar() { return tr("相似") },
+  get related() { return tr("相关") },
+  get contrasts_with() { return tr("对照") },
+  get belongs_to() { return tr("属于") },
+  get curated_link() { return tr("人工关联") },
 }
 
 interface Props {
@@ -70,9 +73,9 @@ interface Props {
 }
 
 const PROMOTION_BADGE: Record<PromotionStatus, { bg: string; text: string; label: string }> = {
-  pending: { bg: 'bg-amber-500/15 border border-amber-500/40', text: 'text-amber-200', label: '待评审' },
-  promoted: { bg: 'bg-emerald-500/15 border border-emerald-500/40', text: 'text-emerald-200', label: '已精选' },
-  rejected: { bg: 'bg-rose-500/15 border border-rose-500/40', text: 'text-rose-200', label: '已淘汰' },
+  pending: { bg: 'bg-amber-500/15 border border-amber-500/40', text: 'text-amber-200', get label() { return tr("待评审") } },
+  promoted: { bg: 'bg-emerald-500/15 border border-emerald-500/40', text: 'text-emerald-200', get label() { return tr("已精选") } },
+  rejected: { bg: 'bg-rose-500/15 border border-rose-500/40', text: 'text-rose-200', get label() { return tr("已淘汰") } },
 }
 
 export default function NodeDetail({
@@ -84,6 +87,7 @@ export default function NodeDetail({
   busyNodeId,
   initialTab,
 }: Props) {
+  useLocale()
   const [detail, setDetail] = useState<NodeDetailType | null>(null)
   const [promotionBusy, setPromotionBusy] = useState(false)
   // The Cytoscape-synced status can lag a tick; once the user changes
@@ -254,7 +258,7 @@ export default function NodeDetail({
   }
 
   return (
-    <aside className="w-[26rem] max-w-[42vw] min-w-[22rem] h-full bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden fade-in shrink-0">
+    <aside className="w-[26rem] max-w-[42vw] min-w-[22rem] h-full bg-[var(--surface-0f1117)] border-l border-slate-800/80 flex flex-col overflow-hidden fade-in shrink-0">
       {/* Header */}
       <div className="px-5 py-4 border-b border-slate-800/80">
         <div className="flex items-start justify-between gap-3">
@@ -264,24 +268,22 @@ export default function NodeDetail({
                 {style.label}
               </span>
               <span className={`chip text-xs ${node.origin === 'manual' ? 'bg-teal-500/10 text-teal-200 border border-teal-500/30' : 'bg-slate-800 text-slate-400 border border-slate-700/60'}`}>
-                {node.origin === 'manual' ? '手动新增' : '自动抽取'}
+                {node.origin === 'manual' ? tr("手动新增") : tr("自动抽取")}
               </span>
               {visibleDetail?.connected_nodes && (
                 <span className="text-xs text-slate-500">
-                  {visibleDetail.connected_nodes.length} 个关联
-                </span>
+                  {visibleDetail.connected_nodes.length} {tr("个关联")}</span>
               )}
             </div>
-            <h3 className="text-lg font-semibold text-white leading-snug tracking-tight text-safe-wrap">
+            <h3 className="text-lg font-semibold text-foreground leading-snug tracking-tight text-safe-wrap">
               {node.title}
             </h3>
             <p className="text-sm text-slate-500 mt-2">
-              查看节点简介、来源论文与关联关系。
-            </p>
+              {tr("查看节点简介、来源论文与关联关系。")}</p>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-500 hover:text-white p-1.5 -mr-1 shrink-0 rounded-lg hover:bg-slate-800/60 transition-colors"
+            className="text-slate-500 hover:text-foreground p-1.5 -mr-1 shrink-0 rounded-lg hover:bg-slate-800/60 transition-colors"
           >
             <X size={16} />
           </button>
@@ -296,8 +298,7 @@ export default function NodeDetail({
             onClick={() => setTab('detail')}
             icon={<Info size={12} />}
           >
-            详情
-          </DrawerTab>
+            {tr("详情")}</DrawerTab>
           <DrawerTab
             active={tab === 'wiki'}
             onClick={() => setTab('wiki')}
@@ -324,7 +325,7 @@ export default function NodeDetail({
         {/* Content */}
         {node.content && (
           <section className="surface-card p-4">
-            <div className="section-label mb-2">节点概述</div>
+            <div className="section-label mb-2">{tr("节点概述")}</div>
             <p className="prose-reading whitespace-pre-wrap text-safe-wrap">{node.content}</p>
           </section>
         )}
@@ -333,15 +334,14 @@ export default function NodeDetail({
           <section className="surface-card p-4">
             <div className="flex items-center gap-2 mb-3">
               <Sparkles size={12} className="text-indigo-300" />
-              <span className="section-label">概念精选</span>
+              <span className="section-label">{tr("概念精选")}</span>
               <span className={`chip ml-auto ${PROMOTION_BADGE[status].bg} ${PROMOTION_BADGE[status].text} text-[11px]`}>
                 {PROMOTION_BADGE[status].label}
               </span>
             </div>
             {promotedBy && (
               <p className="text-[11px] text-slate-500 mb-2">
-                由 <span className="text-slate-400">{promotedBy}</span> 决定
-                {promotionReason ? ` · ${promotionReason}` : ''}
+                {tr("由")}<span className="text-slate-400">{promotedBy}</span> {tr("决定")}{' '}{promotionReason ? ` · ${promotionReason}` : ''}
               </p>
             )}
             <div className="flex flex-wrap gap-2">
@@ -352,8 +352,7 @@ export default function NodeDetail({
                   icon={<Check size={13} />}
                   onClick={() => handlePromotionAction('promoted')}
                 >
-                  精选
-                </PromotionButton>
+                  {tr("精选")}</PromotionButton>
               )}
               {status !== 'rejected' && (
                 <PromotionButton
@@ -362,8 +361,7 @@ export default function NodeDetail({
                   icon={<X size={13} />}
                   onClick={() => handlePromotionAction('rejected')}
                 >
-                  淘汰
-                </PromotionButton>
+                  {tr("淘汰")}</PromotionButton>
               )}
               {status !== 'pending' && (
                 <PromotionButton
@@ -372,30 +370,26 @@ export default function NodeDetail({
                   icon={<RotateCcw size={13} />}
                   onClick={() => handlePromotionAction('pending')}
                 >
-                  重置评审
-                </PromotionButton>
+                  {tr("重置评审")}</PromotionButton>
               )}
             </div>
             <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-              你的决定会标记为 <span className="text-slate-400">user</span>，下次自动评审不会再覆盖它。
-            </p>
+              {tr("你的决定会标记为")}<span className="text-slate-400">user</span>{tr("，下次自动评审不会再覆盖它。")}</p>
           </section>
         )}
 
         {visibleDetail?.can_edit && (
           <section className="surface-card p-4">
-            <div className="section-label mb-3">节点操作</div>
+            <div className="section-label mb-3">{tr("节点操作")}</div>
             <button
               onClick={() => onEditManualConcept(node)}
               disabled={busyNodeId === node.id}
               className="inline-flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50"
             >
               <Pencil size={13} />
-              编辑概念
-            </button>
+              {tr("编辑概念")}</button>
             <p className="mt-3 text-xs leading-relaxed text-slate-500">
-              要把这个概念从图谱里移除，请用上面的「淘汰」 —— 它会进入精选生命周期，可在「查看 / 召回 已淘汰」里召回。
-            </p>
+              {tr("要把这个概念从图谱里移除，请用上面的「淘汰」 —— 它会进入精选生命周期，可在「查看 / 召回 已淘汰」里召回。")}</p>
           </section>
         )}
 
@@ -403,7 +397,7 @@ export default function NodeDetail({
         {node.created_at && (
           <p className="text-xs text-slate-500 flex items-center gap-1.5">
             <Clock size={11} />
-            创建于 {new Date(node.created_at).toLocaleString()}
+            {tr("创建于")}{' '}{new Date(node.created_at).toLocaleString(getFormattingLocale())}
           </p>
         )}
 
@@ -412,7 +406,7 @@ export default function NodeDetail({
           <section>
             <div className="flex items-center gap-1.5 mb-2.5 text-slate-500">
               <Tag size={11} />
-              <span className="section-label">别名 / 标签</span>
+              <span className="section-label">{tr("别名 / 标签")}</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {node.tags.map(tag => (
@@ -432,7 +426,7 @@ export default function NodeDetail({
           <section>
             <div className="flex items-center gap-1.5 mb-2.5 text-slate-500">
               <FileText size={11} />
-              <span className="section-label">来源论文 · {node.source_paper_ids.length}</span>
+              <span className="section-label">{tr("来源论文 ·")}{' '}{node.source_paper_ids.length}</span>
             </div>
             {visibleDetail?.linked_papers && visibleDetail.linked_papers.length > 0 && (
               <div className="space-y-1.5 mb-3">
@@ -443,7 +437,7 @@ export default function NodeDetail({
                   >
                     <p className="text-sm text-slate-200 leading-snug text-safe-wrap">{paper.title}</p>
                     <p className="mt-1 text-[11px] text-slate-500">
-                      paper #{paper.id} · {paper.processed ? '已处理' : '未处理'}
+                      paper #{paper.id} · {paper.processed ? tr("已处理") : tr("未处理")}
                     </p>
                   </div>
                 ))}
@@ -468,7 +462,7 @@ export default function NodeDetail({
           <section>
             <div className="flex items-center gap-1.5 mb-2.5 text-slate-500">
               <LinkIcon size={11} />
-              <span className="section-label">关联节点 · {visibleDetail.connected_nodes.length}</span>
+              <span className="section-label">{tr("关联节点 ·")}{' '}{visibleDetail.connected_nodes.length}</span>
             </div>
             <div className="space-y-1.5">
               {visibleDetail.connected_nodes.slice(0, 20).map(cn => {
@@ -484,7 +478,7 @@ export default function NodeDetail({
                     className="w-full text-left px-3.5 py-3 bg-slate-900/60 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 rounded-xl transition-colors group"
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-slate-200 group-hover:text-white leading-snug text-safe-wrap">
+                      <span className="text-sm text-slate-200 group-hover:text-foreground leading-snug text-safe-wrap">
                         {cn.title}
                       </span>
                       <span className={`chip ${cnStyle.bg} ${cnStyle.text} text-[10px] shrink-0`}>
@@ -519,12 +513,13 @@ function DrawerTab({
   icon: React.ReactNode
   children: React.ReactNode
 }) {
+  useLocale()
   return (
     <button
       onClick={onClick}
       className={`px-3 py-2 text-[12px] inline-flex items-center gap-1.5 border-b-2 -mb-px transition-colors ${
         active
-          ? 'text-white border-indigo-400'
+          ? 'text-foreground border-indigo-400'
           : 'text-slate-500 border-transparent hover:text-slate-200'
       }`}
     >
@@ -551,6 +546,7 @@ function WikiTabBody({
   busy: boolean
   onRecompile: () => void
 }) {
+  useLocale()
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="px-5 py-3 border-b border-slate-800/80 flex items-center gap-2 flex-wrap text-[11px] text-slate-500">
@@ -562,16 +558,15 @@ function WikiTabBody({
             <button
               onClick={() => navigator.clipboard?.writeText(wiki.path)}
               className="text-slate-500 hover:text-slate-200 transition-colors inline-flex items-center gap-1"
-              title="复制项目相对路径"
+              title={tr("复制项目相对路径")}
             >
-              <Copy size={10} /> 复制
-            </button>
+              <Copy size={10} /> {tr("复制")}</button>
             <span className="ml-auto text-slate-600">
-              {wiki.compiled_at ? new Date(wiki.compiled_at).toLocaleString() : ''}
+              {wiki.compiled_at ? new Date(wiki.compiled_at).toLocaleString(getFormattingLocale()) : ''}
             </span>
           </>
         ) : (
-          <span className="text-slate-500">{kind === 'papers' ? '论文页' : '概念页'}</span>
+          <span className="text-slate-500">{kind === 'papers' ? tr("论文页") : tr("概念页")}</span>
         )}
         <button
           onClick={onRecompile}
@@ -579,25 +574,22 @@ function WikiTabBody({
           className="ml-auto inline-flex items-center gap-1 text-[11px] bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-200 border border-indigo-500/40 px-2 py-0.5 rounded-md disabled:opacity-50 transition-colors"
         >
           {busy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-          重编译此页
-        </button>
+          {tr("重编译此页")}</button>
       </div>
 
       <div className="px-5 py-4">
         {loading ? (
           <div className="py-12 flex items-center justify-center text-slate-500 text-[12px]">
-            <Loader2 size={12} className="animate-spin mr-2" /> 加载中…
-          </div>
+            <Loader2 size={12} className="animate-spin mr-2" /> {tr("加载中…")}</div>
         ) : error ? (
           <div className="px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-200 text-[12px]">
             {error}
           </div>
         ) : missing || !wiki ? (
           <div className="px-3 py-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-[12px] text-amber-100 leading-relaxed">
-            <p>此节点尚未生成 wiki .md 文件。</p>
+            <p>{tr("此节点尚未生成 wiki .md 文件。")}</p>
             <p className="mt-1 text-amber-200/70 text-[11px]">
-              点上方"重编译此页"会调用 LLM 生成。
-            </p>
+              {tr("点上方\"重编译此页\"会调用 LLM 生成。")}</p>
           </div>
         ) : (
           <div className="markdown-notes max-w-none text-[13px] leading-7 text-slate-200">
@@ -622,6 +614,7 @@ function PromotionButton({
   onClick: () => void
   children: React.ReactNode
 }) {
+  useLocale()
   const palette = {
     emerald: 'bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 border-emerald-500/40',
     rose: 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 border-rose-500/40',

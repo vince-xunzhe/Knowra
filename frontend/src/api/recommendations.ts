@@ -1,3 +1,4 @@
+import { t as tr } from '../i18n/catalog'
 /** Personal recommendations are owned by the local workspace, not cloud auth. */
 import axios from 'axios'
 import type { PersonalFeed as CloudFeed, PersonalRecItem as CloudItem } from './cloud'
@@ -16,7 +17,7 @@ export interface RecommendationHistory { batches: RecommendationBatch[]; retenti
 const api = axios.create({ baseURL: '/api/recommendations/personal', timeout: 30000 })
 export class PersonalRecommendationsUnavailableError extends Error {
   constructor() {
-    super('本机推荐服务尚未加载，请重启新版桌面后端。此功能不需要云端登录。')
+    super(tr("本机推荐服务尚未加载，请重启新版桌面后端。此功能不需要云端登录。"))
     this.name = 'PersonalRecommendationsUnavailableError'
   }
 }

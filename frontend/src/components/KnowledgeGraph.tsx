@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale, useTheme } from '../i18n/preferences'
 import { useEffect, useRef, useCallback } from 'react'
 import cytoscape from 'cytoscape'
 import type { GraphData, GraphNode } from '../api/client'
@@ -13,13 +15,13 @@ const NODE_COLORS: Record<string, string> = {
 }
 
 const NODE_LABELS: Record<string, string> = {
-  paper: '论文',
-  technique: '技术',
-  dataset: '数据集',
-  concept: '概念',
-  entity: '实体',
-  topic: '主题',
-  fact: '事实',
+  get paper() { return tr("论文") },
+  get technique() { return tr("技术") },
+  get dataset() { return tr("数据集") },
+  get concept() { return tr("概念") },
+  get entity() { return tr("实体") },
+  get topic() { return tr("主题") },
+  get fact() { return tr("事实") },
 }
 
 interface Props {
@@ -395,6 +397,8 @@ function applyDensityViewport(cy: cytoscape.Core, visuals: GraphVisuals, animate
 }
 
 export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Props) {
+  useLocale()
+  const theme = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const activeLayoutRef = useRef<cytoscape.Layouts | null>(null)
@@ -854,6 +858,19 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   useEffect(() => {
     const cy = cyRef.current
     if (!cy || cy.destroyed()) return
+    const light = theme === 'light'
+    const stylesheet = (cy.style() as cytoscape.Style & { json(): Array<{ selector: string; style: Record<string, unknown> }> }).json()
+    for (const rule of stylesheet) {
+      if (rule.selector === 'node') Object.assign(rule.style, { color: light ? '#24324b' : '#f1f5f9', 'text-background-color': light ? '#ffffff' : '#020617', 'border-color': light ? '#f4f6fb' : '#0b0d12' })
+      if (rule.selector === 'edge') Object.assign(rule.style, { 'line-color': light ? '#94a3b8' : '#334155', 'target-arrow-color': light ? '#718096' : '#475569', 'text-outline-color': light ? '#f4f6fb' : '#0b0d12' })
+    }
+    cy.style().fromJson(stylesheet).update()
+  }, [theme])
+
+
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
     if (!didInitialDataSyncRef.current) {
       didInitialDataSyncRef.current = true
       return
@@ -914,7 +931,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full" />
+      <div ref={containerRef} data-testid="knowledge-graph-canvas" className="w-full h-full" />
       {/* Legend — compact horizontal strip at bottom-right; the left rail
           (PipelineConsole) handles all stage controls so this area can stay
           minimal. */}

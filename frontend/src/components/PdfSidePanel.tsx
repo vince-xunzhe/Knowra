@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 // Right-side PDF reader for the [回顾] page. Replaces the earlier
 // full-screen lightbox so the structured extraction column on the left
 // stays visible while the user cross-references the PDF on the right.
@@ -75,6 +77,7 @@ export default function PdfSidePanel({
   initialState,
   onClose,
 }: Props) {
+  useLocale()
   const [numPages, setNumPages] = useState<number | null>(null)
   const [pageWidth, setPageWidth] = useState<number | null>(null)
   const [scale, setScale] = useState<number | null>(initialState?.scale ?? null)
@@ -264,23 +267,23 @@ export default function PdfSidePanel({
           className="min-w-0 flex-1 truncate text-xs font-medium text-slate-300"
           title={title}
         >
-          {title || '原始 PDF'}
+          {title || tr("原始 PDF")}
         </span>
         {numPages != null && numPages > 0 && (
-          <span className="text-[11px] text-slate-500 shrink-0">· {numPages} 页</span>
+          <span className="text-[11px] text-slate-500 shrink-0">· {numPages} {tr("页")}</span>
         )}
         <div className="ml-auto flex items-center gap-1 shrink-0">
           <button
             onClick={handleZoomOut}
             disabled={effectiveScale <= MIN_SCALE + 1e-3}
-            title="缩小 (-)"
+            title={tr("缩小 (-)")}
             className={btnCls}
           >
             <ZoomOut size={14} />
           </button>
           <button
             onClick={handleFit}
-            title="适应宽度 (0)"
+            title={tr("适应宽度 (0)")}
             className={`${btnCls} min-w-14 tabular-nums`}
           >
             {pct}%
@@ -288,12 +291,12 @@ export default function PdfSidePanel({
           <button
             onClick={handleZoomIn}
             disabled={effectiveScale >= MAX_SCALE - 1e-3}
-            title="放大 (+)"
+            title={tr("放大 (+)")}
             className={btnCls}
           >
             <ZoomIn size={14} />
           </button>
-          <button onClick={handleFit} title="适应宽度" className={btnCls}>
+          <button onClick={handleFit} title={tr("适应宽度")} className={btnCls}>
             <Maximize2 size={14} />
           </button>
           {externalHref && (
@@ -302,7 +305,7 @@ export default function PdfSidePanel({
               target="_blank"
               rel="noreferrer"
               onClick={e => e.stopPropagation()}
-              title="新标签页打开"
+              title={tr("新标签页打开")}
               className={btnCls}
             >
               <ExternalLink size={14} />
@@ -310,7 +313,7 @@ export default function PdfSidePanel({
           )}
           <button
             onClick={requestClose}
-            title="关闭（保留位置）"
+            title={tr("关闭（保留位置）")}
             className={`${btnCls} ml-1 hover:border-red-500/60 hover:text-red-200`}
           >
             <X size={14} />
@@ -340,8 +343,7 @@ export default function PdfSidePanel({
                   rel="noreferrer"
                   className="text-xs text-indigo-300 underline hover:text-indigo-200"
                 >
-                  改为在新标签页打开 →
-                </a>
+                  {tr("改为在新标签页打开 →")}</a>
               )}
             </div>
           ) : (
@@ -353,12 +355,11 @@ export default function PdfSidePanel({
               }}
               onLoadError={err => {
                 console.error('PDF load failed', err)
-                setError(`PDF 加载失败：${err.message || '未知错误'}`)
+                setError(tr("PDF 加载失败：{0}", { 0: err.message || tr('未知错误') }))
               }}
               loading={
                 <div className="my-16 flex items-center gap-2 text-slate-400 text-sm">
-                  <Loader2 size={14} className="animate-spin" /> 正在解析 PDF…
-                </div>
+                  <Loader2 size={14} className="animate-spin" /> {tr("正在解析 PDF…")}</div>
               }
               error={<span />}
             >
@@ -381,8 +382,7 @@ export default function PdfSidePanel({
                       loading={
                         <div className="flex h-[60vh] w-full items-center justify-center text-slate-400 text-sm">
                           <Loader2 size={14} className="animate-spin mr-2" />
-                          渲染第 {i + 1} 页…
-                        </div>
+                          {tr("渲染第")}{' '}{i + 1} {tr("页…")}</div>
                       }
                     />
                   </div>
@@ -394,11 +394,10 @@ export default function PdfSidePanel({
 
       {/* Footer */}
       <footer className="border-t border-slate-800/80 bg-slate-950/70 px-4 py-1.5 text-center text-[11px] text-slate-500">
-        Ctrl/⌘ + 滚轮缩放 · + / − 键缩放 · 0 适应宽度 · Esc 或点击外部关闭并保存位置
-      </footer>
+        {tr("Ctrl/⌘ + 滚轮缩放 · + / − 键缩放 · 0 适应宽度 · Esc 或点击外部关闭并保存位置")}</footer>
     </div>
   )
 }
 
 const btnCls =
-  'inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 px-2 text-xs text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40'
+  'inline-flex h-8 min-w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 px-2 text-xs text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40'
