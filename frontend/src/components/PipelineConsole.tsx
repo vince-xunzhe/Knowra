@@ -243,8 +243,9 @@ export default function PipelineConsole({
       const scanResult = await state.scan()
       showScanResult(scanResult)
 
-      if (scanResult.unprocessed > 0) {
-        setRunAllStep('处理论文', `${scanResult.unprocessed} 篇待处理`)
+      const pendingPapers = scanResult.pending ?? scanResult.unprocessed
+      if (pendingPapers > 0) {
+        setRunAllStep('处理论文', `${pendingPapers} 篇待处理`)
         await state.process()
         const processingResult = await waitForProcessingDone(s => {
           if (s.running) setRunAllStep('处理论文', `${s.done}/${s.total}`)
@@ -259,6 +260,10 @@ export default function PipelineConsole({
         }
       }
 
+      const afterProcessing = await getStatus()
+      if ((afterProcessing.failed_count ?? 0) > 0) {
+        throw new Error(`有 ${afterProcessing.failed_count} 篇失败论文，请先在录入阶段点击“重试失败”。`)
+      }
       setRunAllStep('自动筛选候选概念')
       const beforePromotion = await getPromotionCounts()
       if ((beforePromotion.summary.counts.pending ?? 0) > 0) {
@@ -370,7 +375,9 @@ export default function PipelineConsole({
     ? `扫描完成：新增 ${scanSummary.new_found} 篇` +
       (duplicateFiles.length > 0 ? ` · 当前重复文件 ${duplicateFiles.length} 个（已跳过，不参与处理）`
         : scanSummary.duplicates > 0 ? ' · 重复文件已清理' : '') +
-      ` · 待处理 ${scanSummary.unprocessed} 篇` +
+      ` · 待处理 ${state.processing?.pending ?? scanSummary.pending ?? scanSummary.unprocessed} 篇` +
+      ((state.processing?.failedCount ?? scanSummary.failed_count ?? 0) > 0
+        ? ` · 失败待重试 ${state.processing?.failedCount ?? scanSummary.failed_count} 篇` : '') +
       (duplicateCheckError ? ` · ${duplicateCheckError}` : '')
     : null
   const runScan = async () => {
@@ -494,6 +501,7 @@ export default function PipelineConsole({
                 scanNotice={scanNotice}
                 onScan={runScan}
                 onProcess={() => safeRun('process', state.process)}
+                onRetry={() => safeRun('retry', state.retryFailed)}
               />
             )}
             {stage.id === 'curate' && (
@@ -642,29 +650,34 @@ function IngestActions({
   scanNotice,
   onScan,
   onProcess,
+  onRetry,
 }: {
   state: PipelineState & PipelineActions
   busyKey: string | null
   scanNotice: string | null
   onScan: () => void
   onProcess: () => void
+  onRetry: () => void
 }) {
   const running = !!state.processing?.running
   const anyBusy = busyKey !== null
-  const submitting = busyKey === 'process'
+  const submitting = busyKey === 'process' || busyKey === 'retry'
   const remaining = running
     ? Math.max(0, (state.processing?.total ?? 0) - (state.processing?.done ?? 0))
     : state.unprocessedHint
   const firstFailure = state.processing?.failedPapers[0]
+  const failedCount = state.processing?.failedCount ?? 0
+  const retryOnly = !running && remaining === 0 && failedCount > 0
   const failureReason = firstFailure?.reason || state.processing?.batchError
   return (
     <div className="space-y-2">
       <p className="text-[11.5px] text-slate-400 leading-relaxed">
         扫描本地 PDF 目录，把新论文喂给 LLM 抽取，并落入数据库。
       </p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-wrap gap-2">
         <ActionButton
           onClick={onScan}
+          className="flex-[1_0_max-content]"
           icon={<ScanLine size={12} />}
           variant="ghost"
           disabled={running || anyBusy}
@@ -675,21 +688,27 @@ function IngestActions({
           扫描目录
         </ActionButton>
         <ActionButton
-          onClick={onProcess}
+          onClick={retryOnly ? onRetry : onProcess}
+          className="flex-[1_0_max-content]"
           icon={running || submitting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
           variant="primary"
-          disabled={running || anyBusy}
+          disabled={running || anyBusy || (remaining === 0 && failedCount === 0)}
           loading={submitting}
           loadingLabel="提交中"
-          title={state.processing?.current || '处理所有未入库论文'}
+          title={state.processing?.current || (retryOnly ? '重新处理失败论文' : remaining > 0 ? '处理新的待处理论文' : '暂无待处理论文')}
         >
-          {running ? '处理中' : remaining > 0 ? `处理 ${remaining} 篇` : '处理论文'}
+          {running ? '处理中' : retryOnly ? `重试失败 ${failedCount} 篇` : remaining > 0 ? `处理 ${remaining} 篇` : '处理论文'}
         </ActionButton>
       </div>
       {scanNotice && !running && (
         <p className="rounded-md border border-emerald-500/25 bg-emerald-500/10 px-2 py-1 text-[11px] text-emerald-200">
           {scanNotice}
         </p>
+      )}
+      {!running && remaining > 0 && failedCount > 0 && (
+        <ActionButton onClick={onRetry} icon={<Play size={12} />} variant="ghost" disabled={anyBusy}>
+          重试失败 {failedCount} 篇
+        </ActionButton>
       )}
       {!running && (state.processing?.errors ?? 0) > 0 && (
         <div className="rounded-md border border-rose-500/35 bg-rose-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-rose-200">
@@ -775,9 +794,10 @@ function CurateActions({
       )}
 
       {/* Primary action: run promotion */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-wrap gap-2">
         <ActionButton
           onClick={onRun}
+          className="flex-[1_0_max-content]"
           icon={<Zap size={12} />}
           variant="primary"
           disabled={anyBusy}
@@ -793,6 +813,7 @@ function CurateActions({
         </ActionButton>
         <ActionButton
           onClick={onAccept}
+          className="flex-[1_0_max-content]"
           icon={<ShieldCheck size={12} />}
           variant="ghost"
           disabled={llmDecided === 0 || anyBusy}
@@ -1137,10 +1158,12 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled || loading}
       title={title}
-      className={`inline-flex items-center justify-center gap-1.5 text-[11.5px] font-medium px-2.5 py-1.5 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${cls} ${className || ''}`}
+      className={`inline-flex min-w-0 max-w-full items-center justify-center gap-1.5 whitespace-nowrap text-[11.5px] font-medium px-2.5 py-1.5 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${cls} ${className || ''}`}
     >
-      {loading ? <Loader2 size={12} className="animate-spin" /> : icon}
-      {loading && loadingLabel ? loadingLabel : children}
+      <span className="inline-flex shrink-0">
+        {loading ? <Loader2 size={12} className="animate-spin" /> : icon}
+      </span>
+      <span className="min-w-0 truncate">{loading && loadingLabel ? loadingLabel : children}</span>
     </button>
   )
 }
@@ -1260,6 +1283,7 @@ async function waitForProcessingDone(onTick: (status: ProcessingPollStatus) => v
       current: raw.current ?? '',
       succeeded: raw.succeeded ?? Math.max(0, (raw.done ?? 0) - (raw.errors ?? 0)),
       pending: typeof raw.pending === 'number' ? raw.pending : null,
+      failedCount: raw.failed_count ?? 0,
       failedPapers: (raw.failed_papers ?? []).map(item => ({
         id: item.id,
         filename: item.filename,

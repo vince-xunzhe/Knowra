@@ -212,6 +212,10 @@ data/
 
 ## Key Operations
 
+For native startup, `bash start.sh` disables backend auto-reload by default so source edits do not interrupt model jobs. Developers can opt in with `KNOWLEDGE_WIKI_MODE=native BACKEND_RELOAD=1 bash start.sh`. Paper processing runs outside HTTP response background tasks; restarting still interrupts unfinished work, which must be retried. Saved results remain on disk.
+
+Local mode allows only one backend per data directory, even on different ports. SQLite uses WAL with a 30-second lock wait; paper processing retries transient lock conflicts after rolling back, reusing successful model results within that run. For a live database backup, use SQLite's backup API (as the migration and deduplication scripts do), not a copy of `knowledge.db` alone: committed data may still be in its WAL sidecar.
+
 - **Rebuild similarity edges**: recompute embedding-based `similar` edges using the current threshold, without re-running extraction.
 - **Rebuild wiki index**: regenerate `data/wiki/index.md` so Ask sees the latest paper and concept pages.
 - **Reset graph**: clear generated nodes and edges and mark papers as unprocessed; manual concepts remain.

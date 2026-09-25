@@ -490,6 +490,7 @@ def _upsert_node(
     paper_id: str,
     api_key: str,
     embedding_model: str,
+    embeddings: dict,
 ) -> KnowledgeNode:
     raw_title = (title or "").strip()
     title = raw_title if node_type == "paper" else _truncate_title(raw_title)
@@ -531,13 +532,11 @@ def _upsert_node(
             list(existing.tags or []),
             content_updated,
         )
-        db.commit()
+        db.flush()
         return existing
 
-    try:
-        embedding = get_embedding(f"{title}: {content}", api_key, embedding_model)
-    except Exception:
-        embedding = None
+    # All model I/O is completed before the graph write transaction starts.
+    embedding = embeddings.get((node_type, title))
 
     # Concept-eligible types start at `pending` and need promotion review.
     # Paper is auto-promoted because it isn't curated.
@@ -571,6 +570,7 @@ def _add_edge(
 ) -> Optional[KnowledgeEdge]:
     if src_id == tgt_id:
         return None
+    db.flush()
     existing = (
         db.query(KnowledgeEdge)
         .filter(
@@ -750,6 +750,57 @@ def remove_nodes_for_paper(db: Session, paper_id: str) -> int:
     return removed
 
 
+def prepare_graph_embeddings(extraction: dict, paper_id: str, db: Session,
+                             api_key: str, embedding_model: str) -> dict:
+    """Read existing nodes, release the read transaction, then call embedding APIs."""
+    if db.new or db.dirty or db.deleted:
+        raise RuntimeError("Prepare graph embeddings before making database changes")
+    specs = []
+    title = (extraction.get("title") or "").strip()
+    abstract = (extraction.get("abstract_summary") or "").strip()
+    venue, year = (extraction.get("venue") or "").strip(), extraction.get("year")
+    content = (f"[{venue} {year}] {abstract}" if abstract else f"{venue} {year}") if venue or year else abstract
+    if title:
+        specs.append((title, content or title, "paper", []))
+    area = (extraction.get("problem_area") or "").strip()
+    if area:
+        specs.append((area, f"研究领域: {area}", "problem_area", []))
+    for item in extraction.get("techniques") or []:
+        if not isinstance(item, dict) or not (item.get("name") or "").strip():
+            continue
+        name, role = item["name"].strip(), (item.get("role") or "").strip()
+        specs.append((name, name + (f"（{role}）" if role else ""), "technique", item.get("aliases") or []))
+    for item in extraction.get("datasets") or []:
+        if not isinstance(item, dict) or not (item.get("name") or "").strip():
+            continue
+        name, purpose = item["name"].strip(), (item.get("purpose") or "").strip()
+        specs.append((name, f"数据集: {name}" + (f"（{purpose}）" if purpose else ""), "dataset", []))
+    known_names = {_normalize_name(name) for title, _, _, aliases in specs for name in [title, *aliases]}
+    for name in extraction.get("baselines") or []:
+        if isinstance(name, str) and name.strip() and _normalize_name(name) not in known_names:
+            specs.append((name.strip(), f"Baseline: {name.strip()}", "technique", []))
+    missing = {}
+    embeddings = {}
+    try:
+        for raw_title, content, kind, aliases in specs:
+            title = raw_title if kind == "paper" else _truncate_title(raw_title)
+            existing = (_find_existing_paper_node(db, paper_id=paper_id, title=raw_title)
+                        if kind == "paper" else _find_existing_node(db, title, aliases))
+            if existing is None:
+                missing.setdefault((kind, title), f"{title}: {content}")
+            else:
+                # A manual rebuild may delete this node after preparation.
+                embeddings[(kind, title)] = existing.embedding
+    finally:
+        db.rollback()
+    for key, text in missing.items():
+        try:
+            embeddings[key] = get_embedding(text, api_key, embedding_model)
+        except Exception:
+            embeddings[key] = None
+    return embeddings
+
+
 def add_nodes_from_paper_extraction(
     extraction: dict,
     paper_id: str,
@@ -757,6 +808,8 @@ def add_nodes_from_paper_extraction(
     embedding_model: str,
     similarity_threshold: float,
     db: Session,
+    *,
+    embeddings: dict,
 ) -> list:
     """
     Convert paper extraction into knowledge nodes + edges.
@@ -786,7 +839,7 @@ def add_nodes_from_paper_extraction(
         paper_node = _upsert_node(
             db, paper_title, paper_content or paper_title, "paper",
             aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model,
+            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
         )
         register(paper_node, [paper_title])
 
@@ -796,7 +849,7 @@ def add_nodes_from_paper_extraction(
         area_node = _upsert_node(
             db, area, f"研究领域: {area}", "problem_area",
             aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model,
+            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
         )
         register(area_node, [area])
         if paper_node:
@@ -816,7 +869,7 @@ def add_nodes_from_paper_extraction(
         node = _upsert_node(
             db, name, desc, "technique",
             aliases=aliases, tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model,
+            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
         )
         tech_nodes[_normalize_name(name)] = node
         register(node, [name, *aliases])
@@ -849,7 +902,7 @@ def add_nodes_from_paper_extraction(
             db, name, f"数据集: {name}" + (f"（{purpose}）" if purpose else ""),
             "dataset",
             aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model,
+            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
         )
         register(node, [name])
         if paper_node:
@@ -867,7 +920,7 @@ def add_nodes_from_paper_extraction(
             existing = _upsert_node(
                 db, name, f"Baseline: {name}", "technique",
                 aliases=[], tags=tag_base,
-                paper_id=paper_id, api_key=api_key, embedding_model=embedding_model,
+                paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
             )
             register(existing, [name])
         if paper_node:
@@ -879,14 +932,12 @@ def add_nodes_from_paper_extraction(
     # `key_findings` field in the extraction JSON is still used by the
     # paper-page LLM compile to build the "关键发现" section.
 
-    db.commit()
-
     # --- Similarity edges for newly-touched nodes ---
     touched = list({n.id: n for n in name_to_node.values()}.values())
     for node in touched:
         _add_similarity_edges(db, node, similarity_threshold)
-    db.commit()
-
+    db.flush()
+    # Caller owns commit/rollback, including the paper's completion state.
     return [n.id for n in touched]
 
 

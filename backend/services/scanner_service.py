@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from models import Paper
+from services.paper_work_counts import paper_work_counts
 from path_utils import portable_data_path, resolve_papers_directory
 from services.pdf_service import compute_hash
 from services.paper_record_service import sync_record_from_paper
@@ -141,13 +142,12 @@ def scan_directory(
             pass
 
     total = db.query(Paper).count()
-    unprocessed = db.query(Paper).filter(Paper.processed == False).count()
     return {
         "new_found": added,
         "duplicates": duplicates,
         "duplicate_files": duplicate_files,
         "total": total,
-        "unprocessed": unprocessed,
+        **paper_work_counts(db),
     }
 
 

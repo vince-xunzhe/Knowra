@@ -1,0 +1,391 @@
+*** Begin Patch
+*** Update File: /Users/vince/Documents/knowledge-tree/backend/main.py
+@@
+     db = None
+     try:
+         db = SessionLocal()
++        papers.reconcile_paper_records(db)
+         changed = False
+         for paper in db.query(Paper).all():
+             extraction = None
+*** Update File: /Users/vince/Documents/knowledge-tree/backend/routers/papers.py
+@@
+ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+ from fastapi.responses import FileResponse
+ from pydantic import BaseModel
+-from sqlalchemy.orm import Session
++from sqlalchemy.orm import Session, defer
++from services.db_snapshot import finish_read_snapshot
+ from sqlalchemy.exc import SQLAlchemyError
+ from database import get_db
+ from services.paper_work_counts import paper_work_counts
+@@
+         return None
+ 
+ 
+-def _paper_pub_year(p: Paper) -> Optional[int]:
++def _paper_pub_year(p: Paper, extraction=None) -> Optional[int]:
+     """Publication year from the paper's extraction (or None)."""
+-    ext = _safe_parse(p.raw_llm_response)
++    ext = extraction if extraction is not None else _safe_parse(p.raw_llm_response)
+     raw = ext.get("year") if isinstance(ext, dict) else None
+     if raw is None:
+         return None
+@@
+ 
+ 
+ def _nodes_for_paper(db: Session, paper_id: str):
+-    nodes = db.query(KnowledgeNode).all()
++    nodes = db.query(KnowledgeNode).options(defer(KnowledgeNode.embedding)).all()
+     matches = []
+     for node in nodes:
+         raw_ids = node.source_paper_ids or []
+@@
+ def scan_papers(db: Session = Depends(get_db)):
+     cfg = load_config()
+     try:
++        if not processing_state["running"]:
++            reconcile_paper_records(db)
+         return scan_directory(cfg["scan_directory"], db)
+     except FileNotFoundError as e:
+         raise HTTPException(status_code=404, detail=str(e))
+@@
+ 
+ @router.get("/papers")
+ def list_papers(db: Session = Depends(get_db)):
++    papers = db.query(Paper).options(
++        defer(Paper.extracted_text), defer(Paper.notes), defer(Paper.chat_history),
++    ).order_by(Paper.created_at.desc()).all()
++    finish_read_snapshot(db)
++    return [_serialize_paper_list_item(p) for p in papers]
++
++
++def reconcile_paper_records(db: Session) -> None:
++    """Maintenance on startup/explicit scan, never on a browsing request."""
+     papers = db.query(Paper).order_by(Paper.created_at.desc()).all()
+     changed = False
+     healed_papers: list[Paper] = []
+@@
+         db.commit()
+     for paper in healed_papers:
+         sync_record_from_paper(paper, event="auto_repair")
+-    return [
+-        {
++
++
++def _serialize_paper_list_item(p: Paper) -> dict:
++    extraction = _safe_parse(p.raw_llm_response) or {}
++    return {
+             "id": p.id,
+             "filename": p.filename,
+             "filepath": p.filepath,
+@@
+             "last_error_stage": p.last_error_stage,
+             "last_error_reason": p.last_error_reason,
+             "last_error_recoverable": p.last_error_recoverable,
+-            "paper_category": effective_paper_category(p, _safe_parse(p.raw_llm_response)),
++            "paper_category": effective_paper_category(p, extraction),
+             "paper_category_model": normalize_paper_category(p.paper_category_model),
+             "paper_category_override": normalize_paper_category(p.paper_category_override),
+             "paper_category_source": paper_category_source(p),
+-            "paper_team": effective_paper_team(p, _safe_parse(p.raw_llm_response)),
++            "paper_team": effective_paper_team(p, extraction),
+             "paper_team_model": normalize_team(p.paper_team_model),
+             "paper_team_override": normalize_team(p.paper_team_override),
+             "paper_team_source": paper_team_source(p),
+             "learning_status": normalize_learning_status(p.learning_status),
+-            "year": _paper_pub_year(p),
++            "year": _paper_pub_year(p, extraction),
+             "error": p.error,
+             "created_at": p.created_at.isoformat() if p.created_at else None,
+         }
+-        for p in papers
+-    ]
+ 
+ 
+ def _sync_bulk_record_state(p: Paper) -> bool:
+@@
+     p = db.query(Paper).filter(Paper.id == paper_id).first()
+     if not p:
+         raise HTTPException(status_code=404, detail="Paper not found")
+-    if not processing_state["running"]:
+-        _sync_paper_from_record_if_needed(db, p)
+-    if _reconcile_processed_paper(p):
+-        db.commit()
+-        sync_record_from_paper(p, event="auto_repair")
+-    return _serialize_paper_detail(p, db)
++    result = _serialize_paper_detail(p, db)
++    db.close()
++    return result
+ 
+ 
+ @router.put("/papers/{paper_id}/learning-status")
+*** Update File: /Users/vince/Documents/knowledge-tree/backend/services/graph_service.py
+@@
+ from __future__ import annotations
+ import json
++import math
+ from datetime import datetime, timezone
+ from typing import Optional
+-from sqlalchemy.orm import Session
++from sqlalchemy.orm import Session, defer
+ from sqlalchemy import func, or_
+ from models import Paper, KnowledgeNode, KnowledgeEdge
+ from logging_utils import get_logger
+@@
+     # Alias overlap via tags (we store aliases in tags)
+     all_nodes = db.query(KnowledgeNode).filter(
+         KnowledgeNode.node_origin != MANUAL_NODE_ORIGIN,
+-    ).all()
++    ).options(defer(KnowledgeNode.embedding)).all()
+     for n in all_nodes:
+         existing = {_normalize_name(a) for a in (n.tags or []) if a}
+         existing.add(_normalize_name(n.title))
+@@
+     threshold: float,
+     *,
+     context: str = "incremental_build",
++    candidates=None,
++    norms=None,
+ ) -> dict[str, int]:
+     summary = {"candidate_edges": 0, "final_edges": 0}
+     if not isinstance(node.embedding, list) or not node.embedding:
+         return summary
+-    others = db.query(KnowledgeNode).filter(
++    others = candidates if candidates is not None else db.query(KnowledgeNode).filter(
+         KnowledgeNode.id != node.id,
+         KnowledgeNode.embedding.isnot(None),
+     ).all()
+     for other in others:
++        if other.id == node.id:
++            continue
+         if not isinstance(other.embedding, list) or not other.embedding:
+             continue
+         summary["candidate_edges"] += 1
+-        sim = cosine_similarity(node.embedding, other.embedding)
++        if norms is None:
++            sim = cosine_similarity(node.embedding, other.embedding)
++        else:
++            denominator = norms[node.id] * norms[other.id]
++            sim = (sum(x * y for x, y in zip(node.embedding, other.embedding)) / denominator
++                   if denominator else 0.0)
+         if sim >= threshold:
+             rounded = round(sim, 4)
+             edge = _add_edge(db, node.id, other.id, "similar", rounded)
+@@
+ 
+     # --- Similarity edges for newly-touched nodes ---
+     touched = list({n.id: n for n in name_to_node.values()}.values())
++    # Decode the vector table once per paper, not once per extracted node.
++    candidates = db.query(KnowledgeNode).filter(KnowledgeNode.embedding.isnot(None)).all()
++    norms = {n.id: math.sqrt(sum(x * x for x in n.embedding))
++             for n in candidates if isinstance(n.embedding, list) and n.embedding}
+     for node in touched:
+-        _add_similarity_edges(db, node, similarity_threshold)
++        _add_similarity_edges(db, node, similarity_threshold, candidates=candidates, norms=norms)
+     db.flush()
+     # Caller owns commit/rollback, including the paper's completion state.
+     return [n.id for n in touched]
+@@
+     """Curated graph by default; pass include_candidates=True to also surface
+     pending/rejected concept nodes for the review UI."""
+     processed_ids = _processed_paper_ids(db)
+-    all_nodes = db.query(KnowledgeNode).all()
++    all_nodes = db.query(KnowledgeNode).options(defer(KnowledgeNode.embedding)).all()
+     if include_candidates:
+         nodes = [n for n in all_nodes if not node_is_hidden(n)]
+     else:
+*** Update File: /Users/vince/Documents/knowledge-tree/backend/services/wiki_compiler.py
+@@
+ from typing import Any, List, Optional, Tuple
+ 
+ from sqlalchemy import inspect
+-from sqlalchemy.orm import Session
++from sqlalchemy.orm import Session, defer
+ 
+ from config import load_config, task_reasoning_effort
+ from path_setup import ensure_project_root_on_path
+@@
+     })
+ 
+ 
+-def list_publishable_concept_nodes(db: Session) -> List[KnowledgeNode]:
++def list_publishable_concept_nodes(db: Session, *, include_embeddings: bool = True) -> List[KnowledgeNode]:
+     processed_ids = {
+         row[0] for row in db.query(Paper.id).filter(Paper.processed.is_(True)).all()
+     }
+-    nodes = db.query(KnowledgeNode).all()
++    query = db.query(KnowledgeNode)
++    if not include_embeddings:
++        query = query.options(defer(KnowledgeNode.embedding))
++    nodes = query.all()
+     return [node for node in nodes if is_publishable_concept_node(node, processed_ids)]
+ 
+ 
+ def count_publishable_concepts(db: Session) -> int:
+-    return len(list_publishable_concept_nodes(db))
++    return len(list_publishable_concept_nodes(db, include_embeddings=False))
+ 
+ 
+ # --- LLM call ---------------------------------------------------------------
+@@
+     user doesn't have to remember whether they reprocessed papers since the
+     last compile run.
+     """
+-    papers = db.query(Paper).filter(Paper.processed.is_(True)).all()
+-    nodes = list_publishable_concept_nodes(db)
++    papers = db.query(Paper).options(
++        defer(Paper.extracted_text), defer(Paper.chat_history),
++    ).filter(Paper.processed.is_(True)).all()
++    nodes = list_publishable_concept_nodes(db, include_embeddings=False)
++    canonical_papers = {str(p.id): p for p in papers}
++    finish_read_snapshot(db)
+ 
+     # IDs are opaque strings (UUID post-migration). Wiki .md frontmatter
+     # may carry the canonical UUID (compiled after migration) OR the
+@@
+     concept_ok = 0
+     for node in nodes:
+         expected_name = _concept_page_path(node).name
+-        source_papers = _published_concept_source_papers(node, db)
++        source_papers = [canonical_papers[str(pid)] for pid in normalize_source_paper_ids(node.source_paper_ids)
++                         if str(pid) in canonical_papers]
+         candidates = []
+         for key in _both_ids(node):
+             candidates = concept_pages_by_id.get(key)
+*** Update File: /Users/vince/Documents/knowledge-tree/backend/services/promotion_service.py
+@@
+ from datetime import datetime, timezone, timedelta
+ from typing import Iterable, Optional
+ 
+-from sqlalchemy.orm import Session
++from sqlalchemy.orm import Session, defer
+ 
+ from models import KnowledgeNode
+ from services.graph_service import (
+@@
+     counts = {s: 0 for s in PROMOTION_STATUSES}
+     nodes = db.query(KnowledgeNode).filter(
+         KnowledgeNode.node_type.in_(list(AUTO_CONCEPT_NODE_TYPES))
+-    ).all()
++    ).options(defer(KnowledgeNode.embedding)).all()
+     for node in nodes:
+         counts[promotion_status(node)] = counts.get(promotion_status(node), 0) + 1
+     return counts
+@@
+     state is."""
+     nodes = db.query(KnowledgeNode).filter(
+         KnowledgeNode.node_type.in_(list(AUTO_CONCEPT_NODE_TYPES))
+-    ).all()
++    ).options(defer(KnowledgeNode.embedding)).all()
+     counts = {s: 0 for s in PROMOTION_STATUSES}
+     by: dict[str, int] = {"user": 0, "llm": 0, "heuristic": 0, "legacy": 0, "unset": 0}
+     last_eval: Optional[datetime] = None
+*** Add File: /Users/vince/Documents/knowledge-tree/backend/tests/test_browsing_during_processing.py
++import json
++import sys
++import tempfile
++import time
++import unittest
++from pathlib import Path
++from unittest.mock import patch
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++from sqlalchemy import create_engine, event
++from sqlalchemy.orm import sessionmaker
++from database import enable_sqlite_wal
++from models import Base, Paper, KnowledgeNode
++from routers import papers
++from services.graph_service import get_graph_data
++from services import wiki_compiler
++
++
++class BrowsingDuringProcessingTests(unittest.TestCase):
++    def setUp(self):
++        self.tmp = tempfile.TemporaryDirectory()
++        self.addCleanup(self.tmp.cleanup)
++        self.engine = create_engine(f"sqlite:///{self.tmp.name}/test.db", connect_args={"timeout": 0.05})
++        self.addCleanup(self.engine.dispose)
++        enable_sqlite_wal(self.engine)
++        Base.metadata.create_all(self.engine)
++        self.sessions = sessionmaker(bind=self.engine, autoflush=False)
++        with self.sessions() as db:
++            db.add(Paper(id="p", filepath="paper.pdf", filename="paper.pdf", file_hash="test",
++                         processed=True, processing_status="graphing", title="Paper",
++                         raw_llm_response=json.dumps({"title": "Paper", "year": 2026}),
++                         extracted_text="large PDF " * 100000))
++            db.add(KnowledgeNode(title="Paper", content="Summary", node_type="paper", source_paper_ids=["p"],
++                                 embedding=[0.1] * 3072))
++            db.commit()
++
++    def test_list_stays_read_only_while_writer_holds_lock(self):
++        with self.engine.connect() as writer, self.sessions() as db:
++            writer.exec_driver_sql("BEGIN IMMEDIATE")
++            writer.exec_driver_sql("UPDATE papers SET notes='Writing' WHERE id='p'")
++            with patch.object(papers, "_sync_bulk_record_state", side_effect=AssertionError("repair in GET")), \
++                 patch.object(papers, "_reconcile_processed_paper", side_effect=AssertionError("repair in GET")):
++                start = time.monotonic()
++                result = papers.list_papers(db)
++                self.assertLess(time.monotonic() - start, 1)
++                self.assertEqual(result[0]["title"], "Paper")
++                self.assertEqual(result[0]["year"], 2026)
++                self.assertFalse(db.in_transaction())
++            writer.rollback()
++
++    def test_list_releases_connection_before_serialization(self):
++        statements = []
++        def record(conn, cursor, statement, params, context, many):
++            statements.append(statement)
++        event.listen(self.engine, "before_cursor_execute", record)
++        self.addCleanup(event.remove, self.engine, "before_cursor_execute", record)
++        with self.sessions() as db:
++            original = papers._serialize_paper_list_item
++            def serialize(paper):
++                self.assertFalse(db.in_transaction())
++                return original(paper)
++            with patch.object(papers, "_serialize_paper_list_item", side_effect=serialize):
++                papers.list_papers(db)
++        self.assertEqual(len(statements), 1)
++        self.assertNotIn("papers.extracted_text", statements[0])
++        self.assertNotIn("papers.chat_history", statements[0])
++
++    def test_graph_read_does_not_load_vectors(self):
++        statements = []
++        def record(conn, cursor, statement, params, context, many):
++            statements.append(statement)
++        event.listen(self.engine, "before_cursor_execute", record)
++        self.addCleanup(event.remove, self.engine, "before_cursor_execute", record)
++        with self.sessions() as db:
++            graph = get_graph_data(db)
++            self.assertEqual(len(graph["nodes"]), 1)
++        self.assertFalse(any("knowledge_nodes.embedding" in sql for sql in statements))
++
++    def test_detail_does_not_repair_during_browsing(self):
++        with self.engine.connect() as writer, self.sessions() as db:
++            writer.exec_driver_sql("BEGIN IMMEDIATE")
++            with patch.object(papers, "_chat_state", return_value={}):
++                result = papers.get_paper("p", db)
++            self.assertEqual(result["title"], "Paper")
++            self.assertFalse(db.in_transaction())
++            writer.rollback()
++
++    def test_freshness_reuses_paper_snapshot_instead_of_querying_per_concept(self):
++        with self.sessions() as db:
++            for i in range(20):
++                db.add(KnowledgeNode(title=f"Concept {i}", content="Summary", node_type="technique",
++                                     promotion_status="promoted", source_paper_ids=["p"], embedding=[0.1] * 3072))
++            db.commit()
++        statements = []
++        def record(conn, cursor, statement, params, context, many):
++            statements.append(statement)
++        event.listen(self.engine, "before_cursor_execute", record)
++        self.addCleanup(event.remove, self.engine, "before_cursor_execute", record)
++        with self.sessions() as db, \
++             patch.object(wiki_compiler, "list_paper_pages", return_value=[]), \
++             patch.object(wiki_compiler, "list_concept_pages", return_value=[]):
++            wiki_compiler.compute_freshness_summary(db)
++            self.assertFalse(db.in_transaction())
++        self.assertEqual(len(statements), 3)
++        self.assertFalse(any("knowledge_nodes.embedding" in sql for sql in statements))
+*** End Patch

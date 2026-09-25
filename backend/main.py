@@ -3,7 +3,8 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import load_config, is_cloud_mode
-from database import init_db, SessionLocal
+from database import init_db, SessionLocal, DB_PATH
+from services.local_instance import LocalBackendLock
 from logging_utils import configure_app_logging
 from models import Paper
 from routers import (
@@ -24,6 +25,7 @@ from services.vlm_service import parse_extraction_response
 configure_app_logging()
 
 app = FastAPI(title="Knowra API", version="2.0.0")
+_local_backend_lock = LocalBackendLock(DB_PATH.parent / ".backend-instance.lock")
 
 app.add_middleware(
     CORSMiddleware,
@@ -99,6 +101,8 @@ if is_cloud_mode():
 
 @app.on_event("startup")
 def startup():
+    if not is_cloud_mode():
+        _local_backend_lock.acquire()
     init_db()
     db = None
     try:
@@ -155,6 +159,7 @@ def startup():
 if not is_cloud_mode():
     # Registered after startup() so the existing library schema is ready first.
     app.add_event_handler("startup", recommendation_local.start_local)
+    app.add_event_handler("shutdown", _local_backend_lock.release)
 
 
 @app.get("/")

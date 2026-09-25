@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Optional
+import sqlite3
+
+from sqlalchemy.exc import OperationalError
 
 
 PIPELINE_STATUS_SCANNING = "scanning"
@@ -99,6 +102,15 @@ def _extract_status_code(exc: Exception) -> Optional[int]:
 
 
 def is_recoverable_error(exc: Exception) -> bool:
+    if isinstance(exc, (OperationalError, sqlite3.OperationalError)):
+        original = getattr(exc, "orig", exc)
+        code = getattr(original, "sqlite_errorcode", None)
+        # Extended codes (e.g. SQLITE_BUSY_SNAPSHOT) keep the base code
+        # in the low byte. Do not retry unrelated DB/schema errors.
+        if isinstance(code, int) and (code & 0xff) in {5, 6}:
+            return True
+        if str(original).lower() in {"database is locked", "database table is locked"}:
+            return True
     if isinstance(exc, (FileNotFoundError, PermissionError)):
         return False
 
@@ -120,4 +132,3 @@ def is_recoverable_error(exc: Exception) -> bool:
     # Default conservative mode: unknown crashes are treated as non-recoverable
     # so we do not loop forever on deterministic code bugs.
     return False
-

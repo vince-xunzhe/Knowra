@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from config import load_config, task_model_id
 from models import KnowledgeNode, Paper
+from services.db_snapshot import finish_read_snapshot
 from services.vlm_service import cosine_similarity
 from services.wiki_compiler import (
     WIKI_DIR,
@@ -172,7 +173,7 @@ def _scan_merge_candidates(concept_nodes: list[KnowledgeNode]) -> list[dict]:
 
 
 def _scan_missing_crosscut(
-    db: Session, concept_nodes: list[KnowledgeNode]
+    titles: dict, concept_nodes: list[KnowledgeNode]
 ) -> list[dict]:
     """Find paper clusters that recur together across concept membership
     but have no single concept node spanning them — candidate new
@@ -208,13 +209,6 @@ def _scan_missing_crosscut(
                 break
         if merged is None:
             seen_clusters.append({x, y})
-
-    titles = {
-        p.id: p.title
-        for p in db.query(Paper).filter(
-            Paper.id.in_([pid for cl in seen_clusters for pid in cl] or [0])
-        ).all()
-    }
 
     out: list[dict] = []
     for cl in seen_clusters:
@@ -426,11 +420,13 @@ def run_lint(db: Session, *, use_llm: bool = True, on_progress=None) -> dict[str
 
     progress("检查概念内容与来源")
     concept_nodes = list_publishable_concept_nodes(db)
+    titles = dict(db.query(Paper.id, Paper.title).all())
+    finish_read_snapshot(db)
 
     stubs = _scan_stubs(concept_nodes)
     progress("检查相似概念与跨论文关联")
     merges = _scan_merge_candidates(concept_nodes)
-    crosscut = _scan_missing_crosscut(db, concept_nodes)
+    crosscut = _scan_missing_crosscut(titles, concept_nodes)
 
     judgment: dict[str, Any] = {"used_model": False}
     if use_llm and (stubs or merges or crosscut):

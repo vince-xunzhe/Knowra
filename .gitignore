@@ -30,6 +30,9 @@ frontend/dist/
 *.tsbuildinfo
 
 # Runtime data
+data/.backend-instance.lock
+data/*.db-wal
+data/*.db-shm
 data/wiki-lint-job.json
 data/.wiki-lint-*
 data/*.db

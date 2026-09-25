@@ -1,16 +1,20 @@
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 import hashlib
 import subprocess
 import sys
 import time
+import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import SQLAlchemyError
 from database import get_db
+from services.paper_work_counts import paper_work_counts
 from logging_utils import get_logger
 from models import Paper, KnowledgeNode
 from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
@@ -32,7 +36,7 @@ from services.vlm_service import (
     run_chat_turn,
     PaperExtractionError,
 )
-from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper
+from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper, prepare_graph_embeddings
 from services.note_images_gc import gc_on_notes_update
 from services.paper_category_service import (
     PAPER_CATEGORY_OPTIONS,
@@ -547,7 +551,7 @@ async def upload_papers(
             "duplicates": 0,
             "duplicate_files": [],
             "total": db.query(Paper).count(),
-            "unprocessed": db.query(Paper).filter(Paper.processed == False).count(),
+            **paper_work_counts(db),
         }
     return {
         "saved": saved,
@@ -647,7 +651,9 @@ def serve_pdf(paper_id: str, db: Session = Depends(get_db)):
     pdf_path = resolve_paper_path(p.filepath)
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail=f"PDF not found: {pdf_path}")
-    return FileResponse(str(pdf_path), media_type="application/pdf", filename=p.filename)
+    response = FileResponse(str(pdf_path), media_type="application/pdf", filename=p.filename)
+    db.close()
+    return response
 
 
 @router.get("/papers/{paper_id}/record")
@@ -659,7 +665,9 @@ def serve_paper_record(paper_id: str, db: Session = Depends(get_db)):
     path = record_path_for_paper(p)
     if not path.exists():
         sync_record_from_paper(p, event="bootstrap")
-    return FileResponse(str(path), media_type="text/markdown; charset=utf-8", filename=path.name)
+    response = FileResponse(str(path), media_type="text/markdown; charset=utf-8", filename=path.name)
+    db.close()
+    return response
 
 
 @router.get("/papers/{paper_id}/first_page")
@@ -670,6 +678,7 @@ def serve_first_page(paper_id: str, db: Session = Depends(get_db)):
     image_path = resolve_artifact_path(p.first_page_image_path)
     if not image_path.exists():
         raise HTTPException(status_code=404, detail="First page image not found")
+    db.close()
     return FileResponse(str(image_path), media_type="image/png")
 
 
@@ -737,6 +746,8 @@ def _process_single(paper_id: str):
 
         processing_state["current"] = p.filename
         attempt = 1
+        extraction_result = None
+        prepared_embeddings = None
         while attempt <= max_retries:
             stage = PIPELINE_STATUS_SCANNING
             try:
@@ -776,8 +787,11 @@ def _process_single(paper_id: str):
                         p.extracted_text = text
                         p.num_pages = num_pages
                         db.commit()
+                    except SQLAlchemyError:
+                        # Let the outer handler roll back and classify DB errors.
+                        raise
                     except Exception:
-                        pass
+                        db.rollback()
 
                 if not p.first_page_image_path:
                     img_path = render_first_page(str(pdf_path), p.file_hash)
@@ -799,24 +813,24 @@ def _process_single(paper_id: str):
                 # Tag every LLM call (extraction + category + any nested
                 # fallback) with the logical task so dashboard cost
                 # breakdowns attribute correctly.
-                with task_context("paper_extract"):
-                    extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = extract_knowledge_from_paper(
-                        pdf_filepath=str(pdf_path),
-                        prompt=cfg["extraction_prompt"],
-                        api_key=cfg["openai_api_key"],
-                        model=task_model_name(cfg, "paper_extract"),
+                if extraction_result is None:
+                    inputs = dict(
+                        pdf_filepath=str(pdf_path), prompt=cfg["extraction_prompt"],
+                        api_key=cfg["openai_api_key"], model=task_model_name(cfg, "paper_extract"),
                         reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
-                        cached_file_id=cached_file_id,
-                        cached_assistant_id=cached_assistant_id,
+                        cached_file_id=cached_file_id, cached_assistant_id=cached_assistant_id,
                         cached_vector_store_id=cached_vector_store_id,
                         fallback_text=p.extracted_text or "",
-                        first_page_image_path=(
-                            str(resolve_artifact_path(p.first_page_image_path))
-                            if cfg.get("use_first_page_image") and p.first_page_image_path
-                            else None
-                        ),
+                        first_page_image_path=(str(resolve_artifact_path(p.first_page_image_path))
+                            if cfg.get("use_first_page_image") and p.first_page_image_path else None),
                         file_hash=p.file_hash,
                     )
+                    db.rollback()
+                    with task_context("paper_extract"):
+                        current_result = extract_knowledge_from_paper(**inputs)
+                else:
+                    current_result = extraction_result
+                extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = current_result
 
                 if not raw or not raw.strip():
                     raise PaperExtractionError(
@@ -850,6 +864,8 @@ def _process_single(paper_id: str):
                         assistant_id=new_assistant_id or "",
                     )
 
+                extraction_result = current_result
+
                 stage = PIPELINE_STATUS_GRAPHING
                 _set_pipeline_state(
                     db,
@@ -875,6 +891,13 @@ def _process_single(paper_id: str):
                 p.authors = extraction.get("authors") or []
                 p.paper_category_model = derive_model_paper_category(p, extraction)
                 p.paper_team_model = derive_model_paper_team(p, extraction)
+                # Keep successful extraction even if a later graph write fails.
+                db.commit()
+
+                if prepared_embeddings is None:
+                    prepared_embeddings = prepare_graph_embeddings(
+                        extraction, paper_id, db, cfg["openai_api_key"], task_model_id(cfg, "embedding"),
+                    )
 
                 add_nodes_from_paper_extraction(
                     extraction,
@@ -883,6 +906,7 @@ def _process_single(paper_id: str):
                     task_model_id(cfg, "embedding"),
                     cfg["similarity_threshold"],
                     db,
+                    embeddings=prepared_embeddings,
                 )
 
                 p.processed = True
@@ -938,16 +962,25 @@ def _process_single(paper_id: str):
             p.processed = False
             p.processed_at = None
             if attempt < max_retries and recoverable:
-                _set_pipeline_state(
-                    db,
-                    p,
-                    status=stage,
-                    retry_count=attempt,
-                    error=reason,
-                    error_stage=stage,
-                    error_recoverable=True,
-                )
-                _sync_processing_record(p, event="process_retry")
+                try:
+                    _set_pipeline_state(
+                        db,
+                        p,
+                        status=stage,
+                        retry_count=attempt,
+                        error=reason,
+                        error_stage=stage,
+                        error_recoverable=True,
+                    )
+                    _sync_processing_record(p, event="process_retry")
+                except SQLAlchemyError as state_error:
+                    # The competing writer may still hold the lock. Failure to
+                    # persist retry metadata must not prevent the actual retry.
+                    if not is_recoverable_error(state_error):
+                        raise
+                    logger.warning("paper retry state temporarily locked paper_id=%s", paper_id)
+                finally:
+                    db.rollback()
                 delay = compute_backoff_seconds(
                     attempt,
                     base_seconds=backoff_base_s,
@@ -1097,6 +1130,37 @@ def _mark_processing_started(paper_ids: list[str]) -> None:
     processing_state["running"] = bool(paper_ids)
 
 
+_processing_submission_lock = threading.Lock()
+
+
+def _serialize_processing_submission(handler):
+    @wraps(handler)
+    def wrapped(*args, **kwargs):
+        # Reserve the batch before another request can prepare/retry its papers.
+        with _processing_submission_lock:
+            return handler(*args, **kwargs)
+    return wrapped
+
+
+def _start_processing_worker(paper_ids: list[str]) -> None:
+    if not paper_ids:
+        return
+    _mark_processing_started(paper_ids)
+    try:
+        # Request-level BackgroundTasks keep Uvicorn waiting during reload.
+        # The worker opens its own DB sessions; never pass the request session.
+        threading.Thread(
+            target=_process_many_background, args=(list(paper_ids),),
+            name="paper-processing", daemon=True,
+        ).start()
+    except Exception as exc:
+        processing_state.update(
+            running=False, batch_error=str(exc), last_message="论文处理任务启动失败",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+        )
+        raise HTTPException(status_code=503, detail="Failed to start paper processing") from exc
+
+
 def _prepare_reprocess(db: Session, p: Paper):
     remove_nodes_for_paper(db, p.id)
     p.processed = False
@@ -1149,34 +1213,42 @@ def _reconcile_failed_papers(db: Session) -> list[Paper]:
 
 
 @router.post("/process")
-def process_all(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@_serialize_processing_submission
+def process_all(db: Session = Depends(get_db)):
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     pending = db.query(Paper).filter(
         Paper.processed == False, Paper.error == None
     ).all()
     ids = [p.id for p in pending]
-    _mark_processing_started(ids)
     if not ids:
-        return {"message": "No pending papers to process", **processing_state}
-    background_tasks.add_task(_process_many_background, ids)
-    return {"message": "Processing started", **processing_state}
+        counts = paper_work_counts(db)
+        message = (f"没有新的待处理论文；有 {counts['failed_count']} 篇失败论文，请点击重试失败。"
+                   if counts["failed_count"] else "没有待处理论文，请先扫描目录。")
+        return {**processing_state, **counts, "accepted": False,
+                "message": message, "last_message": message}
+    db.close()
+    _start_processing_worker(ids)
+    return {"message": "Processing started", "accepted": True, **processing_state}
 
 
 @router.post("/papers/{paper_id}/process")
-def process_one(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@_serialize_processing_submission
+def process_one(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
-    _mark_processing_started([p.id])
-    background_tasks.add_task(_process_one_background, paper_id)
-    return {"message": f"Processing started for {p.filename}", **processing_state}
+    filename = p.filename
+    db.close()
+    _start_processing_worker([paper_id])
+    return {"message": f"Processing started for {filename}", **processing_state}
 
 
 @router.post("/papers/{paper_id}/retry")
-def retry_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@_serialize_processing_submission
+def retry_paper(paper_id: str, db: Session = Depends(get_db)):
     """Clear error and retry processing."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -1184,13 +1256,15 @@ def retry_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = 
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     _prepare_reprocess(db, p)
-    _mark_processing_started([p.id])
-    background_tasks.add_task(_process_one_background, paper_id)
-    return {"message": f"Retry started for {p.filename}", **processing_state}
+    filename = p.filename
+    db.close()
+    _start_processing_worker([paper_id])
+    return {"message": f"Retry started for {filename}", **processing_state}
 
 
 @router.post("/papers/retry_failed")
-def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@_serialize_processing_submission
+def retry_failed_papers(db: Session = Depends(get_db)):
     """Retry all failed papers in one batch."""
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
@@ -1198,21 +1272,23 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
     failed = _reconcile_failed_papers(db)
     if not failed:
         return {
-            "message": "No failed papers to retry",
-            "retried": 0,
-            "failed_papers": [],
             **processing_state,
+            **paper_work_counts(db),
+            "accepted": False,
+            "message": "没有失败论文需要重试。",
+            "last_message": "没有失败论文需要重试。",
+            "retried": 0,
         }
 
-    ids: list[int] = []
+    ids: list[str] = []
     failed_items: list[dict] = []
     for paper in failed:
         failed_items.append(_paper_failure_item(paper))
         _prepare_reprocess(db, paper)
         ids.append(paper.id)
 
-    _mark_processing_started(ids)
-    background_tasks.add_task(_process_many_background, ids)
+    db.close()
+    _start_processing_worker(ids)
     return {
         "message": f"Retry started for {len(ids)} failed papers",
         "retried": len(ids),
@@ -1222,7 +1298,8 @@ def retry_failed_papers(background_tasks: BackgroundTasks, db: Session = Depends
 
 
 @router.post("/papers/{paper_id}/reprocess")
-def reprocess_paper(paper_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+@_serialize_processing_submission
+def reprocess_paper(paper_id: str, db: Session = Depends(get_db)):
     """Clear this paper's extracted graph and run LLM extraction again."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -1230,9 +1307,10 @@ def reprocess_paper(paper_id: str, background_tasks: BackgroundTasks, db: Sessio
     if processing_state["running"]:
         return {"message": "Processing already running", **processing_state}
     _prepare_reprocess(db, p)
-    _mark_processing_started([p.id])
-    background_tasks.add_task(_process_one_background, paper_id)
-    return {"message": f"Reprocessing started for {p.filename}"}
+    filename = p.filename
+    db.close()
+    _start_processing_worker([paper_id])
+    return {"message": f"Reprocessing started for {filename}"}
 
 
 @router.put("/papers/{paper_id}/response")
@@ -1263,6 +1341,11 @@ def update_paper_response(
         raise HTTPException(status_code=400, detail=f"Response 缺少关键内容：{issues}")
 
     cfg = load_config()
+    embeddings = None
+    if body.rebuild_graph:
+        embeddings = prepare_graph_embeddings(
+            extraction, paper_id, db, cfg.get("openai_api_key", ""), task_model_id(cfg, "embedding"),
+        )
     # A light edit (e.g. fixing a formula) leaves the graph structure
     # untouched, so skip the expensive node rebuild + re-embedding.
     if body.rebuild_graph:
@@ -1292,6 +1375,7 @@ def update_paper_response(
             task_model_id(cfg, "embedding"),
             cfg.get("similarity_threshold", 0.6),
             db,
+            embeddings=embeddings,
         )
     db.commit()
     sync_record_from_paper(p, event="manual_response_edit")
@@ -1947,8 +2031,4 @@ def reset_chat(paper_id: str, db: Session = Depends(get_db)):
 
 @router.get("/status")
 def get_status(db: Session = Depends(get_db)):
-    pending = db.query(Paper).filter(
-        Paper.processed == False,
-        Paper.error == None,
-    ).count()
-    return {**processing_state, "pending": pending}
+    return {**processing_state, **paper_work_counts(db)}

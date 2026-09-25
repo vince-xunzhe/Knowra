@@ -17,6 +17,7 @@ sys.path.insert(0, str(BACKEND))
 import database  # noqa: E402
 from path_utils import DATA_DIR  # noqa: E402
 from services.paper_dedupe_service import repair_duplicate_papers  # noqa: E402
+from services.sqlite_backup import backup_sqlite
 
 
 def _backup() -> Path:
@@ -27,7 +28,7 @@ def _backup() -> Path:
     for name in ("knowledge.db", "wiki_search.sqlite"):
         src = DATA_DIR / name
         if src.exists():
-            shutil.copy2(src, backup_dir / name)
+            backup_sqlite(src, backup_dir / name)
 
     for name in ("wiki", "paper_records"):
         src = DATA_DIR / name
