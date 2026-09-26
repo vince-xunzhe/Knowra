@@ -28,10 +28,12 @@ npm --prefix frontend run test:e2e
 backend/.venv/bin/python -m pytest -q backend/tests
 ```
 
-Browser tests use mocked API fixtures, not the user's database or live model calls. They verify all four languages, persistence after reload, isolated prompt saves/resets, failure behavior, catalog and interpolation coverage, graph instance preservation, and the Spanish Light layout at 900 px width. Screenshots above use fixture settings.
+The automated browser suite has **8 passing tests** and uses mocked API fixtures, not the user's database or live model calls. They verify all four languages, persistence after reload, isolated prompt saves/resets, failure behavior, catalog and interpolation coverage, graph instance preservation, and the Spanish Light layout at 900 px width. Screenshots above use fixture settings.
 
 Backend regression: **314 passed, 8 skipped**. The skipped tests depend on external infrastructure. Extraction schemas, language isolation and compatibility are tested without paid model calls. Live model quality/translation evaluation has not been run.
 
 Frontend lint has 18 existing errors and 3 warnings, compared with 19 errors and 3 warnings on the base revision (one existing editor effect warning was removed). Python `ruff` and `mypy` are not installed in the available virtual environment. This change does not add or alter ML validation data or evaluation splits.
+
+When an older backend returns 404 for language settings, the UI explicitly asks for a service restart and keeps the previous selection.
 
 Restart the local backend after updating so `/api/prompt/preferences` and the locale-aware prompt routes become available. The currently running older backend may return 404 until restarted.

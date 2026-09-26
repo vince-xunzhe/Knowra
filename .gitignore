@@ -30,6 +30,8 @@ frontend/dist/
 *.tsbuildinfo
 
 # Runtime data
+data/presentation_preferences.json
+data/presentation_preferences.tmp
 data/.backend-instance.lock
 data/*.db-wal
 data/*.db-shm

@@ -1137,5 +1137,6 @@
   "数据已清理，数据库正在使用，空闲空间将供后续写入复用；可稍后再次整理。": "Datos eliminados. La base está ocupada; se reutilizará el espacio libre. Puedes compactarla más tarde.",
   " Marp 幻灯": " Diapositivas Marp",
   "其他": "Otros",
-  "保存失败，请重试。": "No se pudo guardar. Reintenta."
+  "保存失败，请重试。": "No se pudo guardar. Reintenta.",
+  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "El servidor aún no ha cargado la API de idiomas. Reinicia el servicio local y vuelve a intentarlo."
 }

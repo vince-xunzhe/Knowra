@@ -7,7 +7,7 @@ import en from '../src/i18n/locales/en.json' with { type: 'json' }
 import ja from '../src/i18n/locales/ja.json' with { type: 'json' }
 import es from '../src/i18n/locales/es.json' with { type: 'json' }
 
-async function mockBackend(page: Page, options: { offlineLanguage?: boolean; graph?: boolean } = {}) {
+async function mockBackend(page: Page, options: { offlineLanguage?: boolean; outdatedBackend?: boolean; graph?: boolean } = {}) {
   let locale = 'zh'
   const mutations: string[] = []
   const prompts: Record<string, string> = { zh: '中文抽取模板', en: 'English extraction template', ja: '日本語の抽出テンプレート', es: 'Plantilla de extracción en español' }
@@ -20,6 +20,7 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; gra
     if (request.method() !== 'GET') mutations.push(path)
     let body: unknown = {}
     if (path === '/prompt/preferences') {
+      if (options.outdatedBackend) return route.fulfill({ status: 404, json: { detail: 'Not Found' } })
       if (request.method() === 'PUT') {
         if (options.offlineLanguage) return route.fulfill({ status: 503, json: { detail: 'offline' } })
         locale = request.postDataJSON().locale
@@ -126,6 +127,16 @@ test('failed language persistence retains selection; theme is independent of bac
   await page.getByRole('radio', { name: 'Light', exact: true }).check()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   expect(mutations.filter(path => path !== '/scan')).toEqual(['/prompt/preferences'])
+})
+
+test('an older running backend gives actionable restart guidance without changing language', async ({ page }) => {
+  await mockBackend(page, { outdatedBackend: true })
+  await page.goto('/')
+  await openSettings(page)
+  await page.getByRole('radio', { name: 'English', exact: true }).check()
+  await expect(page.getByText('当前后端尚未加载语言设置接口，请重启本地服务后重试。')).toBeVisible()
+  await expect(page.getByRole('radio', { name: '中文', exact: true })).toBeChecked()
+  await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
 })
 
 test('catalogs cover the same messages and preserve interpolation parameters', () => {

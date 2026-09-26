@@ -1137,5 +1137,6 @@
   "数据已清理，数据库正在使用，空闲空间将供后续写入复用；可稍后再次整理。": "Data cleared. The database is busy; free space will be reused for future writes. You can compact again later.",
   " Marp 幻灯": " Marp slides",
   "其他": "Other",
-  "保存失败，请重试。": "Could not save. Please retry."
+  "保存失败，请重试。": "Could not save. Please retry.",
+  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "The backend has not loaded the language settings endpoint. Restart the local service and try again."
 }

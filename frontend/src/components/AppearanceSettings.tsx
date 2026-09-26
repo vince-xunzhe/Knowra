@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { isAxiosError } from 'axios'
 import { Check, Globe2, Moon, Sun } from 'lucide-react'
 import { savePresentationLanguage } from '../api/client'
 import { t } from '../i18n/catalog'
@@ -9,15 +10,17 @@ export default function AppearanceSettings() {
   const locale = useLocale()
   const theme = useTheme()
   const [pending, setPending] = useState<Locale | null>(null)
-  const [error, setError] = useState(false)
+  const [error, setError] = useState<'restart' | 'connection' | null>(null)
   async function changeLanguage(next: Locale) {
     if (next === locale) return
     setPending(next)
-    setError(false)
+    setError(null)
     try {
       await savePresentationLanguage(next)
       setLocale(next)
-    } catch { setError(true) }
+    } catch (cause) {
+      setError(isAxiosError(cause) && cause.response?.status === 404 ? 'restart' : 'connection')
+    }
     finally { setPending(null) }
   }
   return (
@@ -41,7 +44,7 @@ export default function AppearanceSettings() {
             ))}
           </div>
           <p className="mt-3 text-xs leading-relaxed text-slate-400">{t('界面与新任务的提示词按语言加载。每种语言的修改独立保存，已有内容保持原样。')}</p>
-          <p aria-live="polite" className={`mt-2 text-xs ${error ? 'text-rose-300' : 'text-slate-400'}`}>{pending ? t('切换语言中…') : error ? t('语言保存失败，请检查后端连接后重试。') : ''}</p>
+          <p aria-live="polite" className={`mt-2 text-xs ${error ? 'text-rose-300' : 'text-slate-400'}`}>{pending ? t('切换语言中…') : error === 'restart' ? t('当前后端尚未加载语言设置接口，请重启本地服务后重试。') : error ? t('语言保存失败，请检查后端连接后重试。') : ''}</p>
         </fieldset>
         <fieldset className="min-w-0">
           <legend className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground"><Sun size={16} />{t('主题配色')}</legend>
