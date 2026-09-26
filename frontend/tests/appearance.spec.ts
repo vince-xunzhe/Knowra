@@ -55,7 +55,7 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; out
 
 async function openSettings(page: Page, label = '设置') {
   await page.getByRole('navigation').getByRole('button', { name: label, exact: true }).click()
-  await expect(page.getByRole('radio', { name: 'English', exact: true })).toBeVisible()
+  await expect(page.locator('#appearance-language')).toBeVisible()
 }
 
 test('all four languages switch immediately; theme and locale survive reload without workflow writes', async ({ page }) => {
@@ -68,13 +68,13 @@ test('all four languages switch immediately; theme and locale survive reload wit
   for (const [language, code, heading] of [
     ['English', 'en', 'Language & appearance'], ['日本語', 'ja', '言語と外観'], ['Español', 'es', 'Idioma y apariencia'], ['中文', 'zh-CN', '语言与外观'],
   ]) {
-    await page.getByRole('radio', { name: language, exact: true }).check()
+    await page.locator('#appearance-language').selectOption({ label: language })
     await expect(page.locator('html')).toHaveAttribute('lang', code)
     await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible()
   }
   expect(mutations.filter(path => path === '/scan')).toHaveLength(initialScans)
-  await page.getByRole('radio', { name: 'English', exact: true }).check()
-  await page.getByRole('radio', { name: 'Light', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: 'English' })
+  await page.locator('#appearance-theme').selectOption('light')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(244, 246, 251)')
   await page.screenshot({ path: 'test-results/settings-light-en.png', fullPage: true, animations: 'disabled' })
@@ -82,8 +82,8 @@ test('all four languages switch immediately; theme and locale survive reload wit
   await expect(page.locator('html')).toHaveAttribute('lang', 'en')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   await openSettings(page, 'Settings')
-  await expect(page.getByRole('radio', { name: 'Light', exact: true })).toBeChecked()
-  await page.getByRole('radio', { name: 'Dark', exact: true }).check()
+  await expect(page.locator('#appearance-theme')).toHaveValue('light')
+  await page.locator('#appearance-theme').selectOption('dark')
   await expect(page.locator('body')).toHaveCSS('background-color', 'rgb(11, 13, 18)')
   await page.screenshot({ path: 'test-results/settings-dark-en.png', fullPage: true, animations: 'disabled' })
   expect(mutations.every(path => path === '/prompt/preferences' || path === '/scan')).toBeTruthy()
@@ -94,7 +94,7 @@ test('prompt saves and resets are scoped to language; source paper names remain 
   const { prompts } = await mockBackend(page)
   await page.goto('/')
   await openSettings(page)
-  await page.getByRole('radio', { name: 'English', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: 'English' })
   await page.getByRole('navigation').getByRole('button', { name: 'Library', exact: true }).click()
   await expect(page.getByText('世界模型 User paper', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Expand global prompt editor' }).click()
@@ -106,7 +106,7 @@ test('prompt saves and resets are scoped to language; source paper names remain 
   await expect.poll(() => prompts.en).toBe('My English custom prompt')
   expect(prompts.zh).toBe('中文抽取模板')
   await openSettings(page, 'Settings')
-  await page.getByRole('radio', { name: '日本語', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: '日本語' })
   await page.getByRole('navigation').getByRole('button', { name: '資料', exact: true }).click()
   await page.getByRole('button', { name: '共通プロンプト編集を展開' }).click()
   await expect(editor).toHaveValue('日本語の抽出テンプレート')
@@ -121,10 +121,10 @@ test('failed language persistence retains selection; theme is independent of bac
   const { mutations } = await mockBackend(page, { offlineLanguage: true })
   await page.goto('/')
   await openSettings(page)
-  await page.getByRole('radio', { name: 'Español', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: 'Español' })
   await expect(page.getByText('语言保存失败，请检查后端连接后重试。')).toBeVisible()
-  await expect(page.getByRole('radio', { name: '中文', exact: true })).toBeChecked()
-  await page.getByRole('radio', { name: 'Light', exact: true }).check()
+  await expect(page.locator('#appearance-language')).toHaveValue('zh')
+  await page.locator('#appearance-theme').selectOption('light')
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
   expect(mutations.filter(path => path !== '/scan')).toEqual(['/prompt/preferences'])
 })
@@ -133,9 +133,9 @@ test('an older running backend gives actionable restart guidance without changin
   await mockBackend(page, { outdatedBackend: true })
   await page.goto('/')
   await openSettings(page)
-  await page.getByRole('radio', { name: 'English', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: 'English' })
   await expect(page.getByText('当前后端尚未加载语言设置接口，请重启本地服务后重试。')).toBeVisible()
-  await expect(page.getByRole('radio', { name: '中文', exact: true })).toBeChecked()
+  await expect(page.locator('#appearance-language')).toHaveValue('zh')
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
 })
 
@@ -197,9 +197,9 @@ test('Spanish Light settings fit a narrow desktop window', async ({ page }) => {
   await mockBackend(page)
   await page.goto('/')
   await openSettings(page)
-  await page.getByRole('radio', { name: 'Español', exact: true }).check()
+  await page.locator('#appearance-language').selectOption({ label: 'Español' })
   await expect(page.locator('html')).toHaveAttribute('lang', 'es')
-  await page.getByRole('radio', { name: 'Light', exact: true }).check()
+  await page.locator('#appearance-theme').selectOption('light')
   const panel = page.getByRole('region', { name: 'Idioma y apariencia' })
   await expect(panel).toBeVisible()
   expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy()

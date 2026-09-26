@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { isAxiosError } from 'axios'
-import { Check, Globe2, Moon, Sun } from 'lucide-react'
+import { ChevronDown, Globe2, Sun } from 'lucide-react'
 import { savePresentationLanguage } from '../api/client'
 import { t } from '../i18n/catalog'
 import { useLocale, useTheme } from '../i18n/preferences'
-import { LANGUAGES, setLocale, setTheme, type Locale } from '../i18n/store'
+import { LANGUAGES, setLocale, setTheme, type Locale, type Theme } from '../i18n/store'
 
 export default function AppearanceSettings() {
   const locale = useLocale()
@@ -30,39 +30,29 @@ export default function AppearanceSettings() {
         <h2 id="appearance-title" className="mt-1 text-lg font-semibold text-foreground">{t('语言与外观')}</h2>
         <p className="mt-1 text-sm text-slate-400">{t('让 Knowra 更适合你的阅读习惯。更改后即时生效并自动保存。')}</p>
       </div>
-      <div className="grid gap-8 lg:grid-cols-2">
-        <fieldset disabled={pending !== null} className="min-w-0">
-          <legend className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground"><Globe2 size={16} />{t('显示语言')}</legend>
-          <div className="grid grid-cols-2 gap-2">
-            {LANGUAGES.map(language => (
-              <label key={language.id} className={`relative flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-4 py-3 text-sm transition-colors ${(pending ?? locale) === language.id ? 'border-indigo-500 bg-indigo-500/10 text-indigo-200' : 'border-slate-800 text-slate-300 hover:border-slate-600'} ${pending ? 'opacity-60' : ''}`}>
-                <input type="radio" name="language" value={language.id} checked={(pending ?? locale) === language.id} onChange={() => void changeLanguage(language.id)} className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0" />
-                <span lang={language.lang}>{language.label}</span>
-                {(pending ?? locale) === language.id && <Check size={16} aria-hidden="true" />}
-                <span className="pointer-events-none absolute inset-0 rounded-xl peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400 peer-focus-visible:ring-offset-2" />
-              </label>
-            ))}
+      <div className="space-y-5">
+        <div>
+          <label htmlFor="appearance-language" className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground"><Globe2 size={16} />{t('显示语言')}</label>
+          <div className="relative w-full max-w-sm">
+            <select id="appearance-language" value={pending ?? locale} disabled={pending !== null} onChange={event => void changeLanguage(event.target.value as Locale)} aria-describedby="appearance-language-hint appearance-language-status" className="w-full appearance-none rounded-xl border border-slate-700 bg-[var(--surface-0b0d12)] py-3 pl-4 pr-10 text-sm text-foreground outline-none transition-colors hover:border-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:cursor-wait disabled:opacity-60">
+              {LANGUAGES.map(language => <option key={language.id} value={language.id} lang={language.lang}>{language.label}</option>)}
+            </select>
+            <ChevronDown size={16} aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-slate-400">{t('界面与新任务的提示词按语言加载。每种语言的修改独立保存，已有内容保持原样。')}</p>
-          <p aria-live="polite" className={`mt-2 text-xs ${error ? 'text-rose-300' : 'text-slate-400'}`}>{pending ? t('切换语言中…') : error === 'restart' ? t('当前后端尚未加载语言设置接口，请重启本地服务后重试。') : error ? t('语言保存失败，请检查后端连接后重试。') : ''}</p>
-        </fieldset>
-        <fieldset className="min-w-0">
-          <legend className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground"><Sun size={16} />{t('主题配色')}</legend>
-          <div className="grid grid-cols-2 gap-3">
-            {(['dark', 'light'] as const).map(option => (
-              <label key={option} className={`relative cursor-pointer rounded-xl border p-2 transition-colors ${theme === option ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-800 hover:border-slate-600'}`}>
-                <input type="radio" name="theme" value={option} checked={theme === option} onChange={() => setTheme(option)} className="peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0" />
-                <div className={`theme-preview theme-preview-${option}`} aria-hidden="true">
-                  <div className="theme-preview-nav"><i /><i /><i /></div>
-                  <div className="theme-preview-content"><b /><div><i /><i /></div><em /></div>
-                </div>
-                <span className="flex items-center gap-2 px-1 pt-2 pb-1 text-sm text-foreground">{option === 'dark' ? <Moon size={14} /> : <Sun size={14} />}{option === 'dark' ? 'Dark' : 'Light'}{theme === option && <Check size={14} className="ml-auto text-indigo-300" />}</span>
-                <span className="pointer-events-none absolute inset-0 rounded-xl peer-focus-visible:ring-2 peer-focus-visible:ring-indigo-400 peer-focus-visible:ring-offset-2" />
-              </label>
-            ))}
+          <p id="appearance-language-hint" className="mt-2 text-xs leading-relaxed text-slate-400">{t('界面与新任务的提示词按语言加载。每种语言的修改独立保存，已有内容保持原样。')}</p>
+          <p id="appearance-language-status" aria-live="polite" className={`text-xs ${pending || error ? 'mt-2' : ''} ${error ? 'text-rose-300' : 'text-slate-400'}`}>{pending ? t('切换语言中…') : error === 'restart' ? t('当前后端尚未加载语言设置接口，请重启本地服务后重试。') : error ? t('语言保存失败，请检查后端连接后重试。') : ''}</p>
+        </div>
+        <div className="border-t border-slate-800 pt-5">
+          <label htmlFor="appearance-theme" className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground"><Sun size={16} />{t('主题配色')}</label>
+          <div className="relative w-full max-w-sm">
+            <select id="appearance-theme" value={theme} onChange={event => setTheme(event.target.value as Theme)} aria-describedby="appearance-theme-hint" className="w-full appearance-none rounded-xl border border-slate-700 bg-[var(--surface-0b0d12)] py-3 pl-4 pr-10 text-sm text-foreground outline-none transition-colors hover:border-slate-500 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20">
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
+            <ChevronDown size={16} aria-hidden="true" className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
           </div>
-          <p className="mt-3 text-xs leading-relaxed text-slate-400">{t('仅调整界面配色，主题偏好保存在当前设备。')}</p>
-        </fieldset>
+          <p id="appearance-theme-hint" className="mt-2 text-xs leading-relaxed text-slate-400">{t('仅调整界面配色，主题偏好保存在当前设备。')}</p>
+        </div>
       </div>
     </section>
   )
