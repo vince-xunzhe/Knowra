@@ -30,15 +30,12 @@ type NavItem =
 // drawer + rescue modal) so curation happens in visual context instead of
 // as flat lists.
 //
-// Nav order goes from "high-altitude knowledge" → "narrative reading" →
-// "raw materials" → "observability" → "config" so the user passes the
-// finished artifact (graph) and synthesis (review) before the raw
-// inventory (materials).
+// Navigation: Knowledge → Library → Review → Discover → Dashboard.
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, get label() { return tr("知识") } },
+  { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
   { id: 'review', icon: FileText, get label() { return tr("回顾") } },
   { id: 'recommend', icon: Sparkles, get label() { return tr("推荐") } },
-  { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
   { id: 'dashboard', icon: BarChart3, get label() { return tr("看板") } },
   { divider: true },
   { id: 'settings', icon: Settings, get label() { return tr("设置") } },
