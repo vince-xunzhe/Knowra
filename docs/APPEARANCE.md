@@ -28,7 +28,7 @@ npm --prefix frontend run test:e2e
 backend/.venv/bin/python -m pytest -q backend/tests
 ```
 
-The automated browser suite has **8 passing tests** and uses mocked API fixtures, not the user's database or live model calls. They verify all four languages, persistence after reload, isolated prompt saves/resets, failure behavior, catalog and interpolation coverage, graph instance preservation, and the Spanish Light layout at 900 px width. Screenshots above use fixture settings.
+The automated browser suite has **12 passing tests** and uses mocked API fixtures, not the user's database or live model calls. They verify all four languages, persistence after reload, isolated prompt saves/resets, failure behavior, catalog and interpolation coverage, graph instance preservation, the Spanish Light layout at 900 px width, and pipeline text overlap/overflow in all four languages at 900 px and 1440 px. Stage headers keep status text on a separate wrapping line; stage names and suggestion badges can wrap independently. Screenshots above use fixture settings.
 
 Backend regression: **314 passed, 8 skipped**. The skipped tests depend on external infrastructure. Extraction schemas, language isolation and compatibility are tested without paid model calls. Live model quality/translation evaluation has not been run.
 

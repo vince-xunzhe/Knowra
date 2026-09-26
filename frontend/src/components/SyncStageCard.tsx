@@ -172,22 +172,22 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
         onClick={onToggle}
         aria-expanded={expanded}
         title={expanded ? tr("收起同步") : tr("展开同步")}
-        className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
+        className="flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5 text-left"
       >
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-full min-w-0 items-start gap-2 leading-5">
           {expanded ? (
-            <ChevronDown size={13} className="shrink-0 text-slate-500" />
+            <ChevronDown size={13} className="mt-1 shrink-0 text-slate-500" />
           ) : (
-            <ChevronRight size={13} className="shrink-0 text-slate-600" />
+            <ChevronRight size={13} className="mt-1 shrink-0 text-slate-600" />
           )}
           <span className={`shrink-0 text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
             ⑤
           </span>
-          <SyncIcon tone={tone} />
-          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-100">{tr("同步")}</span>
+          <span className="mt-0.5 shrink-0"><SyncIcon tone={tone} /></span>
+          <span className="min-w-0 break-words text-[13px] font-semibold text-slate-100">{tr("同步")}</span>
         </span>
         <span
-          className="min-w-0 justify-self-end truncate whitespace-nowrap text-right text-[11.5px] tabular-nums text-slate-300"
+          className="w-full min-w-0 whitespace-normal break-words pl-[21px] text-[11.5px] leading-relaxed tabular-nums text-slate-300"
           title={headline}
         >
           {headline}

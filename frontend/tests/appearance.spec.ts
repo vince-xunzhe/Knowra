@@ -7,8 +7,8 @@ import en from '../src/i18n/locales/en.json' with { type: 'json' }
 import ja from '../src/i18n/locales/ja.json' with { type: 'json' }
 import es from '../src/i18n/locales/es.json' with { type: 'json' }
 
-async function mockBackend(page: Page, options: { offlineLanguage?: boolean; outdatedBackend?: boolean; graph?: boolean } = {}) {
-  let locale = 'zh'
+async function mockBackend(page: Page, options: { offlineLanguage?: boolean; outdatedBackend?: boolean; graph?: boolean; initialLocale?: string; pipelineBacklog?: boolean } = {}) {
+  let locale = options.initialLocale ?? 'zh'
   const mutations: string[] = []
   const prompts: Record<string, string> = { zh: '中文抽取模板', en: 'English extraction template', ja: '日本語の抽出テンプレート', es: 'Plantilla de extracción en español' }
   await page.route('**/api/**', async route => {
@@ -43,7 +43,8 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; out
     else if (path === '/paper-categories') body = { categories: [{ name: '用户自定义', builtin: false, removable: true, count: 1 }] }
     else if (path === '/paper-teams') body = { teams: [] }
     else if (path === '/status') body = { running: false, done: 0, total: 0, errors: 0 }
-    else if (path === '/promotion/counts') body = { summary: { counts: { pending: 0, promoted: 0, rejected: 0 }, by: { llm: 0, user: 0, heuristic: 0 } } }
+    else if (path === '/promotion/counts') body = { summary: { counts: { pending: options.pipelineBacklog ? 925 : 0, promoted: 0, rejected: 0 }, by: { llm: 0, user: 0, heuristic: 0 } } }
+    else if (path === '/wiki/freshness' && options.pipelineBacklog) body = { papers: { total_processed: 136, missing_count: 41, stale_count: 0 }, concepts: { total_nodes: 513, missing_count: 0, stale_count: 0 } }
     else if (path === '/wiki/freshness') body = { papers: { total: 0, ready: 0, missing: 0, stale: 0, orphan: 0 }, concepts: { total: 0, ready: 0, missing: 0, stale: 0, orphan: 0 } }
     else if (path === '/wiki/lint/job') body = { running: false, phase: 'idle' }
     else if (path === '/wiki/lint/status') body = { exists: false, stale: false }
@@ -205,3 +206,43 @@ test('Spanish Light settings fit a narrow desktop window', async ({ page }) => {
   expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy()
   await page.screenshot({ path: 'test-results/settings-light-es-narrow.png', animations: 'disabled' })
 })
+
+
+for (const language of ['zh', 'en', 'ja', 'es']) {
+  test(`pipeline headers do not overlap with long counts in ${language}`, async ({ page }) => {
+    await mockBackend(page, { initialLocale: language, pipelineBacklog: true })
+    await page.goto('/')
+    await expect(page.locator('html')).toHaveAttribute('lang', language === 'zh' ? 'zh-CN' : language)
+    const headers = page.locator('aside section > button[aria-expanded]')
+    await expect(headers).toHaveCount(5)
+    await expect(headers.nth(1)).toContainText('925')
+    await expect(headers.nth(2)).toContainText('41')
+    for (const width of [1440, 900]) {
+      await page.setViewportSize({ width, height: 1000 })
+      const errors = await headers.evaluateAll(buttons => buttons.flatMap(button => {
+        const bounds = button.getBoundingClientRect()
+        const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT)
+        const boxes: { text: string; rect: DOMRect }[] = []
+        let node: Node | null
+        while ((node = walker.nextNode())) {
+          if (!node.textContent?.trim()) continue
+          const range = document.createRange()
+          range.selectNodeContents(node)
+          for (const rect of range.getClientRects()) boxes.push({ text: node.textContent.trim(), rect })
+        }
+        const issues: string[] = []
+        boxes.forEach(({ text, rect }, i) => {
+          if (rect.left < bounds.left || rect.right > bounds.right || rect.top < bounds.top || rect.bottom > bounds.bottom) issues.push(`Overflow: ${text}`)
+          for (const other of boxes.slice(i + 1)) {
+            if (Math.min(rect.right, other.rect.right) - Math.max(rect.left, other.rect.left) > 1 && Math.min(rect.bottom, other.rect.bottom) - Math.max(rect.top, other.rect.top) > 1) issues.push(`Overlap: ${text} / ${other.text}`)
+          }
+        })
+        return issues
+      }))
+      expect(errors).toEqual([])
+    }
+    await page.locator('aside').screenshot({ path: `test-results/pipeline-${language}.png`, animations: 'disabled' })
+    await headers.nth(1).click()
+    await expect(headers.nth(1)).toHaveAttribute('aria-expanded', 'true')
+  })
+}

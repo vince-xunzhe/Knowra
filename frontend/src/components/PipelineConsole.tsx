@@ -600,30 +600,32 @@ function StageCard({
         onClick={onToggle}
         aria-expanded={expanded}
         title={expanded ? tr("收起{0}", { 0: stage.label }) : tr("展开{0}", { 0: stage.label })}
-        className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
+        className="flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5 text-left"
       >
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-full min-w-0 items-start gap-2 leading-5">
           {expanded ? (
-            <ChevronDown size={13} className="shrink-0 text-slate-500" />
+            <ChevronDown size={13} className="mt-1 shrink-0 text-slate-500" />
           ) : (
-            <ChevronRight size={13} className="shrink-0 text-slate-600" />
+            <ChevronRight size={13} className="mt-1 shrink-0 text-slate-600" />
           )}
           <span className={`shrink-0 text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
             {stage.index}
           </span>
-          <span className="shrink-0">
+          <span className="mt-0.5 shrink-0">
             <StageIcon stage={stage.id} tone={stage.tone} />
           </span>
-          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-100">
-            {stage.label}
+          <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="min-w-0 break-words text-[13px] font-semibold text-slate-100">
+              {stage.label}
+            </span>
+            {stage.isNext && (
+              <span className="max-w-full break-words rounded-full border border-indigo-400/40 bg-indigo-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-indigo-200">
+                {tr("建议")}</span>
+            )}
           </span>
-          {stage.isNext && (
-            <span className="shrink-0 rounded-full border border-indigo-400/40 bg-indigo-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-indigo-200">
-              {tr("建议")}</span>
-          )}
         </span>
         <span
-          className="min-w-0 justify-self-end truncate whitespace-nowrap text-right text-[11.5px] tabular-nums text-slate-300"
+          className="w-full min-w-0 whitespace-normal break-words pl-[21px] text-[11.5px] leading-relaxed tabular-nums text-slate-300"
           title={stage.headline}
         >
           {stage.headline}
