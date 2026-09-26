@@ -1,6 +1,6 @@
 # Language and appearance
 
-Settings → Language & appearance offers 中文, 日本語, Español and English, plus Dark and Light. Language and theme appear as two vertically stacked dropdowns; closed controls display only the selected value. The controls save automatically; the existing Save settings button still applies only to model, directory and graph configuration.
+Settings → Language & appearance offers 中文, 日本語, Español and English, plus Dark and Light. Language and theme appear as two vertically stacked dropdowns; closed controls display only the selected value. The section header offers a localized Expand/Collapse control; collapsing preserves both selections and hides only the controls. The controls save automatically; the existing Save settings button still applies only to model, directory and graph configuration.
 
 ![Light settings](images/settings-light.png)
 

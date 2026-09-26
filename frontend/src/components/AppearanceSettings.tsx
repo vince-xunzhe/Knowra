@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { isAxiosError } from 'axios'
-import { ChevronDown, Globe2, Sun } from 'lucide-react'
+import { ChevronDown, ChevronRight, Globe2, Sun } from 'lucide-react'
 import { savePresentationLanguage } from '../api/client'
 import { t } from '../i18n/catalog'
 import { useLocale, useTheme } from '../i18n/preferences'
@@ -9,6 +9,7 @@ import { LANGUAGES, setLocale, setTheme, type Locale, type Theme } from '../i18n
 export default function AppearanceSettings() {
   const locale = useLocale()
   const theme = useTheme()
+  const [expanded, setExpanded] = useState(true)
   const [pending, setPending] = useState<Locale | null>(null)
   const [error, setError] = useState<'restart' | 'connection' | null>(null)
   async function changeLanguage(next: Locale) {
@@ -25,12 +26,18 @@ export default function AppearanceSettings() {
   }
   return (
     <section className="mb-6 rounded-2xl border border-slate-800 bg-[var(--surface-0f1117)] p-5 sm:p-6" aria-labelledby="appearance-title">
-      <div className="mb-6">
-        <p className="text-[10px] font-semibold tracking-[0.16em] uppercase text-indigo-300">{t('个性化')}</p>
-        <h2 id="appearance-title" className="mt-1 text-lg font-semibold text-foreground">{t('语言与外观')}</h2>
-        <p className="mt-1 text-sm text-slate-400">{t('让 Knowra 更适合你的阅读习惯。更改后即时生效并自动保存。')}</p>
-      </div>
-      <div className="space-y-5">
+      <button type="button" onClick={() => setExpanded(value => !value)} aria-expanded={expanded} aria-controls="appearance-controls" className="flex w-full items-start justify-between gap-4 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-400">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold tracking-[0.16em] uppercase text-indigo-300">{t('个性化')}</p>
+          <h2 id="appearance-title" className="mt-1 text-lg font-semibold text-foreground">{t('语言与外观')}</h2>
+          <p className="mt-1 text-sm text-slate-400">{t('让 Knowra 更适合你的阅读习惯。更改后即时生效并自动保存。')}</p>
+        </div>
+        <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 text-xs text-slate-400">
+          {expanded ? t('收起') : t('展开')}
+          {expanded ? <ChevronDown size={14} aria-hidden="true" /> : <ChevronRight size={14} aria-hidden="true" />}
+        </span>
+      </button>
+      <div id="appearance-controls" hidden={!expanded} className="mt-6 space-y-5">
         <div>
           <label htmlFor="appearance-language" className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground"><Globe2 size={16} />{t('显示语言')}</label>
           <div className="relative w-full max-w-sm">
