@@ -1,10 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Knowra</title>
+    <script>
+      // Apply device appearance before the app bundle loads to avoid a dark flash.
+      try {
+        const theme = localStorage.getItem('knowra.theme') === 'light' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.style.colorScheme = theme;
+        const locale = localStorage.getItem('knowra.locale');
+        if (['zh', 'ja', 'es', 'en'].includes(locale)) document.documentElement.lang = locale === 'zh' ? 'zh-CN' : locale;
+      } catch { /* Storage may be unavailable; use Chinese and Dark. */ }
+    </script>
   </head>
   <body>
     <div id="root"></div>

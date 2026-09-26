@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useState } from 'react'
 import { Check, Files, FolderOpen, Loader2, RefreshCw, X } from 'lucide-react'
 import type { DuplicatePaperFile } from '../api/client'
@@ -20,8 +22,8 @@ interface Props {
 }
 
 const REASON_LABELS: Record<DuplicatePaperFile['reason'], string> = {
-  same_arxiv_id: 'arXiv ID 相同',
-  same_content: '文件内容完全相同',
+  get same_arxiv_id() { return tr("arXiv ID 相同") },
+  get same_content() { return tr("文件内容完全相同") },
 }
 
 export default function DuplicateFilesModal({
@@ -34,6 +36,7 @@ export default function DuplicateFilesModal({
   refreshError,
   onClose,
 }: Props) {
+  useLocale()
   const [locating, setLocating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -49,8 +52,8 @@ export default function DuplicateFilesModal({
       const result = await onReveal(selected.path)
       setNotice(
         result.selected
-          ? `已在 ${result.file_manager} 中选中该文件`
-          : `已在 ${result.file_manager} 中打开所在目录`,
+          ? tr("已在 {0} 中选中该文件", { 0: result.file_manager })
+          : tr("已在 {0} 中打开所在目录", { 0: result.file_manager }),
       )
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason))
@@ -69,18 +72,16 @@ export default function DuplicateFilesModal({
         if (event.target === event.currentTarget) onClose()
       }}
     >
-      <div className="flex max-h-[76vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-amber-500/30 bg-[#0d1119] shadow-2xl shadow-black/50">
+      <div className="flex max-h-[76vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-amber-500/30 bg-[var(--surface-0d1119)] shadow-2xl shadow-black/50">
         <header className="flex items-start gap-3 border-b border-slate-800 px-5 py-4">
           <span className="mt-0.5 rounded-lg border border-amber-400/25 bg-amber-400/10 p-2 text-amber-300">
             <Files size={17} />
           </span>
           <div className="min-w-0 flex-1">
             <h2 id="duplicate-files-title" className="text-[15px] font-semibold text-slate-100">
-              当前发现 {items.length} 个重复文件
-            </h2>
+              {tr("当前发现")}{' '}{items.length} {tr("个重复文件")}</h2>
             <p className="mt-1 text-[12px] leading-relaxed text-slate-400">
-              这些文件已跳过，不参与论文处理。删除后返回应用会自动检查，也可手动重新检查。
-            </p>
+              {tr("这些文件已跳过，不参与论文处理。删除后返回应用会自动检查，也可手动重新检查。")}</p>
             {refreshError && <p role="alert" className="mt-1 text-[12px] text-rose-300">{refreshError}</p>}
           </div>
           <button
@@ -89,12 +90,12 @@ export default function DuplicateFilesModal({
             className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] text-slate-400 hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
           >
             <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-            {refreshing ? '检查中…' : '重新检查'}
+            {refreshing ? tr("检查中…") : tr("重新检查")}
           </button>
           <button
             onClick={onClose}
             className="rounded-md p-1.5 text-slate-500 hover:bg-slate-800 hover:text-slate-200"
-            aria-label="关闭重复文件列表"
+            aria-label={tr("关闭重复文件列表")}
           >
             <X size={16} />
           </button>
@@ -148,12 +149,12 @@ export default function DuplicateFilesModal({
             </h3>
 
             <div className="mt-4 space-y-3 text-[11.5px]">
-              <Detail label="重复文件" value={selected.path} mono />
+              <Detail label={tr("重复文件")} value={selected.path} mono />
               <Detail
-                label="对应入库论文"
+                label={tr("对应入库论文")}
                 value={selected.matched_paper.title || selected.matched_paper.filename}
               />
-              <Detail label="入库文件" value={selected.matched_paper.filename} mono />
+              <Detail label={tr("入库文件")} value={selected.matched_paper.filename} mono />
             </div>
 
             {(notice || error) && (
@@ -172,7 +173,7 @@ export default function DuplicateFilesModal({
               className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-2.5 text-[12px] font-medium text-amber-100 transition-colors hover:bg-amber-400/20 disabled:cursor-wait disabled:opacity-60"
             >
               {locating ? <Loader2 size={14} className="animate-spin" /> : <FolderOpen size={14} />}
-              {locating ? '正在定位…' : '在文件管理器中显示'}
+              {locating ? tr("正在定位…") : tr("在文件管理器中显示")}
             </button>
           </div>
         </div>
@@ -182,6 +183,7 @@ export default function DuplicateFilesModal({
 }
 
 function Detail({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  useLocale()
   return (
     <div>
       <div className="mb-1 text-slate-500">{label}</div>

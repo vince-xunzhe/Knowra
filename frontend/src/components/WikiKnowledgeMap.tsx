@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useMemo } from 'react'
 import { Clock3, Link2, Loader2, Plus, X } from 'lucide-react'
 import type { WikiGraphData, WikiGraphNode } from '../api/client'
@@ -7,10 +9,10 @@ const COLUMN_WIDTH_REM = 15.5
 const TYPE_SECTION_ORDER = ['concept', 'problem_area', 'technique', 'dataset']
 
 const TYPE_LABELS: Record<string, string> = {
-  concept: '概念',
-  problem_area: '研究领域',
-  technique: '技术',
-  dataset: '数据集',
+  get concept() { return tr("概念") },
+  get problem_area() { return tr("研究领域") },
+  get technique() { return tr("技术") },
+  get dataset() { return tr("数据集") },
 }
 
 const TYPE_STYLES: Record<string, string> = {
@@ -36,18 +38,18 @@ type Lane = {
 
 
 function relTime(iso?: string | null) {
-  if (!iso) return '未编译'
+  if (!iso) return tr("未编译")
   const t = new Date(iso).getTime()
-  if (Number.isNaN(t)) return '未知'
+  if (Number.isNaN(t)) return tr("未知")
   const diff = Date.now() - t
   const sec = Math.floor(diff / 1000)
-  if (sec < 60) return `${sec} 秒前`
+  if (sec < 60) return tr("{0} 秒前", { 0: sec })
   const min = Math.floor(sec / 60)
-  if (min < 60) return `${min} 分钟前`
+  if (min < 60) return tr("{0} 分钟前", { 0: min })
   const hr = Math.floor(min / 60)
-  if (hr < 48) return `${hr} 小时前`
+  if (hr < 48) return tr("{0} 小时前", { 0: hr })
   const day = Math.floor(hr / 24)
-  return `${day} 天前`
+  return tr("{0} 天前", { 0: day })
 }
 
 
@@ -145,6 +147,7 @@ export default function WikiKnowledgeMap({
   onCreateConcept?: (category: string, paperIds: string[]) => void
   groupBy?: 'category' | 'team'
 }) {
+  useLocale()
   const isTeam = groupBy === 'team'
   const { lanes, maxColumns } = useMemo(() => laneData(data, groupBy), [data, groupBy])
   const minWidth = `${Math.max(3, maxColumns) * COLUMN_WIDTH_REM}rem`
@@ -168,8 +171,7 @@ export default function WikiKnowledgeMap({
         </div>
       </div>
       <div className="border-t border-slate-800/80 bg-slate-950/70 px-5 py-2 text-[11px] text-slate-500">
-        {isTeam ? '每条 lane 对应一个团队（按核心作者归队）' : '每条 lane 对应一个论文大类'}；论文按年份链式排列；下方小框是挂在这条论文链上的概念、技术、数据集与研究领域。
-      </div>
+        {isTeam ? tr("每条 lane 对应一个团队（按核心作者归队）") : tr("每条 lane 对应一个论文大类")}{tr("；论文按年份链式排列；下方小框是挂在这条论文链上的概念、技术、数据集与研究领域。")}</div>
     </div>
   )
 }
@@ -192,6 +194,7 @@ function LaneView({
   suppressingNodeId?: string | null
   onCreateConcept?: (category: string, paperIds: string[]) => void
 }) {
+  useLocale()
   const gridStyle = { gridTemplateColumns: `repeat(${maxColumns}, minmax(0, 1fr))` }
   const lanePaperIds = lane.papers.map(paper => paper.paper_id).filter((id): id is NonNullable<typeof id> => id != null).map(String)
 
@@ -201,8 +204,7 @@ function LaneView({
         <div>
           <h3 className="text-base font-semibold text-slate-100">{lane.name}</h3>
           <p className="mt-1 text-xs text-slate-500">
-            {lane.papers.length} 篇论文沿时间链展开
-          </p>
+            {lane.papers.length} {tr("篇论文沿时间链展开")}</p>
         </div>
         {onCreateConcept && (
           <button
@@ -210,8 +212,7 @@ function LaneView({
             className="inline-flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-3 py-1.5 text-xs text-teal-200 transition-colors hover:bg-teal-500/20"
           >
             <Plus size={12} />
-            添加概念
-          </button>
+            {tr("添加概念")}</button>
         )}
       </div>
 
@@ -272,6 +273,7 @@ function LaneNodeSection({
   onSuppressNode?: (node: WikiGraphNode) => void
   suppressingNodeId?: string | null
 }) {
+  useLocale()
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2">
@@ -310,12 +312,13 @@ function NodePill({
   onSuppressNode?: (node: WikiGraphNode) => void
   suppressing?: boolean
 }) {
+  useLocale()
   const style = TYPE_STYLES[item.node.node_type || 'concept'] || 'border-slate-700 bg-slate-900/60 text-slate-200'
 
   return (
     <div
       className={`group flex items-start gap-1 rounded-md border px-2 py-1 ${
-        selected ? 'border-white/70 bg-slate-800 text-white' : style
+        selected ? 'border-foreground/70 bg-slate-800 text-foreground' : style
       }`}
     >
       <button
@@ -325,7 +328,7 @@ function NodePill({
         <div className="truncate text-[12px] font-medium leading-[1.1rem]">{item.node.title}</div>
         <div className="mt-0.5 flex items-center gap-1 text-[9.5px] text-slate-500">
           <Link2 size={9} />
-          <span>关联 {item.linkedPaperIds.length} 篇</span>
+          <span>{tr("关联")}{' '}{item.linkedPaperIds.length} {tr("篇")}</span>
         </div>
       </button>
       {onSuppressNode && (
@@ -333,7 +336,7 @@ function NodePill({
           onClick={() => onSuppressNode(item.node)}
           disabled={suppressing}
           className="mt-0.5 shrink-0 rounded p-0.5 text-slate-500 transition-colors hover:bg-slate-900/40 hover:text-slate-200 disabled:opacity-50"
-          title="隐藏这个概念"
+          title={tr("隐藏这个概念")}
         >
           {suppressing ? <Loader2 size={10} className="animate-spin" /> : <X size={10} />}
         </button>
@@ -356,6 +359,7 @@ function PaperCard({
   linkedCount: number
   onPick: (node: WikiGraphNode) => void
 }) {
+  useLocale()
   return (
     <div className="relative">
       {!first && (
@@ -365,7 +369,7 @@ function PaperCard({
         onClick={() => onPick(paper)}
         className={`relative w-full rounded-2xl border px-4 py-3 text-left transition-colors ${
           selected
-            ? 'border-white/70 bg-indigo-500/12 text-white'
+            ? 'border-foreground/70 bg-indigo-500/12 text-foreground'
             : paper.active
               ? 'border-indigo-400/50 bg-indigo-500/10 text-slate-100'
               : 'border-slate-800 bg-slate-900/75 text-slate-100 hover:border-slate-700 hover:bg-slate-900'
@@ -373,7 +377,7 @@ function PaperCard({
       >
         <div className="mb-2 flex items-center justify-between gap-2">
           <span className="rounded-lg border border-indigo-500/30 bg-indigo-500/12 px-2 py-1 text-[10px] font-medium text-indigo-200">
-            {paper.year || '年份未知'}
+            {paper.year || tr("年份未知")}
           </span>
           <span className="text-[10px] text-slate-500">paper #{paper.paper_id}</span>
         </div>
@@ -382,7 +386,7 @@ function PaperCard({
         </p>
         <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
           <span className="rounded-md bg-slate-800/80 px-1.5 py-0.5">
-            挂接 {linkedCount}
+            {tr("挂接")}{' '}{linkedCount}
           </span>
         </div>
         <div className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-500">

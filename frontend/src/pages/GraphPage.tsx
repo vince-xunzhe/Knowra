@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import {
   Search,
@@ -45,10 +47,10 @@ interface ActionNotice {
 }
 
 const NODE_TYPE_FILTERS: { id: string; label: string; color: string }[] = [
-  { id: 'all', label: '全部', color: '' },
-  { id: 'paper', label: '论文', color: '#7A88C9' },
-  { id: 'technique', label: '技术', color: '#5BAEAA' },
-  { id: 'dataset', label: '数据集', color: '#B8A36A' },
+  { id: 'all', get label() { return tr("全部") }, color: '' },
+  { id: 'paper', get label() { return tr("论文") }, color: '#7A88C9' },
+  { id: 'technique', get label() { return tr("技术") }, color: '#5BAEAA' },
+  { id: 'dataset', get label() { return tr("数据集") }, color: '#B8A36A' },
 ]
 
 // Node types treated as "concepts" by the dedicated concept-list view.
@@ -74,6 +76,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
   lintOpen: boolean
   setLintOpen: (open: boolean) => void
 }) {
+  useLocale()
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] })
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -180,13 +183,13 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
         errors > 0
           ? {
               tone: 'warning',
-              title: `处理结束，${errors} 篇论文失败`,
-              detail: '可切换到论文页查看失败摘要并执行重试。',
+              title: tr("处理结束，{0} 篇论文失败", { 0: errors }),
+              detail: tr("可切换到论文页查看失败摘要并执行重试。"),
             }
           : {
               tone: 'success',
-              title: '处理完成',
-              detail: '图谱与论文状态已刷新。',
+              title: tr("处理完成"),
+              detail: tr("图谱与论文状态已刷新。"),
             },
       )
     }
@@ -402,14 +405,14 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
       if (pipeline.nextStep.stage === 'ingest') {
         setActionNotice({
           tone: 'info',
-          title: '已提交处理任务',
-          detail: '等待后端状态更新，左侧流水线会实时显示进度。',
+          title: tr("已提交处理任务"),
+          detail: tr("等待后端状态更新，左侧流水线会实时显示进度。"),
         })
       }
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: '操作失败',
+        title: tr("操作失败"),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -454,27 +457,27 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
       // the default (candidateMode='off') view without further toggling.
       if (response.reused_existing) {
         const additions: string[] = []
-        if (response.merged_tags > 0) additions.push(`${response.merged_tags} 个标签`)
-        if (response.merged_papers > 0) additions.push(`${response.merged_papers} 篇关联论文`)
-        if (response.content_applied) additions.push('概念简介')
-        const additionText = additions.length > 0 ? `，并补充了${additions.join('、')}` : ''
+        if (response.merged_tags > 0) additions.push(tr("{0} 个标签", { 0: response.merged_tags }))
+        if (response.merged_papers > 0) additions.push(tr("{0} 篇关联论文", { 0: response.merged_papers }))
+        if (response.content_applied) additions.push(tr("概念简介"))
+        const additionText = additions.length > 0 ? tr("，并补充了{0}", { 0: additions.join('、') }) : ''
         setActionNotice({
           tone: 'success',
           title: response.adopted_existing
-            ? '已将同名自动节点转为手动概念'
-            : '已复用同名概念',
+            ? tr("已将同名自动节点转为手动概念")
+            : tr("已复用同名概念"),
           detail: additionText.replace(/^，/, ''),
         })
       } else {
         setActionNotice({
           tone: 'success',
-          title: editingNode ? '概念已更新' : '新概念已加入图谱',
+          title: editingNode ? tr("概念已更新") : tr("新概念已加入图谱"),
         })
       }
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: '概念保存失败',
+        title: tr("概念保存失败"),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -501,8 +504,8 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
     await loadGraph()
     setActionNotice({
       tone: 'success',
-      title: '已采纳并新建概念',
-      detail: `${seed.title}（下次编译概念页时生成 wiki 条目）`,
+      title: tr("已采纳并新建概念"),
+      detail: tr("{0}（下次编译概念页时生成 wiki 条目）", { 0: seed.title }),
     })
     return response
   }
@@ -571,13 +574,12 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
 
 
       {/* Toolbar */}
-      <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-2.5">
+      <header className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-2.5">
         <div className="flex flex-wrap items-start gap-4">
           <div className="min-w-0 flex items-baseline gap-2">
-            <h1 className="text-base font-semibold text-white tracking-tight">知识图谱</h1>
+            <h1 className="text-base font-semibold text-foreground tracking-tight">{tr("知识图谱")}</h1>
             <span className="text-xs text-slate-500 tabular-nums">
-              {filteredData.nodes.length} 节点 · {filteredData.edges.length} 边
-            </span>
+              {filteredData.nodes.length} {tr("节点 ·")}{' '}{filteredData.edges.length} {tr("边")}</span>
           </div>
 
           {/* Search */}
@@ -585,12 +587,11 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
             <Search size={14} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2 text-slate-500" />
             {!searchQuery && (
               <span className="pointer-events-none absolute left-9 top-1/2 z-10 -translate-y-1/2 text-sm leading-none text-slate-500">
-                搜索节点 / wiki 全文
-              </span>
+                {tr("搜索节点 / wiki 全文")}</span>
             )}
             <input
               type="text"
-              aria-label="搜索节点 / wiki 全文"
+              aria-label={tr("搜索节点 / wiki 全文")}
               value={searchQuery}
               onChange={e => handleSearch(e.target.value)}
               onFocus={() => {
@@ -618,7 +619,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                 {searchResults.length > 0 && (
                   <div>
                     <div className="px-3.5 py-1.5 text-[10.5px] uppercase tracking-wider text-slate-500 bg-slate-950/60 border-b border-slate-800">
-                      节点 · {searchResults.length}
+                      {tr("节点 ·")}{' '}{searchResults.length}
                     </div>
                     {searchResults.map(n => (
                       <button
@@ -637,7 +638,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                           {n.title}
                         </div>
                         <div className="text-[11px] text-slate-500 mt-1">
-                          {n.origin === 'manual' ? '手动概念' : n.node_type}
+                          {n.origin === 'manual' ? tr("手动概念") : n.node_type}
                         </div>
                       </button>
                     ))}
@@ -646,7 +647,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                 {wikiHits.length > 0 && (
                   <div>
                     <div className="px-3.5 py-1.5 text-[10.5px] uppercase tracking-wider text-slate-500 bg-slate-950/60 border-b border-slate-800 border-t border-slate-800">
-                      Wiki 全文 · {wikiHits.length}
+                      {tr("Wiki 全文 ·")}{' '}{wikiHits.length}
                     </div>
                     {wikiHits.map(hit => (
                       <button
@@ -656,7 +657,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                       >
                         <div className="flex items-center gap-2">
                           <span className="text-[10px] px-1.5 py-0.5 rounded border border-slate-700 text-slate-400 shrink-0">
-                            {hit.kind === 'paper' ? '论文页' : '概念页'}
+                            {hit.kind === 'paper' ? tr("论文页") : tr("概念页")}
                           </span>
                           <span className="text-sm text-slate-200 font-medium line-clamp-1 text-safe-wrap">
                             {hit.title}
@@ -692,59 +693,55 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
             <button
               onClick={handleOpenCreate}
               className="inline-flex items-center gap-1 text-xs font-medium text-white bg-teal-500 hover:bg-teal-400 px-2.5 py-1.5 rounded-lg transition-colors shrink-0"
-              title="手动新增一个概念节点"
+              title={tr("手动新增一个概念节点")}
             >
               <Plus size={12} />
-              新增概念
-            </button>
+              {tr("新增概念")}</button>
           </div>
         </div>
       </header>
 
       {/* View + type filter chips */}
-      <div className={`bg-[#0f1117]/60 border-b border-slate-800/60 px-6 py-1.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
+      <div className={`bg-[var(--surface-0f1117)]/60 border-b border-slate-800/60 px-6 py-1.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
         {/* Outer toggle — picks which graph engine to use */}
         <div className="inline-flex items-center rounded-xl border border-slate-800 bg-slate-900/60 p-1 mr-2">
           <button
             onClick={() => setViewKind('graph')}
-            title="基于 KnowledgeNode + KnowledgeEdge 的关系图"
+            title={tr("基于 KnowledgeNode + KnowledgeEdge 的关系图")}
             className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
               viewKind === 'graph'
-                ? 'bg-slate-800 text-white'
+                ? 'bg-slate-800 text-foreground'
                 : 'text-slate-500 hover:text-slate-200'
             }`}
           >
-            节点图谱
-          </button>
+            {tr("节点图谱")}</button>
           <button
             onClick={() => setViewKind('compiled')}
-            title="基于已编译 wiki .md 的时间线视图"
+            title={tr("基于已编译 wiki .md 的时间线视图")}
             className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
               viewKind === 'compiled'
-                ? 'bg-slate-800 text-white'
+                ? 'bg-slate-800 text-foreground'
                 : 'text-slate-500 hover:text-slate-200'
             }`}
           >
-            编译图谱
-          </button>
+            {tr("编译图谱")}</button>
           <button
             onClick={() => setViewKind('concepts')}
             disabled={conceptCount === 0 && viewKind !== 'concepts'}
             title={
               conceptCount === 0
-                ? '当前没有可展示的概念（先处理论文 / 调整候选模式）'
-                : '按类目展开的概念目录（列表形式）'
+                ? tr("当前没有可展示的概念（先处理论文 / 调整候选模式）")
+                : tr("按类目展开的概念目录（列表形式）")
             }
             className={`rounded-lg px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed ${
               viewKind === 'concepts'
-                ? 'bg-slate-800 text-white'
+                ? 'bg-slate-800 text-foreground'
                 : conceptCount === 0
                   ? 'text-slate-700'
                   : 'text-slate-500 hover:text-slate-200'
             }`}
           >
-            概念
-          </button>
+            {tr("概念")}</button>
         </div>
 
         {/* Node-type filter chips only apply to the structured node graph.
@@ -764,7 +761,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                     onClick={() => setTypeFilter(f.id)}
                     className={`inline-flex items-center gap-1 text-[11.5px] px-2 py-1 rounded-md transition-colors ${
                       active
-                        ? 'bg-slate-800 text-white'
+                        ? 'bg-slate-800 text-foreground'
                         : 'text-slate-500 hover:text-slate-200 hover:bg-slate-800/40'
                     }`}
                   >
@@ -784,13 +781,12 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               className="inline-flex items-center gap-1.5 text-[11px] text-slate-600"
               title={
                 viewKind === 'compiled'
-                  ? '编译图谱按类目分泳道，无需类型筛选；切回节点图谱可展开'
-                  : '概念视图已按类目分组，无需类型筛选；切回节点图谱可展开'
+                  ? tr("编译图谱按类目分泳道，无需类型筛选；切回节点图谱可展开")
+                  : tr("概念视图已按类目分组，无需类型筛选；切回节点图谱可展开")
               }
             >
               <Filter size={11} />
-              类型筛选 — 仅节点图谱
-            </span>
+              {tr("类型筛选 — 仅节点图谱")}</span>
             {viewKind === 'compiled' && (
               <div className="ml-auto inline-flex items-center rounded-lg border border-slate-700 bg-slate-900/60 p-0.5 text-[12px]">
                 {(['category', 'team'] as const).map(m => (
@@ -803,7 +799,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    {m === 'category' ? '按大类' : '按团队'}
+                    {m === 'category' ? tr("按大类") : tr("按团队")}
                   </button>
                 ))}
               </div>
@@ -811,22 +807,20 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
             {viewKind === 'compiled' && (
               <button
                 onClick={() => setComposerOpen(true)}
-                title="新增/重命名/删除大类，并批量调整论文归属"
+                title={tr("新增/重命名/删除大类，并批量调整论文归属")}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
               >
                 <Tags size={12} />
-                编排大类
-              </button>
+                {tr("编排大类")}</button>
             )}
             {viewKind === 'compiled' && (
               <button
                 onClick={() => setTeamComposerOpen(true)}
-                title="按核心作者维护团队，并批量调整论文归队"
+                title={tr("按核心作者维护团队，并批量调整论文归队")}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
               >
                 <Users2 size={12} />
-                编排团队
-              </button>
+                {tr("编排团队")}</button>
             )}
           </>
         )}
@@ -847,19 +841,17 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
           onOpenRescue={() => setRescueOpen(true)}
           onOpenAsk={() => setAskOpen(true)}
         />
-        <div className="flex-1 min-w-0 relative bg-[#0b0d12]">
+        <div className="flex-1 min-w-0 relative bg-[var(--surface-0b0d12)]">
           {loading ? (
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
-              加载中…
-            </div>
+              {tr("加载中…")}</div>
           ) : viewKind === 'compiled' ? (
             // Compiled-graph view has its own data source (wiki .md → swim
             // lane). Branch first so the node-graph filter state can't make
             // it look "empty" when there are 70 compiled concept pages.
             wikiGraphLoading && !wikiGraph ? (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                <Loader2 size={14} className="animate-spin mr-2" /> 加载编译图谱…
-              </div>
+                <Loader2 size={14} className="animate-spin mr-2" /> {tr("加载编译图谱…")}</div>
             ) : wikiGraph && (wikiGraph.nodes?.length ?? 0) > 0 ? (
               <WikiKnowledgeMap
                 data={wikiGraph}
@@ -869,8 +861,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               />
             ) : (
               <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                没有可用的编译图谱（先在管道里编译论文页 / 概念页）
-              </div>
+                {tr("没有可用的编译图谱（先在管道里编译论文页 / 概念页）")}</div>
             )
           ) : viewKind === 'concepts' ? (
             <ConceptListView
@@ -904,10 +895,9 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
                 <circle cx="118" cy="34" r="5" fill="url(#nodeGrad)" />
               </svg>
               <div className="space-y-1.5">
-                <p className="text-base text-slate-300 font-medium">还没有知识节点</p>
+                <p className="text-base text-slate-300 font-medium">{tr("还没有知识节点")}</p>
                 <p className="text-sm max-w-sm text-slate-500 leading-relaxed">
-                  扫描你的论文目录，让大模型把每篇 PDF 转成结构化知识，自动生成图谱。
-                </p>
+                  {tr("扫描你的论文目录，让大模型把每篇 PDF 转成结构化知识，自动生成图谱。")}</p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
                 <button
@@ -1036,6 +1026,7 @@ function NextStepBanner({
   nextStep: ReturnType<typeof usePipelineState>['nextStep']
   stages: ReturnType<typeof usePipelineState>['stages']
 }) {
+  useLocale()
   const palette = nextStep.tone === 'indigo'
     ? 'border-indigo-500/40 bg-indigo-500/[0.06]'
     : nextStep.tone === 'amber'
@@ -1073,7 +1064,7 @@ function NextStepBanner({
       </div>
 
       <div className="flex-1 min-w-0 text-[12px] text-slate-300 truncate">
-        <span className="text-slate-500 mr-2">下一步建议：</span>
+        <span className="text-slate-500 mr-2">{tr("下一步建议：")}</span>
         {nextStep.reason}
       </div>
     </div>
@@ -1095,6 +1086,7 @@ function ConceptEditorModal({
   onClose: () => void
   onSubmit: (payload: ManualConceptInput) => Promise<void>
 }) {
+  useLocale()
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
   const [paperQuery, setPaperQuery] = useState('')
@@ -1144,15 +1136,14 @@ function ConceptEditorModal({
         if (e.target === e.currentTarget && !busy) onClose()
       }}
     >
-      <div className="flex h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-[#0f1117] shadow-2xl">
+      <div className="flex h-[82vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-800 bg-[var(--surface-0f1117)] shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-6 py-4">
           <div>
-            <h2 className="text-lg font-semibold text-white tracking-tight">
-              {initialNode ? '编辑手动概念' : '新增手动概念'}
+            <h2 className="text-lg font-semibold text-foreground tracking-tight">
+              {initialNode ? tr("编辑手动概念") : tr("新增手动概念")}
             </h2>
             <p className="mt-1 text-sm text-slate-500">
-              新概念会自动标为「精选」并加入图谱，后续概念编译会基于你勾选的论文生成 wiki 条目。
-            </p>
+              {tr("新概念会自动标为「精选」并加入图谱，后续概念编译会基于你勾选的论文生成 wiki 条目。")}</p>
           </div>
           <button
             onClick={onClose}
@@ -1167,35 +1158,34 @@ function ConceptEditorModal({
           <div className="overflow-y-auto border-b border-slate-800 px-6 py-5 lg:border-b-0 lg:border-r">
             <div className="space-y-4">
               <div>
-                <label className="mb-2 block text-sm text-slate-300">概念名称</label>
+                <label className="mb-2 block text-sm text-slate-300">{tr("概念名称")}</label>
                 <input
                   value={title}
                   onChange={e => setTitle(e.target.value)}
-                  placeholder="例如：世界模型 / 闭环驾驶 / 3D grounding"
+                  placeholder={tr("例如：世界模型 / 闭环驾驶 / 3D grounding")}
                   className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
                 />
               </div>
               <div>
-                <label className="mb-2 block text-sm text-slate-300">概念简介</label>
+                <label className="mb-2 block text-sm text-slate-300">{tr("概念简介")}</label>
                 <textarea
                   value={content}
                   onChange={e => setContent(e.target.value)}
                   rows={8}
-                  placeholder="写下你对这个概念的定义、边界或想保留的先验知识。"
+                  placeholder={tr("写下你对这个概念的定义、边界或想保留的先验知识。")}
                   className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
                 />
               </div>
               <div>
-                <label className="mb-2 block text-sm text-slate-300">标签</label>
+                <label className="mb-2 block text-sm text-slate-300">{tr("标签")}</label>
                 <input
                   value={tagsText}
                   onChange={e => setTagsText(e.target.value)}
-                  placeholder="逗号分隔，例如 规划, 世界模型, 驾驶"
+                  placeholder={tr("逗号分隔，例如 规划, 世界模型, 驾驶")}
                   className="w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
                 />
                 <p className="mt-2 text-xs leading-relaxed text-slate-500">
-                  如果同名概念已存在，系统会优先复用现有概念，并安全补充标签、论文来源与缺失简介。
-                </p>
+                  {tr("如果同名概念已存在，系统会优先复用现有概念，并安全补充标签、论文来源与缺失简介。")}</p>
               </div>
             </div>
           </div>
@@ -1203,17 +1193,17 @@ function ConceptEditorModal({
           <div className="flex min-h-0 flex-col overflow-hidden px-6 py-5">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <p className="text-sm font-medium text-slate-200">关联论文</p>
-                <p className="text-xs text-slate-500">这些论文会作为后续概念编译的证据来源。</p>
+                <p className="text-sm font-medium text-slate-200">{tr("关联论文")}</p>
+                <p className="text-xs text-slate-500">{tr("这些论文会作为后续概念编译的证据来源。")}</p>
               </div>
               <span className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-400">
-                已选 {selectedPaperIds.length}
+                {tr("已选")}{' '}{selectedPaperIds.length}
               </span>
             </div>
             <input
               value={paperQuery}
               onChange={e => setPaperQuery(e.target.value)}
-              placeholder="按标题 / 文件名 / paper id 搜索"
+              placeholder={tr("按标题 / 文件名 / paper id 搜索")}
               className="mb-3 w-full rounded-xl border border-slate-700/60 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 focus:border-teal-500/60 focus:outline-none"
             />
             <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/40 p-2">
@@ -1241,7 +1231,7 @@ function ConceptEditorModal({
                             {paper.title || paper.filename}
                           </p>
                           <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                            paper #{paper.id} · {paper.processed ? '已处理' : '未处理'} · {paper.filename}
+                            paper #{paper.id} · {paper.processed ? tr("已处理") : tr("未处理")} · {paper.filename}
                           </p>
                         </div>
                       </div>
@@ -1250,8 +1240,7 @@ function ConceptEditorModal({
                 })}
                 {filteredPapers.length === 0 && (
                   <div className="rounded-xl border border-dashed border-slate-800 px-4 py-8 text-center text-sm text-slate-500">
-                    没有匹配的论文
-                  </div>
+                    {tr("没有匹配的论文")}</div>
                 )}
               </div>
             </div>
@@ -1260,23 +1249,21 @@ function ConceptEditorModal({
 
         <div className="flex items-center justify-between gap-3 border-t border-slate-800 px-6 py-4">
           <p className="text-xs leading-relaxed text-slate-500">
-            自动抽取出来的碎概念可以隐藏；手动新增的概念会稳定保留，并通过已选论文参与后续 wiki 编译。
-          </p>
+            {tr("自动抽取出来的碎概念可以隐藏；手动新增的概念会稳定保留，并通过已选论文参与后续 wiki 编译。")}</p>
           <div className="flex items-center gap-2">
             <button
               onClick={onClose}
               disabled={busy}
               className="rounded-xl border border-slate-700 bg-slate-900/60 px-4 py-2 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-50"
             >
-              取消
-            </button>
+              {tr("取消")}</button>
             <button
               onClick={submit}
               disabled={busy || !title.trim()}
               className="inline-flex items-center gap-2 rounded-xl bg-teal-500 px-4 py-2 text-sm font-medium text-white hover:bg-teal-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
               {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-              {busy ? '保存中…' : initialNode ? '保存概念' : '创建概念'}
+              {busy ? tr("保存中…") : initialNode ? tr("保存概念") : tr("创建概念")}
             </button>
           </div>
         </div>
@@ -1291,9 +1278,9 @@ function getErrorMessage(error: unknown): string {
     message?: string
     code?: string
   }
-  if (apiError.code === 'ECONNABORTED') return '请求超时，后端没有在 30 秒内响应。'
+  if (apiError.code === 'ECONNABORTED') return tr("请求超时，后端没有在 30 秒内响应。")
   const detail = apiError.response?.data?.detail
   if (typeof detail === 'string') return detail
   if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message
-  return apiError.message || '未知错误'
+  return apiError.message || tr("未知错误")
 }

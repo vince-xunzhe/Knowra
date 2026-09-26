@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr, matchesMessage } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
@@ -65,6 +68,7 @@ interface PapersPageProps {
 }
 
 export default function PapersPage({ onOpenReview }: PapersPageProps) {
+  useLocale()
   const [papers, setPapers] = useState<PaperRecord[]>(() => getCachedPapers() ?? [])
   const [loading, setLoading] = useState(() => getCachedPapers() === null)
   const [selected, setSelected] = useState<PaperRecord | null>(null)
@@ -94,7 +98,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       const ps = await listPapers()
       setPapers(ps)
       setSelected(prev => prev ? ps.find(p => p.id === prev.id) || null : null)
-      setActionNotice(previous => previous?.title === '论文列表暂未刷新' ? null : previous)
+      setActionNotice(previous => matchesMessage(previous?.title, "论文列表暂未刷新") ? null : previous)
     } catch (error) {
       console.error('Failed to load papers', error)
     }
@@ -111,7 +115,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         setSelected(prev => prev ? ps.find(p => p.id === prev.id) || null : null)
       } catch (error) {
         console.error('Failed to load papers', error)
-        if (!cancelled) setActionNotice({ tone: 'warning', title: '论文列表暂未刷新', detail: '保留已加载的论文；后端响应后会自动更新。' })
+        if (!cancelled) setActionNotice({ tone: 'warning', title: tr("论文列表暂未刷新"), detail: tr("保留已加载的论文；后端响应后会自动更新。") })
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -143,20 +147,20 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         const s = await getStatus()
         if (cancelled) return
         setStatus(s)
-        setActionNotice(previous => previous?.title === '状态暂未刷新' ? null : previous)
+        setActionNotice(previous => matchesMessage(previous?.title, "状态暂未刷新") ? null : previous)
         if (wasRunningRef.current && !s.running) {
           setPendingIds(new Set())
           setActionNotice(
             s.errors > 0
               ? {
                   tone: 'warning',
-                  title: `处理结束，${s.errors} 篇论文失败`,
-                  detail: '可切换到“失败”筛选并逐条重试。',
+                  title: tr("处理结束，{0} 篇论文失败", { 0: s.errors }),
+                  detail: tr("可切换到“失败”筛选并逐条重试。"),
                 }
               : {
                   tone: 'success',
-                  title: '处理完成',
-                  detail: '所有任务已处理完成。',
+                  title: tr("处理完成"),
+                  detail: tr("所有任务已处理完成。"),
                 },
           )
           await load()
@@ -174,8 +178,8 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         console.error('Failed to poll processing status', error)
         setActionNotice({
           tone: 'warning',
-          title: '状态暂未刷新',
-          detail: '暂时无法连接后端，正在自动重试；这不代表后台论文任务失败。',
+          title: tr("状态暂未刷新"),
+          detail: tr("暂时无法连接后端，正在自动重试；这不代表后台论文任务失败。"),
         })
       } finally {
         polling = false
@@ -193,13 +197,13 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       await processPaper(p.id)
       setActionNotice({
         tone: 'info',
-        title: `已提交处理：${p.filename}`,
-        detail: '可在页面顶部看到整体进度，完成后会自动刷新列表。',
+        title: tr("已提交处理：{0}", { 0: p.filename }),
+        detail: tr("可在页面顶部看到整体进度，完成后会自动刷新列表。"),
       })
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: `处理启动失败：${p.filename}`,
+        title: tr("处理启动失败：{0}", { 0: p.filename }),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -214,13 +218,13 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       await retryPaper(p.id)
       setActionNotice({
         tone: 'info',
-        title: `已提交重试：${p.filename}`,
-        detail: '系统会清理该论文错误状态并重新进入处理队列。',
+        title: tr("已提交重试：{0}", { 0: p.filename }),
+        detail: tr("系统会清理该论文错误状态并重新进入处理队列。"),
       })
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: `重试启动失败：${p.filename}`,
+        title: tr("重试启动失败：{0}", { 0: p.filename }),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -229,7 +233,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   }
 
   const handleReprocess = async (p: PaperRecord) => {
-    const ok = confirm('确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。')
+    const ok = confirm(tr("确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。"))
     if (!ok) return
 
     setPendingIds(prev => new Set(prev).add(p.id))
@@ -238,13 +242,13 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       await reprocessPaper(p.id)
       setActionNotice({
         tone: 'info',
-        title: `已提交重新处理：${p.filename}`,
-        detail: '旧抽取结果已清空，等待后端重新生成结构化结果。',
+        title: tr("已提交重新处理：{0}", { 0: p.filename }),
+        detail: tr("旧抽取结果已清空，等待后端重新生成结构化结果。"),
       })
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: `重新处理启动失败：${p.filename}`,
+        title: tr("重新处理启动失败：{0}", { 0: p.filename }),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -257,13 +261,13 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     if (failedPapers.length === 0) {
       setActionNotice({
         tone: 'info',
-        title: '当前没有失败论文可重试',
+        title: tr("当前没有失败论文可重试"),
       })
       return
     }
 
     const ok = confirm(
-      `确认重试全部 ${failedPapers.length} 篇失败论文？这会清空它们当前的错误状态和 OpenAI 缓存，并重新调用大模型。`,
+      tr("确认重试全部 {0} 篇失败论文？这会清空它们当前的错误状态和 OpenAI 缓存，并重新调用大模型。", { 0: failedPapers.length }),
     )
     if (!ok) return
 
@@ -276,8 +280,8 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       if ((result.retried || 0) > 0) {
         setActionNotice({
           tone: 'info',
-          title: `已提交批量重试：${result.retried} 篇失败论文`,
-          detail: '可在失败筛选里跟踪每篇论文状态变化。',
+          title: tr("已提交批量重试：{0} 篇失败论文", { 0: result.retried }),
+          detail: tr("可在失败筛选里跟踪每篇论文状态变化。"),
         })
       } else {
         setPendingIds(prev => {
@@ -287,7 +291,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         })
         setActionNotice({
           tone: 'info',
-          title: '当前没有失败论文可重试',
+          title: tr("当前没有失败论文可重试"),
         })
       }
     } catch (error) {
@@ -298,7 +302,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       })
       setActionNotice({
         tone: 'error',
-        title: '批量重试启动失败',
+        title: tr("批量重试启动失败"),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -311,12 +315,12 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     if (pendingPapers.length === 0) {
       setActionNotice({
         tone: 'info',
-        title: '当前没有待处理论文',
+        title: tr("当前没有待处理论文"),
       })
       return
     }
 
-    const ok = confirm(`确认处理全部 ${pendingPapers.length} 篇待处理论文？`)
+    const ok = confirm(tr("确认处理全部 {0} 篇待处理论文？", { 0: pendingPapers.length }))
     if (!ok) return
 
     const pendingPaperIds = pendingPapers.map(p => p.id)
@@ -327,8 +331,8 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       await processAll()
       setActionNotice({
         tone: 'info',
-        title: `已提交批量处理：${pendingPapers.length} 篇待处理论文`,
-        detail: '进度会在顶部状态条和每篇论文卡片中实时体现。',
+        title: tr("已提交批量处理：{0} 篇待处理论文", { 0: pendingPapers.length }),
+        detail: tr("进度会在顶部状态条和每篇论文卡片中实时体现。"),
       })
     } catch (error) {
       setPendingIds(prev => {
@@ -338,7 +342,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       })
       setActionNotice({
         tone: 'error',
-        title: '批量处理启动失败',
+        title: tr("批量处理启动失败"),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -353,7 +357,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     const files = fileList ? Array.from(fileList).filter(f => f.name.toLowerCase().endsWith('.pdf')) : []
     e.target.value = '' // reset so re-picking the same files fires onChange again
     if (files.length === 0) {
-      setActionNotice({ tone: 'warning', title: '没有选择 PDF 文件' })
+      setActionNotice({ tone: 'warning', title: tr("没有选择 PDF 文件") })
       return
     }
     setPendingFiles(files)
@@ -366,22 +370,22 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setActionNotice(null)
     try {
       const r = await uploadPapers(pendingFiles)
-      const parts = [`上传 ${r.saved} 篇`]
-      if (r.skipped_existing > 0) parts.push(`已存在跳过 ${r.skipped_existing} 篇`)
-      if (r.duplicates > 0) parts.push(`去重 ${r.duplicates} 篇`)
-      if (r.rejected.length > 0) parts.push(`无效 ${r.rejected.length} 个`)
+      const parts = [tr("上传 {0} 篇", { 0: r.saved })]
+      if (r.skipped_existing > 0) parts.push(tr("已存在跳过 {0} 篇", { 0: r.skipped_existing }))
+      if (r.duplicates > 0) parts.push(tr("去重 {0} 篇", { 0: r.duplicates }))
+      if (r.rejected.length > 0) parts.push(tr("无效 {0} 个", { 0: r.rejected.length }))
       setActionNotice({
         tone: r.saved > 0 ? 'success' : 'info',
         title: parts.join(' · '),
         detail:
           r.saved > 0
-            ? '已拷贝到 ./papers 并登记为未处理，可在此直接处理。'
-            : '所选文件都已存在或无效，未新增。',
+            ? tr("已拷贝到 ./papers 并登记为未处理，可在此直接处理。")
+            : tr("所选文件都已存在或无效，未新增。"),
       })
       setPendingFiles([])
       await load()
     } catch (error) {
-      setActionNotice({ tone: 'error', title: '上传失败', detail: getErrorMessage(error) })
+      setActionNotice({ tone: 'error', title: tr("上传失败"), detail: getErrorMessage(error) })
     } finally {
       setUploading(false)
     }
@@ -414,7 +418,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: `论文大类保存失败：${paper.title || paper.filename}`,
+        title: tr("论文大类保存失败：{0}", { 0: paper.title || paper.filename }),
         detail: getErrorMessage(error),
       })
     } finally {
@@ -444,7 +448,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         .map(p => ({
           id: p.id,
           title: p.title || p.filename,
-          summary: summarizePaperError(p.error) || '未知错误',
+          summary: summarizePaperError(p.error) || tr("未知错误"),
         }))
         .slice(0, 3),
     [papers],
@@ -491,18 +495,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     <div className="flex h-full">
       <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
         {/* Toolbar */}
-        <header className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-4">
+        <header className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-4">
           <div className="flex flex-wrap items-start gap-4">
             <div className="min-w-0">
-              <h1 className="text-xl font-semibold text-white tracking-tight">资料库</h1>
+              <h1 className="text-xl font-semibold text-foreground tracking-tight">{tr("资料库")}</h1>
               <p className="text-sm text-slate-500 mt-1">
-                浏览扫描到的论文，查看处理状态，并快速进入详情或重试失败项。
-              </p>
+                {tr("浏览扫描到的论文，查看处理状态，并快速进入详情或重试失败项。")}</p>
               <p className="text-xs text-slate-500 mt-1.5">
-                共 {papers.length} 篇
-                <span className="text-emerald-400"> · {stats.processed} 已处理</span>
-                {stats.pending > 0 && <span className="text-slate-400"> · {stats.pending} 待处理</span>}
-                {stats.failed > 0 && <span className="text-red-400"> · {stats.failed} 失败</span>}
+                {tr("共")}{' '}{papers.length} {tr("篇")}<span className="text-emerald-400"> · {stats.processed} {tr("已处理")}</span>
+                {stats.pending > 0 && <span className="text-slate-400"> · {stats.pending} {tr("待处理")}</span>}
+                {stats.failed > 0 && <span className="text-red-400"> · {stats.failed} {tr("失败")}</span>}
               </p>
             </div>
 
@@ -519,7 +521,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
                 <input
                   type="text"
-                  placeholder="搜索论文"
+                  placeholder={tr("搜索论文")}
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                   className="bg-slate-900/60 border border-slate-700/60 rounded-xl text-sm text-slate-200 pl-9 pr-3 py-2 w-64 focus:outline-none focus:border-indigo-500/60 transition-colors placeholder:text-slate-500"
@@ -529,14 +531,14 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                 <button
                   onClick={() => setView('grid')}
                   className={`p-1.5 rounded-md transition-colors ${view === 'grid' ? 'bg-slate-800 text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}
-                  title="网格视图"
+                  title={tr("网格视图")}
                 >
                   <LayoutGrid size={14} />
                 </button>
                 <button
                   onClick={() => setView('list')}
                   className={`p-1.5 rounded-md transition-colors ${view === 'list' ? 'bg-slate-800 text-slate-200' : 'text-slate-500 hover:text-slate-300'}`}
-                  title="列表视图"
+                  title={tr("列表视图")}
                 >
                   <ListIcon size={14} />
                 </button>
@@ -553,33 +555,30 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                 onClick={() => fileInputRef.current?.click()}
                 disabled={uploading || pendingFiles.length > 0}
                 className="inline-flex items-center gap-2 rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-3 py-2 text-sm text-indigo-200 transition-colors hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                title="从本地选择 PDF 拷贝到资料库 (./papers)"
+                title={tr("从本地选择 PDF 拷贝到资料库 (./papers)")}
               >
                 <Upload size={14} />
-                上传 PDF
-              </button>
+                {tr("上传 PDF")}</button>
               <button
                 onClick={handleProcessPendingAll}
                 disabled={bulkProcessingPending || !!status?.running || stats.pending === 0}
                 className="inline-flex items-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-sm text-sky-200 transition-colors hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
-                title={stats.pending > 0 ? `处理全部 ${stats.pending} 篇待处理论文` : '当前没有待处理论文'}
+                title={stats.pending > 0 ? tr("处理全部 {0} 篇待处理论文", { 0: stats.pending }) : tr("当前没有待处理论文")}
               >
                 {bulkProcessingPending ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
-                重试全部待处理
-              </button>
+                {tr("重试全部待处理")}</button>
               <button
                 onClick={handleRetryFailedAll}
                 disabled={bulkRetrying || !!status?.running || stats.failed === 0}
                 className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:bg-slate-900/50 disabled:text-slate-500"
-                title={stats.failed > 0 ? `重试全部 ${stats.failed} 篇失败论文` : '当前没有失败论文'}
+                title={stats.failed > 0 ? tr("重试全部 {0} 篇失败论文", { 0: stats.failed }) : tr("当前没有失败论文")}
               >
                 {bulkRetrying ? <Loader2 size={14} className="animate-spin" /> : <RotateCw size={14} />}
-                重试全部失败
-              </button>
+                {tr("重试全部失败")}</button>
               <button
                 onClick={load}
                 className="p-2 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 rounded-xl transition-colors"
-                title="刷新"
+                title={tr("刷新")}
               >
                 <RefreshCw size={14} />
               </button>
@@ -588,10 +587,10 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 
           <div className="mt-4 flex flex-wrap items-center gap-1.5 text-xs">
             {([
-              ['all', '全部', papers.length],
-              ['processed', '已处理', stats.processed],
-              ['pending', '待处理', stats.pending],
-              ['failed', '失败', stats.failed],
+              ['all', tr("全部"), papers.length],
+              ['processed', tr("已处理"), stats.processed],
+              ['pending', tr("待处理"), stats.pending],
+              ['failed', tr("失败"), stats.failed],
             ] as [Filter, string, number][]).map(([key, label, n]) => (
               <button
                 key={key}
@@ -608,7 +607,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 
             <span className="mx-1.5 h-4 w-px bg-slate-800" aria-hidden="true" />
             <div className="relative">
-              <label htmlFor="paper-category-filter" className="sr-only">按论文大类筛选</label>
+              <label htmlFor="paper-category-filter" className="sr-only">{tr("按论文大类筛选")}</label>
               <span
                 className={`pointer-events-none absolute left-2.5 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${
                   categoryFilter === CATEGORY_FILTER_ALL
@@ -623,7 +622,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                 onChange={event => setCategoryFilter(event.target.value)}
                 className="h-8 w-40 cursor-pointer truncate rounded-lg border border-slate-700/70 bg-slate-900/60 py-1 pl-6 pr-7 text-xs font-medium text-slate-300 outline-none transition-colors hover:border-slate-600 focus:border-indigo-500/60"
               >
-                <option value={CATEGORY_FILTER_ALL}>全部大类 · {papers.length}</option>
+                <option value={CATEGORY_FILTER_ALL}>{tr("全部大类 ·")}{' '}{papers.length}</option>
                 {filterCategoryOptions.map(category => (
                   <option key={category} value={category}>
                     {category} · {categoryCounts.get(category) || 0}
@@ -637,8 +636,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
             <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/10 px-3 py-2.5">
               <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-rose-200">
                 <AlertTriangle size={12} />
-                最近失败摘要
-              </p>
+                {tr("最近失败摘要")}</p>
               <ul className="space-y-1.5">
                 {recentFailures.map(item => (
                   <li key={item.id} className="text-[11px] leading-relaxed text-rose-100/90 text-safe-wrap">
@@ -669,15 +667,14 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-6 py-6">
           {loading ? (
-            <div className="text-slate-500 text-center py-24 text-sm">加载中…</div>
+            <div className="text-slate-500 text-center py-24 text-sm">{tr("加载中…")}</div>
           ) : filtered.length === 0 ? (
             <div className="text-slate-500 text-center py-24">
               <FileText size={32} className="mx-auto text-slate-700 mb-3" />
-              <p className="text-sm">{papers.length === 0 ? '还没有论文' : '没有匹配的论文'}</p>
+              <p className="text-sm">{papers.length === 0 ? tr("还没有论文") : tr("没有匹配的论文")}</p>
               {papers.length === 0 && (
                 <p className="text-xs mt-2 text-slate-600">
-                  前往「图谱」页点击「扫描目录」
-                </p>
+                  {tr("前往「图谱」页点击「扫描目录」")}</p>
               )}
             </div>
           ) : view === 'grid' ? (
@@ -722,17 +719,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
           The Prompt rarely changes between visits, so keeping it
           hidden-but-discoverable matches actual usage frequency. */}
       {promptOpen ? (
-        <aside className="w-[24rem] max-w-[38vw] bg-[#0f1117] border-l border-slate-800/80 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out">
+        <aside className="w-[24rem] max-w-[38vw] bg-[var(--surface-0f1117)] border-l border-slate-800/80 flex flex-col overflow-hidden shrink-0 transition-[width] duration-200 ease-out">
           <div className="px-5 py-4 border-b border-slate-800/80 flex items-start gap-3">
             <div className="min-w-0 flex-1">
-              <p className="section-label mb-1">全局 Prompt</p>
+              <p className="section-label mb-1">{tr("全局 Prompt")}</p>
               <p className="text-sm text-slate-500 leading-relaxed">
-                论文抽取使用的指令，所有论文共享。
-              </p>
+                {tr("论文抽取使用的指令，所有论文共享。")}</p>
             </div>
             <button
               onClick={() => setPromptOpen(false)}
-              title="收起到右侧图标条"
+              title={tr("收起到右侧图标条")}
               className="shrink-0 p-1.5 rounded-md text-slate-500 hover:text-slate-200 hover:bg-slate-800/60"
             >
               <PanelRightClose size={14} />
@@ -741,18 +737,18 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
           <PromptPanel />
         </aside>
       ) : (
-        <aside className="w-12 bg-[#0f1117] border-l border-slate-800/80 flex flex-col items-center py-4 gap-3 shrink-0 transition-[width] duration-200 ease-out">
+        <aside className="w-12 bg-[var(--surface-0f1117)] border-l border-slate-800/80 flex flex-col items-center py-4 gap-3 shrink-0 transition-[width] duration-200 ease-out">
           <button
             onClick={() => setPromptOpen(true)}
-            title="展开全局 Prompt 编辑器"
-            className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800/60"
+            title={tr("展开全局 Prompt 编辑器")}
+            className="p-1.5 text-slate-400 hover:text-foreground rounded-md hover:bg-slate-800/60"
           >
             <PanelRightOpen size={16} />
           </button>
           <div className="w-full border-t border-slate-800/80" />
           <button
             onClick={() => setPromptOpen(true)}
-            title="全局 Prompt"
+            title={tr("全局 Prompt")}
             className="p-1.5 text-slate-500 hover:text-slate-200 rounded-md hover:bg-slate-800/60"
           >
             <Pencil size={14} />
@@ -766,10 +762,10 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
           onClick={e => { if (e.target === e.currentTarget && !uploading) setPendingFiles([]) }}
         >
-          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-[#0f1117] shadow-2xl">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-[var(--surface-0f1117)] shadow-2xl">
             <div className="flex items-center gap-2 border-b border-slate-800 px-5 py-3">
               <Upload size={15} className="text-indigo-300" />
-              <h3 className="text-sm font-semibold text-white">确认上传 {pendingFiles.length} 个 PDF</h3>
+              <h3 className="text-sm font-semibold text-foreground">{tr("确认上传")}{' '}{pendingFiles.length} {tr("个 PDF")}</h3>
               <button
                 onClick={() => !uploading && setPendingFiles([])}
                 className="ml-auto rounded p-1 text-slate-500 hover:bg-slate-800/60 hover:text-slate-200"
@@ -793,24 +789,22 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
             </div>
             <div className="space-y-2.5 border-t border-slate-800 px-5 py-3.5">
               <p className="text-[11px] leading-relaxed text-slate-500">
-                将拷贝到 <code className="rounded bg-slate-800/70 px-1 text-slate-400">./papers</code>
-                ，已存在或重复的会自动跳过。
-              </p>
+                {tr("将拷贝到")}<code className="rounded bg-slate-800/70 px-1 text-slate-400">./papers</code>
+                {tr("，已存在或重复的会自动跳过。")}</p>
               <div className="flex items-center justify-end gap-2">
                 <button
                   onClick={() => setPendingFiles([])}
                   disabled={uploading}
                   className="rounded-lg border border-slate-700 px-4 py-1.5 text-[12px] text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-50"
                 >
-                  取消
-                </button>
+                  {tr("取消")}</button>
                 <button
                   onClick={handleConfirmUpload}
                   disabled={uploading}
                   className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-indigo-500 px-4 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-indigo-400 disabled:opacity-50"
                 >
                   {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                  {uploading ? '上传中…' : '确认上传'}
+                  {uploading ? tr("上传中…") : tr("确认上传")}
                 </button>
               </div>
             </div>
@@ -834,12 +828,13 @@ function PaperDetailStrip({
   onRetry: () => void
   onReprocess: () => void
 }) {
+  useLocale()
   const stage = inferPaperProcessMeta(paper, null, pending)
   return (
-    <div className="bg-[#0f1117] border-b border-slate-800/80 px-6 py-3">
+    <div className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-3">
       <div className="flex items-start gap-4">
         {/* Thumbnail */}
-        <div className="w-14 h-[4.5rem] shrink-0 bg-[#0b0d12] rounded border border-slate-800 flex items-center justify-center overflow-hidden">
+        <div className="w-14 h-[4.5rem] shrink-0 bg-[var(--surface-0b0d12)] rounded border border-slate-800 flex items-center justify-center overflow-hidden">
           {paper.processed ? (
             <img
               src={firstPageUrl(paper.id)}
@@ -855,13 +850,13 @@ function PaperDetailStrip({
         {/* Info */}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <p className="text-sm text-white font-semibold leading-snug line-clamp-2 text-safe-wrap">
+            <p className="text-sm text-foreground font-semibold leading-snug line-clamp-2 text-safe-wrap">
               {paper.title || paper.filename}
             </p>
             <button
               onClick={onClose}
-              title="收起"
-              className="shrink-0 text-slate-500 hover:text-white text-sm rounded-md px-1.5 py-0.5 hover:bg-slate-800/60 transition-colors"
+              title={tr("收起")}
+              className="shrink-0 text-slate-500 hover:text-foreground text-sm rounded-md px-1.5 py-0.5 hover:bg-slate-800/60 transition-colors"
             >
               ✕
             </button>
@@ -876,24 +871,23 @@ function PaperDetailStrip({
               </span>
             )}
             {paper.num_pages && (
-              <span className="tabular-nums text-slate-400">{paper.num_pages} 页</span>
+              <span className="tabular-nums text-slate-400">{paper.num_pages} {tr("页")}</span>
             )}
             {paper.processed_at && (
               <span title={paper.processed_at}>
-                于 {new Date(paper.processed_at).toLocaleString()} 处理
-              </span>
+                {tr("于")}{' '}{new Date(paper.processed_at).toLocaleString(getFormattingLocale())} {tr("处理")}</span>
             )}
             <span className="font-mono text-slate-600 break-all">{paper.filename}</span>
           </div>
 
           <div className="mt-2 rounded-lg border border-slate-800/70 bg-slate-900/50 px-2.5 py-1.5 text-[11px] text-slate-300">
-            <span className="font-semibold text-slate-200">阶段：</span>
+            <span className="font-semibold text-slate-200">{tr("阶段：")}</span>
             <span className="ml-1">{stage.summary}</span>
           </div>
 
           {stage.errorSummary && (
             <div className="mt-2 bg-red-500/10 border border-red-500/30 rounded-md px-2.5 py-1.5 text-[11px] text-red-300 break-words leading-relaxed">
-              <span className="font-semibold">最近错误：</span>{stage.errorSummary}
+              <span className="font-semibold">{tr("最近错误：")}</span>{stage.errorSummary}
             </div>
           )}
 
@@ -905,8 +899,7 @@ function PaperDetailStrip({
                 disabled={pending}
                 className="inline-flex items-center gap-1 text-xs bg-indigo-500 hover:bg-indigo-400 text-white px-2.5 py-1 rounded-md transition-colors disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {pending ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />} 立即处理
-              </button>
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />} {tr("立即处理")}</button>
             )}
             {paper.error && (
               <button
@@ -914,8 +907,7 @@ function PaperDetailStrip({
                 disabled={pending}
                 className="inline-flex items-center gap-1 text-xs bg-amber-500 hover:bg-amber-400 text-white px-2.5 py-1 rounded-md transition-colors disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} 重试
-              </button>
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} {tr("重试")}</button>
             )}
             {paper.processed && (
               <button
@@ -923,8 +915,7 @@ function PaperDetailStrip({
                 disabled={pending}
                 className="inline-flex items-center gap-1 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border border-slate-700/60 px-2.5 py-1 rounded-md transition-colors disabled:opacity-40"
               >
-                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} 重新处理
-              </button>
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} {tr("重新处理")}</button>
             )}
           </div>
         </div>
@@ -945,6 +936,7 @@ function PaperGridCard({
   categorySaving: boolean
   onCategoryChange: (value: string) => void
 }) {
+  useLocale()
   return (
     <article
       role="button"
@@ -956,14 +948,14 @@ function PaperGridCard({
           onClick()
         }
       }}
-      title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
+      title={paper.processed ? tr("在回顾中查看论文详情") : tr("查看处理状态与操作")}
       className={`text-left group bg-slate-900/40 rounded-2xl overflow-hidden border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'border-indigo-500/60 shadow-lg shadow-indigo-500/10'
           : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
       }`}
     >
-      <div className="relative aspect-[3/4] bg-[#0b0d12] flex items-center justify-center overflow-hidden">
+      <div className="relative aspect-[3/4] bg-[var(--surface-0b0d12)] flex items-center justify-center overflow-hidden">
         {paper.processed ? (
           <img
             src={firstPageUrl(paper.id)}
@@ -979,7 +971,7 @@ function PaperGridCard({
         </div>
       </div>
       <div className="p-3.5">
-        <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-3 min-h-[4rem] group-hover:text-white transition-colors text-safe-wrap">
+        <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-3 min-h-[4rem] group-hover:text-foreground transition-colors text-safe-wrap">
           {paper.title || paper.filename}
         </p>
         {paper.authors.length > 0 && (
@@ -988,7 +980,7 @@ function PaperGridCard({
           </p>
         )}
         <div className="mt-2.5 flex min-h-7 items-center justify-between gap-2 text-xs text-slate-600">
-          <span className="tabular-nums">{paper.num_pages ? `${paper.num_pages} 页` : ''}</span>
+          <span className="tabular-nums">{paper.num_pages ? tr("{0} 页", { 0: paper.num_pages }) : ''}</span>
           <InlinePaperCategoryEditor
             paper={paper}
             options={categoryOptions}
@@ -1015,6 +1007,7 @@ function PaperListRow({
   categorySaving: boolean
   onCategoryChange: (value: string) => void
 }) {
+  useLocale()
   const stage = inferPaperProcessMeta(paper, null, pending)
   return (
     <article
@@ -1027,14 +1020,14 @@ function PaperListRow({
           onClick()
         }
       }}
-      title={paper.processed ? '在回顾中查看论文详情' : '查看处理状态与操作'}
+      title={paper.processed ? tr("在回顾中查看论文详情") : tr("查看处理状态与操作")}
       className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'bg-indigo-500/5 border-indigo-500/40'
           : 'bg-slate-900/40 border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
       }`}
     >
-      <div className="w-10 h-12 shrink-0 bg-[#0b0d12] rounded flex items-center justify-center overflow-hidden">
+      <div className="w-10 h-12 shrink-0 bg-[var(--surface-0b0d12)] rounded flex items-center justify-center overflow-hidden">
         {paper.processed ? (
           <img
             src={firstPageUrl(paper.id)}
@@ -1083,9 +1076,10 @@ function InlinePaperCategoryEditor({
   onChange: (value: string) => void
   variant: 'grid' | 'list'
 }) {
+  useLocale()
   const selectId = `paper-category-${variant}-${paper.id}`
   const effectiveCategory = value === CATEGORY_INHERIT
-    ? (paper.paper_category_model || paper.paper_category || '未设置')
+    ? (paper.paper_category_model || paper.paper_category || tr("未设置"))
     : value
   const dotColor = categoryDotColor(effectiveCategory)
   return (
@@ -1094,22 +1088,22 @@ function InlinePaperCategoryEditor({
       onClick={event => event.stopPropagation()}
       onKeyDown={event => event.stopPropagation()}
     >
-      <label htmlFor={selectId} className="sr-only">论文大类</label>
+      <label htmlFor={selectId} className="sr-only">{tr("论文大类")}</label>
       <span
         className={`pointer-events-none absolute left-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${dotColor}`}
         aria-hidden="true"
       />
       <select
         id={selectId}
-        aria-label={`${paper.title || paper.filename}的论文大类`}
+        aria-label={tr("{0}的论文大类", { 0: paper.title || paper.filename })}
         value={value}
         disabled={saving}
         onChange={event => onChange(event.target.value)}
-        title={`论文大类：${effectiveCategory}${paper.paper_category_source === 'manual' ? '（人工）' : '（跟随模型）'}`}
+        title={tr("论文大类：{0}{1}", { 0: effectiveCategory, 1: paper.paper_category_source === 'manual' ? tr('（人工）') : tr('（跟随模型）') })}
         className={`${variant === 'grid' ? 'max-w-32' : 'max-w-36'} cursor-pointer truncate rounded-md border border-slate-700/70 bg-transparent py-1 pl-5 pr-6 text-[10px] font-medium text-slate-300 focus:border-slate-500 focus:outline-none disabled:cursor-wait disabled:opacity-60`}
       >
         <option value={CATEGORY_INHERIT}>
-          跟随 · {paper.paper_category_model || '未设置'}
+          {tr("跟随 ·")}{' '}{paper.paper_category_model || tr("未设置")}
         </option>
         {options.map(option => (
           <option key={option} value={option}>{option}</option>
@@ -1117,7 +1111,7 @@ function InlinePaperCategoryEditor({
       </select>
       {saving && (
         <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center">
-          <Loader2 size={10} className="animate-spin text-current" aria-label="保存中" />
+          <Loader2 size={10} className="animate-spin text-current" aria-label={tr("保存中")} />
         </span>
       )}
     </div>
@@ -1138,10 +1132,11 @@ function effectivePaperCategoryLabel(paper: PaperRecord): string {
   return paper.paper_category_override
     || paper.paper_category
     || paper.paper_category_model
-    || '未设置'
+    || tr("未设置")
 }
 
 function StatusDot({ paper, pending }: { paper: PaperRecord; pending: boolean }) {
+  useLocale()
   if (pending) return <Loader2 size={16} className="text-indigo-400 animate-spin drop-shadow" />
   if (paper.processed) return <CheckCircle2 size={16} className="text-emerald-400 drop-shadow" />
   if (paper.error) return <XCircle size={16} className="text-red-400 drop-shadow" />
@@ -1155,6 +1150,6 @@ function fmtSize(bytes: number): string {
 
 function getErrorMessage(error: unknown): string {
   const apiError = error as { response?: { data?: { detail?: string } }; message?: string; code?: string }
-  if (apiError.code === 'ECONNABORTED') return '请求超时，后端没有在 30 秒内响应。'
-  return apiError.response?.data?.detail || apiError.message || '未知错误'
+  if (apiError.code === 'ECONNABORTED') return tr("请求超时，后端没有在 30 秒内响应。")
+  return apiError.response?.data?.detail || apiError.message || tr("未知错误")
 }

@@ -300,3 +300,121 @@ input[type="range"]::-webkit-slider-thumb:hover {
 .fade-in {
   animation: fadeIn 180ms ease-out;
 }
+
+/* Appearance tokens: Dark preserves the existing palette; Light uses cool paper surfaces. */
+@theme inline {
+  --color-foreground: var(--text-primary);
+}
+:root {
+  --text-primary: #f8fafc;
+  --graph-label: #f1f5f9;
+  --graph-label-bg: #020617;
+  --graph-edge: #334155;
+  --graph-outline: #0b0d12;
+  --surface-0b0d12: #0b0d12;
+  --surface-0f1117: #0f1117;
+  --surface-0d1016: #0d1016;
+  --surface-0d1119: #0d1119;
+  --surface-070912: #070912;
+  --surface-0a0d14: #0a0d14;
+  --surface-11131b: #11131b;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --text-primary: #17243b;
+  --graph-label: #24324b;
+  --graph-label-bg: #ffffff;
+  --graph-edge: #94a3b8;
+  --graph-outline: #f4f6fb;
+  --surface-0b0d12: #f4f6fb;
+  --surface-0f1117: #ffffff;
+  --surface-0d1016: #ffffff;
+  --surface-0d1119: #ffffff;
+  --surface-070912: #f4f6fb;
+  --surface-0a0d14: #ffffff;
+  --surface-11131b: #ffffff;
+  --color-slate-50: #0f172a;
+  --color-slate-100: #17243b;
+  --color-slate-200: #24324b;
+  --color-slate-300: #37475f;
+  --color-slate-400: #52637b;
+  --color-slate-500: #63738a;
+  --color-slate-600: #718096;
+  --color-slate-700: #c3cddd;
+  --color-slate-800: #dce3ee;
+  --color-slate-900: #edf1f7;
+  --color-slate-950: #f7f9fc;
+  --color-indigo-100: #312e81;
+  --color-indigo-200: #3730a3;
+  --color-indigo-300: #4338ca;
+  --color-indigo-400: #4f46e5;
+  --color-violet-100: #4c1d95;
+  --color-violet-200: #5b21b6;
+  --color-violet-300: #6d28d9;
+  --color-violet-400: #7c3aed;
+  --color-blue-100: #1e3a8a;
+  --color-blue-200: #1e40af;
+  --color-blue-300: #1d4ed8;
+  --color-blue-400: #2563eb;
+  --color-cyan-100: #164e63;
+  --color-cyan-200: #155e75;
+  --color-cyan-300: #0e7490;
+  --color-cyan-400: #0891b2;
+  --color-teal-100: #134e4a;
+  --color-teal-200: #115e59;
+  --color-teal-300: #0f766e;
+  --color-teal-400: #0d9488;
+  --color-emerald-100: #064e3b;
+  --color-emerald-200: #065f46;
+  --color-emerald-300: #047857;
+  --color-emerald-400: #059669;
+  --color-green-100: #14532d;
+  --color-green-200: #166534;
+  --color-green-300: #15803d;
+  --color-green-400: #16a34a;
+  --color-amber-100: #78350f;
+  --color-amber-200: #92400e;
+  --color-amber-300: #b45309;
+  --color-amber-400: #b45309;
+  --color-orange-100: #7c2d12;
+  --color-orange-200: #9a3412;
+  --color-orange-300: #c2410c;
+  --color-orange-400: #ea580c;
+  --color-red-100: #7f1d1d;
+  --color-red-200: #991b1b;
+  --color-red-300: #b91c1c;
+  --color-red-400: #dc2626;
+  --color-rose-100: #881337;
+  --color-rose-200: #9f1239;
+  --color-rose-300: #be123c;
+  --color-rose-400: #e11d48;
+  --color-purple-100: #581c87;
+  --color-purple-200: #6b21a8;
+  --color-purple-300: #7e22ce;
+  --color-purple-400: #9333ea;
+  --color-sky-100: #0c4a6e;
+  --color-sky-200: #075985;
+  --color-sky-300: #0369a1;
+  --color-sky-400: #0284c7;
+  --color-pink-100: #831843;
+  --color-pink-200: #9d174d;
+  --color-pink-300: #be185d;
+  --color-pink-400: #db2777;
+}
+html, body { background: var(--surface-0b0d12); color: var(--color-slate-200); }
+:root[data-theme="light"] .surface-card {
+  background: linear-gradient(180deg, #ffffff, #f7f9fd);
+  border-color: #dce3ee;
+  box-shadow: 0 10px 30px rgb(36 50 75 / 5%);
+}
+:root[data-theme="light"] :is(.panel-title, .prose-reading strong, .formula-display .katex,
+  .markdown-notes h1, .markdown-notes h2, .markdown-notes h3, .markdown-notes h4, .markdown-notes strong) { color: #17243b; }
+:root[data-theme="light"] :is(.prose-reading, .markdown-notes em, .markdown-notes pre code) { color: #37475f; }
+:root[data-theme="light"] :is(.panel-subtitle, .section-label) { color: #63738a; }
+:root[data-theme="light"] .markdown-notes :is(blockquote, code, pre, th) { background: #edf1f7; color: #37475f; }
+:root[data-theme="light"] .markdown-notes :is(code, pre, th, td, hr, img) { border-color: #dce3ee; }
+:root[data-theme="light"] .markdown-notes a { color: #4338ca; }
+:root[data-theme="light"] .markdown-notes a:hover { color: #312e81; }
+:root[data-theme="light"] input[type="range"]::-webkit-slider-runnable-track { background: #c3cddd; }
+:root[data-theme="light"] input[type="range"]::-webkit-slider-thumb { border-color: #fff; }
+:root[data-theme="light"] .shadow-2xl { --tw-shadow: 0 20px 45px rgb(36 50 75 / 12%); }

@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { AlertTriangle, CheckCircle2, Info, Loader2, RefreshCw, XCircle } from 'lucide-react'
 
 export type TaskNoticeTone = 'info' | 'success' | 'warning' | 'error'
@@ -20,6 +22,7 @@ const TONE_CLASS: Record<TaskNoticeTone, string> = {
 }
 
 function ToneIcon({ tone, busy }: { tone: TaskNoticeTone; busy?: boolean }) {
+  useLocale()
   if (busy) return <Loader2 size={14} className="animate-spin" />
   if (tone === 'success') return <CheckCircle2 size={14} />
   if (tone === 'warning') return <AlertTriangle size={14} />
@@ -33,9 +36,10 @@ export default function TaskNotice({
   detail,
   busy,
   onRetry,
-  retryLabel = '重试',
+  retryLabel = tr("重试"),
   className = '',
 }: TaskNoticeProps) {
+  useLocale()
   return (
     <div className={`rounded-xl border px-3 py-2 ${TONE_CLASS[tone]} ${className}`}>
       <div className="flex items-start gap-2">

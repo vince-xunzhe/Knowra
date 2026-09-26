@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Sparkles, RefreshCw, Download, Check, Loader2, ExternalLink, Tag as TagIcon,
@@ -20,10 +22,10 @@ const summaryCache = new Map<string, string>()
 type StatusFilter = 'all' | 'marked' | 'team' | 'downloadable'
 
 const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'marked', label: '已收藏' },
-  { id: 'team', label: '关注团队' },
-  { id: 'downloadable', label: '可下载' },
+  { id: 'all', get label() { return tr("全部") } },
+  { id: 'marked', get label() { return tr("已收藏") } },
+  { id: 'team', get label() { return tr("关注团队") } },
+  { id: 'downloadable', get label() { return tr("可下载") } },
 ]
 
 interface DecoratedRecItem {
@@ -68,17 +70,19 @@ function makeLimiter(max: number) {
 }
 
 export default function RecommendPage() {
+  useLocale()
   const [tab, setTab] = useState<'personal' | 'public'>('personal')
   const auth = useCloudAuth()
   return <div className="flex h-full min-h-0 flex-col">
-    <nav className="flex shrink-0 gap-2 border-b border-slate-800 bg-[#0f1117] px-5 py-2">
-      {(['personal', 'public'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`rounded-lg px-4 py-2 text-sm ${tab === value ? 'bg-indigo-500/20 text-indigo-200' : 'text-slate-400 hover:bg-slate-800'}`}>{value === 'personal' ? '推荐精选' : '完整推荐'}</button>)}
+    <nav className="flex shrink-0 gap-2 border-b border-slate-800 bg-[var(--surface-0f1117)] px-5 py-2">
+      {(['personal', 'public'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`rounded-lg px-4 py-2 text-sm ${tab === value ? 'bg-indigo-500/20 text-indigo-200' : 'text-slate-400 hover:bg-slate-800'}`}>{value === 'personal' ? tr("推荐精选") : tr("完整推荐")}</button>)}
     </nav>
     <div className="min-h-0 flex-1">{tab === 'personal' ? <PersonalRecommendations key="local-workspace" onBrowseAll={() => setTab('public')} /> : <PublicRecommendPage key={auth.user?.id || 'signed-out'} />}</div>
   </div>
 }
 
 function PublicRecommendPage() {
+  useLocale()
   const auth = useCloudAuth()
   const [tags, setTags] = useState<RecTag[]>(() => recCache?.tags ?? [])
   const [items, setItems] = useState<RecItem[]>(() => recCache?.items ?? [])
@@ -258,15 +262,15 @@ function PublicRecommendPage() {
   if (!auth.user) {
     return (
       <CenteredNote
-        title="请先登录云端"
-        msg="推荐来自云端每周的 arXiv 检索。到 设置 -> 云同步 登录后即可查看。"
+        title={tr("请先登录云端")}
+        msg={tr("推荐来自云端每周的 arXiv 检索。到 设置 -> 云同步 登录后即可查看。")}
       />
     )
   }
-  if (loading) return <CenteredNote title="加载中..." spinner />
+  if (loading) return <CenteredNote title={tr("加载中...")} spinner />
 
   return (
-    <div className="flex h-full overflow-hidden bg-[#0b0d12] text-slate-200">
+    <div className="flex h-full overflow-hidden bg-[var(--surface-0b0d12)] text-slate-200">
       <FilterSidebar
         className="hidden lg:flex"
         tags={tags}
@@ -280,20 +284,19 @@ function PublicRecommendPage() {
       />
 
       <section className="flex min-w-0 flex-1 flex-col">
-        <header className="shrink-0 border-b border-slate-800/80 bg-[#0f1117] px-5 py-4">
+        <header className="shrink-0 border-b border-slate-800/80 bg-[var(--surface-0f1117)] px-5 py-4">
           <div className="flex items-start gap-3">
             <Sparkles size={19} className="mt-1 shrink-0 text-indigo-300" />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl font-semibold tracking-tight text-white">推荐</h1>
+                <h1 className="text-xl font-semibold tracking-tight text-foreground">{tr("推荐")}</h1>
                 {revalidating && <Loader2 size={13} className="animate-spin text-slate-500" />}
                 <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-500">
                   {filtered.length} / {decorated.length}
                 </span>
               </div>
               <p className="mt-1 text-sm text-slate-500">
-                每周一 / 三 / 五自动检索 arXiv（保留近 7 天）。按方向筛选，中间快速扫读，右侧查看摘要和下载。
-              </p>
+                {tr("每周一 / 三 / 五自动检索 arXiv（保留近 7 天）。按方向筛选，中间快速扫读，右侧查看摘要和下载。")}</p>
             </div>
             <button
               onClick={refresh}
@@ -301,12 +304,11 @@ function PublicRecommendPage() {
               className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
             >
               {refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
-              立即检索
-            </button>
+              {tr("立即检索")}</button>
           </div>
 
           <div className="mt-3 flex gap-2 overflow-x-auto pb-1 lg:hidden">
-            <FilterPill active={selectedTag === 'all'} label="全部方向" count={decorated.length} onClick={() => setSelectedTag('all')} />
+            <FilterPill active={selectedTag === 'all'} label={tr("全部方向")} count={decorated.length} onClick={() => setSelectedTag('all')} />
             {tags.map(t => (
               <FilterPill
                 key={t.name}
@@ -327,14 +329,14 @@ function PublicRecommendPage() {
 
         <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
           <main className="flex min-h-[18rem] min-w-0 flex-1 flex-col border-b border-slate-800/80 xl:border-b-0 xl:border-r">
-            <div className="shrink-0 border-b border-slate-800/70 bg-[#0d1016] px-4 py-3">
+            <div className="shrink-0 border-b border-slate-800/70 bg-[var(--surface-0d1016)] px-4 py-3">
               <div className="flex flex-wrap items-center gap-2">
                 <div className="relative min-w-[14rem] flex-1">
                   <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
                   <input
                     value={query}
                     onChange={e => setQuery(e.target.value)}
-                    placeholder="搜索标题、作者、arXiv ID"
+                    placeholder={tr("搜索标题、作者、arXiv ID")}
                     className="w-full rounded-lg border border-slate-800 bg-slate-950/60 py-1.5 pl-8 pr-3 text-[12px] text-slate-200 outline-none placeholder:text-slate-600 focus:border-indigo-500/60"
                   />
                 </div>
@@ -360,8 +362,7 @@ function PublicRecommendPage() {
             <div className="min-h-0 flex-1 overflow-y-auto p-3">
               {filtered.length === 0 ? (
                 <div className="flex h-full items-center justify-center px-6 text-center text-[13px] text-slate-500">
-                  没有匹配当前筛选条件的论文。
-                </div>
+                  {tr("没有匹配当前筛选条件的论文。")}</div>
               ) : (
                 <div className="space-y-2">
                   {filtered.map(item => (
@@ -403,10 +404,11 @@ function FilterSidebar({
   filterCounts: Record<StatusFilter, number>
   className?: string
 }) {
+  useLocale()
   return (
-    <aside className={`${className || ''} w-64 shrink-0 flex-col border-r border-slate-800/80 bg-[#0d1016]`}>
+    <aside className={`${className || ''} w-64 shrink-0 flex-col border-r border-slate-800/80 bg-[var(--surface-0d1016)]`}>
       <div className="border-b border-slate-800/80 px-4 py-3">
-        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">方向</p>
+        <p className="text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">{tr("方向")}</p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         <button
@@ -418,7 +420,7 @@ function FilterSidebar({
           }`}
         >
           <Sparkles size={13} />
-          <span className="min-w-0 flex-1 truncate">全部方向</span>
+          <span className="min-w-0 flex-1 truncate">{tr("全部方向")}</span>
           <span className="tabular-nums text-slate-500">{total}</span>
         </button>
         {tags.map(t => (
@@ -438,7 +440,7 @@ function FilterSidebar({
         ))}
       </div>
       <div className="border-t border-slate-800/80 p-2">
-        <p className="mb-1 px-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">筛选</p>
+        <p className="mb-1 px-2 text-[11px] font-medium uppercase tracking-[0.08em] text-slate-500">{tr("筛选")}</p>
         {STATUS_FILTERS.map(f => (
           <button
             key={f.id}
@@ -466,6 +468,7 @@ function FilterPill({
   count: number
   onClick: () => void
 }) {
+  useLocale()
   return (
     <button
       onClick={onClick}
@@ -488,6 +491,7 @@ function RecListRow({
   selected: boolean
   onSelect: () => void
 }) {
+  useLocale()
   const { it, matchedTeam, marked, downloadStatus, done } = item
   const publishedAt = formatRecTime(it.published)
   const retrievedAt = formatRecTime(it.created_at)
@@ -503,27 +507,27 @@ function RecListRow({
             ? 'border-indigo-400/35 bg-indigo-500/[0.05] hover:border-indigo-400/60'
             : matchedTeam
               ? 'border-amber-400/35 bg-amber-500/[0.04] hover:border-amber-400/60'
-              : 'border-slate-800 bg-[#0f1117] hover:border-slate-700'
+              : 'border-slate-800 bg-[var(--surface-0f1117)] hover:border-slate-700'
       }`}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex flex-wrap items-center gap-1.5">
-            {marked && <Badge tone="indigo" icon={<Bookmark size={9} />} label="收藏" />}
+            {marked && <Badge tone="indigo" icon={<Bookmark size={9} />} label={tr("收藏")} />}
             {matchedTeam && <Badge tone="amber" icon={<Star size={9} />} label={matchedTeam} />}
-            {done && <Badge tone="emerald" icon={<Check size={9} />} label={downloadStatus === 'duplicate' ? '已存在' : '已下载'} />}
+            {done && <Badge tone="emerald" icon={<Check size={9} />} label={downloadStatus === 'duplicate' ? tr("已存在") : tr("已下载")} />}
           </div>
           <p className="text-[13.5px] font-medium leading-snug text-slate-100">{it.title}</p>
           <p className="mt-1 truncate text-[11.5px] text-slate-500">
             {(it.authors || []).slice(0, 3).join(', ')}
-            {it.authors.length > 3 ? ' 等' : ''}
+            {it.authors.length > 3 ? tr(" 等") : ''}
             {it.primary_category ? ` · ${it.primary_category}` : ''}
           </p>
           {(publishedAt || retrievedAt) && (
             <p className="mt-1 text-[11px] text-slate-600">
-              {publishedAt ? `发布 ${publishedAt}` : ''}
+              {publishedAt ? tr("发布 {0}", { 0: publishedAt }) : ''}
               {publishedAt && retrievedAt ? ' · ' : ''}
-              {retrievedAt ? `检索 ${retrievedAt}` : ''}
+              {retrievedAt ? tr("检索 {0}", { 0: retrievedAt }) : ''}
             </p>
           )}
           {preview && (
@@ -548,6 +552,7 @@ function RecDetailPanel({
   onToggleMark: (arxivId: string) => void
   onDownload: (it: RecItem) => void
 }) {
+  useLocale()
   const it = item?.it ?? null
   const abstract = it?.abstract || ''
   const [summary, setSummary] = useState<string | null>(it?.summary ?? null)
@@ -576,10 +581,9 @@ function RecDetailPanel({
 
   if (!item || !it) {
     return (
-      <aside className="flex min-h-[22rem] w-full shrink-0 items-center justify-center overflow-y-auto bg-[#0f1117] px-8 text-center xl:w-[28rem]">
+      <aside className="flex min-h-[22rem] w-full shrink-0 items-center justify-center overflow-y-auto bg-[var(--surface-0f1117)] px-8 text-center xl:w-[28rem]">
         <p className="max-w-xs text-[13px] leading-relaxed text-slate-500">
-          选择一篇推荐论文后，这里会展示完整摘要、本地模型总结和下载操作。
-        </p>
+          {tr("选择一篇推荐论文后，这里会展示完整摘要、本地模型总结和下载操作。")}</p>
       </aside>
     )
   }
@@ -591,32 +595,32 @@ function RecDetailPanel({
   const displayedSumState = displayedSummary ? 'done' : sumState
 
   return (
-    <aside className="min-h-[22rem] w-full shrink-0 overflow-y-auto bg-[#0f1117] xl:w-[28rem]">
+    <aside className="min-h-[22rem] w-full shrink-0 overflow-y-auto bg-[var(--surface-0f1117)] xl:w-[28rem]">
       <div className="border-b border-slate-800/80 px-5 py-4">
         <div className="mb-2 flex flex-wrap gap-1.5">
           <Badge tone="slate" icon={<TagIcon size={9} />} label={it.tag} />
-          {marked && <Badge tone="indigo" icon={<Bookmark size={9} />} label="已收藏" />}
-          {matchedTeam && <Badge tone="amber" icon={<Star size={9} />} label={`关注团队 · ${matchedTeam}`} />}
-          {done && <Badge tone="emerald" icon={<Check size={9} />} label={downloadStatus === 'duplicate' ? '已存在' : '已下载'} />}
+          {marked && <Badge tone="indigo" icon={<Bookmark size={9} />} label={tr("已收藏")} />}
+          {matchedTeam && <Badge tone="amber" icon={<Star size={9} />} label={tr("关注团队 · {0}", { 0: matchedTeam })} />}
+          {done && <Badge tone="emerald" icon={<Check size={9} />} label={downloadStatus === 'duplicate' ? tr("已存在") : tr("已下载")} />}
         </div>
-        <h2 className="text-[17px] font-semibold leading-snug text-white">{it.title}</h2>
+        <h2 className="text-[17px] font-semibold leading-snug text-foreground">{it.title}</h2>
         <p className="mt-2 text-[12px] leading-relaxed text-slate-500">
-          {(it.authors || []).join(', ') || '未知作者'}
+          {(it.authors || []).join(', ') || tr("未知作者")}
         </p>
       </div>
 
       <div className="space-y-5 px-5 py-4">
         <div className="grid grid-cols-2 gap-2 text-[12px]">
           <MetaTile label="arXiv" value={it.arxiv_id} />
-          <MetaTile label="分类" value={it.primary_category || '未标注'} />
-          <MetaTile label="发布时间" value={publishedAt || '未知'} />
-          <MetaTile label="检索时间" value={retrievedAt || '未知'} />
+          <MetaTile label={tr("分类")} value={it.primary_category || tr("未标注")} />
+          <MetaTile label={tr("发布时间")} value={publishedAt || tr("未知")} />
+          <MetaTile label={tr("检索时间")} value={retrievedAt || tr("未知")} />
         </div>
 
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => onToggleMark(it.arxiv_id)}
-            title={marked ? '取消收藏' : '收藏（在移动端/桌面同步，提醒下载）'}
+            title={marked ? tr("取消收藏") : tr("收藏（在移动端/桌面同步，提醒下载）")}
             className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] transition-colors ${
               marked
                 ? 'border-indigo-400/50 bg-indigo-500/15 text-indigo-200'
@@ -624,7 +628,7 @@ function RecDetailPanel({
             }`}
           >
             {marked ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
-            {marked ? '已收藏' : '收藏'}
+            {marked ? tr("已收藏") : tr("收藏")}
           </button>
           {it.pdf_url && (
             <a
@@ -647,20 +651,16 @@ function RecDetailPanel({
           >
             {downloadStatus === 'downloading' ? (
               <>
-                <Loader2 size={13} className="animate-spin" /> 下载中
-              </>
+                <Loader2 size={13} className="animate-spin" /> {tr("下载中")}</>
             ) : downloadStatus === 'downloaded' ? (
               <>
-                <Check size={13} /> 已下载
-              </>
+                <Check size={13} /> {tr("已下载")}</>
             ) : downloadStatus === 'duplicate' ? (
               <>
-                <Check size={13} /> 已存在
-              </>
+                <Check size={13} /> {tr("已存在")}</>
             ) : (
               <>
-                <Download size={13} /> 下载到本地
-              </>
+                <Download size={13} /> {tr("下载到本地")}</>
             )}
           </button>
         </div>
@@ -668,30 +668,29 @@ function RecDetailPanel({
         <section>
           <div className="mb-2 flex items-center gap-2">
             <Wand2 size={13} className="text-indigo-300" />
-            <h3 className="text-[13px] font-semibold text-slate-100">本地总结</h3>
+            <h3 className="text-[13px] font-semibold text-slate-100">{tr("本地总结")}</h3>
           </div>
           {displayedSumState === 'done' && displayedSummary ? (
             <p className="text-[13px] leading-relaxed text-slate-300">{displayedSummary}</p>
           ) : displayedSumState === 'loading' ? (
             <p className="flex items-center gap-1.5 text-[12px] text-indigo-300/80">
-              <Loader2 size={12} className="animate-spin" /> 本地模型总结中...
-            </p>
+              <Loader2 size={12} className="animate-spin" /> {tr("本地模型总结中...")}</p>
           ) : displayedSumState === 'error' ? (
-            <p className="text-[12px] text-rose-300">总结失败，可稍后重新选择该论文。</p>
+            <p className="text-[12px] text-rose-300">{tr("总结失败，可稍后重新选择该论文。")}</p>
           ) : (
-            <p className="text-[12px] text-slate-500">没有可总结的摘要。</p>
+            <p className="text-[12px] text-slate-500">{tr("没有可总结的摘要。")}</p>
           )}
         </section>
 
         {abstract && (
           <section>
             <div className="mb-2 flex items-center gap-2">
-              <h3 className="text-[13px] font-semibold text-slate-100">原始摘要</h3>
+              <h3 className="text-[13px] font-semibold text-slate-100">{tr("原始摘要")}</h3>
               <button
                 onClick={() => setShowAbstract(s => !s)}
                 className="ml-auto text-[11px] text-slate-500 hover:text-slate-300"
               >
-                {showAbstract ? '收起' : '展开'}
+                {showAbstract ? tr("收起") : tr("展开")}
               </button>
             </div>
             <p className={`text-[12.5px] leading-relaxed text-slate-500 ${showAbstract ? '' : 'max-h-24 overflow-hidden'}`}>
@@ -705,6 +704,7 @@ function RecDetailPanel({
 }
 
 function Badge({ tone, icon, label }: { tone: 'slate' | 'indigo' | 'amber' | 'emerald'; icon: ReactNode; label: string }) {
+  useLocale()
   const styles = {
     slate: 'border-slate-700 bg-slate-900/60 text-slate-400',
     indigo: 'border-indigo-400/50 bg-indigo-500/15 text-indigo-200',
@@ -720,6 +720,7 @@ function Badge({ tone, icon, label }: { tone: 'slate' | 'indigo' | 'amber' | 'em
 }
 
 function MetaTile({ label, value }: { label: string; value: string }) {
+  useLocale()
   return (
     <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-2">
       <p className="mb-1 text-[10px] uppercase tracking-[0.08em] text-slate-600">{label}</p>
@@ -737,8 +738,9 @@ function formatRecTime(value: string | null | undefined): string | null {
 }
 
 function CenteredNote({ title, msg, spinner }: { title: string; msg?: string; spinner?: boolean }) {
+  useLocale()
   return (
-    <div className="flex h-full flex-col items-center justify-center bg-[#0b0d12] p-10 text-center">
+    <div className="flex h-full flex-col items-center justify-center bg-[var(--surface-0b0d12)] p-10 text-center">
       {spinner && <Loader2 size={20} className="mb-3 animate-spin text-indigo-300" />}
       <p className="text-[15px] font-medium text-slate-200">{title}</p>
       {msg && <p className="mt-2 max-w-md text-[13px] leading-relaxed text-slate-500">{msg}</p>}

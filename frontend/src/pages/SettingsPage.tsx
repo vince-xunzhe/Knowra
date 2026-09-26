@@ -1,3 +1,7 @@
+import { getFormattingLocale } from '../i18n/store'
+import AppearanceSettings from '../components/AppearanceSettings'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Save, RefreshCw, Trash2, FolderOpen, Image as ImageIcon,
@@ -47,9 +51,9 @@ function emptyGateway(): ModelGatewayConfig {
 }
 
 function formatTestMeta(provider: ModelGatewayProvider) {
-  if (!provider.last_tested_at) return '尚未测试'
-  const status = provider.last_test_status === 'ok' ? '最近成功' : provider.last_test_status === 'error' ? '最近失败' : '最近测试'
-  return `${status} · ${new Date(provider.last_tested_at).toLocaleString()}`
+  if (!provider.last_tested_at) return tr("尚未测试")
+  const status = provider.last_test_status === 'ok' ? tr("最近成功") : provider.last_test_status === 'error' ? tr("最近失败") : tr("最近测试")
+  return `${status} · ${new Date(provider.last_tested_at).toLocaleString(getFormattingLocale())}`
 }
 
 function providerRoute(provider: ModelGatewayProvider | null | undefined): ProviderRoute {
@@ -61,7 +65,7 @@ function providerRouteLabel(route: ProviderRoute) {
 }
 
 function providerBrandLabel(provider: ModelGatewayProvider | null | undefined) {
-  if (!provider) return '未设置'
+  if (!provider) return tr("未设置")
   return provider.label || provider.id
 }
 
@@ -130,10 +134,11 @@ function normalizeGatewayForSubmit(gateway: ModelGatewayConfig): ModelGatewayCon
 
 function getApiErrorDetail(error: unknown): string {
   const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
-  return apiError.response?.data?.detail || apiError.message || '未知错误'
+  return apiError.response?.data?.detail || apiError.message || tr("未知错误")
 }
 
 export default function SettingsPage() {
+  const locale = useLocale()
   const [config, setConfig] = useState<Partial<Config>>({})
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -272,15 +277,15 @@ export default function SettingsPage() {
       list.push({
         ...rep,
         id: '__main__',
-        label: '主模型',
-        category: '通用',
-        description: '论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量与论文精选单独配置。',
+        label: tr("主模型", {}, locale),
+        category: tr("通用"),
+        description: tr("论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量与论文精选单独配置。"),
       })
     }
     if (embeddingTask) list.push(embeddingTask)
     if (recommendationTask) list.push(recommendationTask)
     return list
-  }, [taskSpecs, mainRepTaskId, embeddingTask, recommendationTask])
+  }, [taskSpecs, mainRepTaskId, embeddingTask, recommendationTask, locale])
 
   const handleTestProvider = useCallback(async (providerId: string) => {
     setTestingProviderId(providerId)
@@ -297,22 +302,22 @@ export default function SettingsPage() {
     setMaintenanceNotice({
       action: 'rebuild-edges',
       tone: 'info',
-      title: '正在重建相似度边…',
-      detail: '将按当前阈值重算图谱边。',
+      title: tr("正在重建相似度边…"),
+      detail: tr("将按当前阈值重算图谱边。"),
     })
     try {
       const result = await rebuildEdges()
       setMaintenanceNotice({
         action: 'rebuild-edges',
         tone: 'success',
-        title: `重建完成：${result.total_edges} 条边`,
-        detail: `阈值 ${result.threshold}。`,
+        title: tr("重建完成：{0} 条边", { 0: result.total_edges }),
+        detail: tr("阈值 {0}。", { 0: result.threshold }),
       })
     } catch (error) {
       setMaintenanceNotice({
         action: 'rebuild-edges',
         tone: 'error',
-        title: '重建相似度边失败',
+        title: tr("重建相似度边失败"),
         detail: getApiErrorDetail(error),
       })
     } finally {
@@ -321,27 +326,27 @@ export default function SettingsPage() {
   }, [])
 
   const handleResetGraph = useCallback(async () => {
-    if (!confirm('确认重置自动图谱？论文会被标记为未处理，需要重新调用大模型；手动概念会保留。')) return
+    if (!confirm(tr("确认重置自动图谱？论文会被标记为未处理，需要重新调用大模型；手动概念会保留。"))) return
     setMaintenanceBusy('reset-graph')
     setMaintenanceNotice({
       action: 'reset-graph',
       tone: 'warning',
-      title: '正在重置图谱…',
-      detail: '自动抽取节点和边会被清空，手动概念保留。',
+      title: tr("正在重置图谱…"),
+      detail: tr("自动抽取节点和边会被清空，手动概念保留。"),
     })
     try {
       await resetGraph()
       setMaintenanceNotice({
         action: 'reset-graph',
         tone: 'success',
-        title: '图谱已重置',
-        detail: '回到图谱页点击“处理论文”可重新生成抽取结果。',
+        title: tr("图谱已重置"),
+        detail: tr("回到图谱页点击“处理论文”可重新生成抽取结果。"),
       })
     } catch (error) {
       setMaintenanceNotice({
         action: 'reset-graph',
         tone: 'error',
-        title: '重置图谱失败',
+        title: tr("重置图谱失败"),
         detail: getApiErrorDetail(error),
       })
     } finally {
@@ -349,33 +354,34 @@ export default function SettingsPage() {
     }
   }, [])
 
-  if (loading) return <div className="p-10 text-sm text-slate-500">加载中…</div>
+  if (loading) return <div className="h-full overflow-y-auto p-8"><AppearanceSettings /><p className="text-slate-500">{tr("加载中…")}</p></div>
 
   return (
     <div className="h-full overflow-y-auto relative">
-      <div className="fixed bottom-6 right-8 z-30 flex items-center gap-3 bg-[#0f1117]/95 backdrop-blur-md border border-slate-800 rounded-2xl pl-4 pr-2 py-2 shadow-2xl shadow-black/40">
-        {saved && <span className="text-xs text-emerald-300">已保存 ✓</span>}
+      <div className="fixed bottom-6 right-8 z-30 flex items-center gap-3 bg-[var(--surface-0f1117)]/95 backdrop-blur-md border border-slate-800 rounded-2xl pl-4 pr-2 py-2 shadow-2xl shadow-black/40">
+        {saved && <span className="text-xs text-emerald-300">{tr("已保存 ✓")}</span>}
         <button
           onClick={handleSave}
           className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium px-4 py-2 rounded-xl transition-colors shadow-lg shadow-indigo-500/20"
         >
           <Save size={14} />
-          保存设置
-          <span className="hidden sm:inline text-[10px] text-indigo-200/70 font-mono ml-1">⌘S</span>
+          {tr("保存设置")}<span className="hidden sm:inline text-[10px] text-indigo-200/70 font-mono ml-1">⌘S</span>
         </button>
       </div>
 
       <div className="max-w-7xl mx-auto px-6 xl:px-8 py-8 pb-24">
         <header className="mb-7">
-          <h1 className="text-2xl font-semibold tracking-tight text-white">设置</h1>
-          <p className="text-sm text-slate-500 mt-1.5">以任务为核心配置模型，Provider 区只保留必要连接参数和联通测试。</p>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">{tr("设置")}</h1>
+          <p className="text-sm text-slate-500 mt-1.5">{tr("以任务为核心配置模型，Provider 区只保留必要连接参数和联通测试。")}</p>
         </header>
 
+        <AppearanceSettings />
+
         <SettingGroup
-          title="基础"
-          description="扫描目录与旧版兼容设置。模型相关配置已经迁移到任务模型。"
+          title={tr("基础")}
+          description={tr("扫描目录与旧版兼容设置。模型相关配置已经迁移到任务模型。")}
         >
-          <Field icon={<FolderOpen size={14} />} label="扫描目录" hint="程序会递归扫描此目录下的所有 PDF 论文">
+          <Field icon={<FolderOpen size={14} />} label={tr("扫描目录")} hint={tr("程序会递归扫描此目录下的所有 PDF 论文")}>
             <input
               type="text"
               value={config.scan_directory || ''}
@@ -387,29 +393,29 @@ export default function SettingsPage() {
         </SettingGroup>
 
         <SettingGroup
-          title="云同步"
-          description="登录云端账号后，桌面端的论文 / 概念 / wiki 会增量同步到云后端，供 iOS / Android 只读消费。"
+          title={tr("云同步")}
+          description={tr("登录云端账号后，桌面端的论文 / 概念 / wiki 会增量同步到云后端，供 iOS / Android 只读消费。")}
           defaultExpanded={false}
         >
           <CloudSyncSection />
         </SettingGroup>
 
         <SettingGroup
-          title="任务模型"
-          description="除“图谱向量”外的所有任务共用一个主模型；向量单独配置。Provider 区只保留连接参数与联通测试。"
+          title={tr("任务模型")}
+          description={tr("除“图谱向量”外的所有任务共用一个主模型；向量单独配置。Provider 区只保留连接参数与联通测试。")}
           defaultExpanded={false}
         >
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="mb-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">连接检查</p>
-              <p className="mt-1 text-base font-semibold text-slate-100">Provider 联通测试</p>
-              <p className="text-xs text-slate-500 mt-1">这里只保留必要连接参数。内部的 provider 元数据和模型注册表不再暴露给你；Qwen 默认预填的是中国（北京）OpenAI 兼容地址，你也可以改成别的区域。</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{tr("连接检查")}</p>
+              <p className="mt-1 text-base font-semibold text-slate-100">{tr("Provider 联通测试")}</p>
+              <p className="text-xs text-slate-500 mt-1">{tr("这里只保留必要连接参数。内部的 provider 元数据和模型注册表不再暴露给你；Qwen 默认预填的是中国（北京）OpenAI 兼容地址，你也可以改成别的区域。")}</p>
             </div>
 
             {selectedProvider ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_auto] gap-4 items-end">
-                  <Field label="当前品牌">
+                  <Field label={tr("当前品牌")}>
                     <select
                       value={selectedProvider.id}
                       onChange={e => setSelectedProviderId(e.target.value)}
@@ -429,7 +435,7 @@ export default function SettingsPage() {
                     className="inline-flex items-center justify-center gap-1.5 text-xs px-3 py-2 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-200 border border-indigo-500/30 disabled:opacity-60"
                   >
                     <PlayCircle size={12} />
-                    {testingProviderId === selectedProvider.id ? '测试中…' : '联通测试'}
+                    {testingProviderId === selectedProvider.id ? tr("测试中…") : tr("联通测试")}
                   </button>
                 </div>
 
@@ -464,7 +470,7 @@ export default function SettingsPage() {
                 )}
 
                 {selectedProvider.provider_type === 'codex_cli' && (
-                  <Field label="Codex 命令">
+                  <Field label={tr("Codex 命令")}>
                     <input
                       type="text"
                       value={selectedProvider.command || 'codex'}
@@ -484,15 +490,15 @@ export default function SettingsPage() {
                 </p>
               </div>
             ) : (
-              <p className="text-sm text-slate-500">暂无可用 Provider。</p>
+              <p className="text-sm text-slate-500">{tr("暂无可用 Provider。")}</p>
             )}
           </div>
 
           <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-4">
             <div className="mb-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">任务配置</p>
-              <p className="mt-1 text-base font-semibold text-slate-100">模型选择</p>
-              <p className="text-xs text-slate-500 mt-1">主模型、图谱向量和论文精选分别配置。论文精选默认使用 Codex CLI；更换主模型不会改变推荐调用方式。</p>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{tr("任务配置")}</p>
+              <p className="mt-1 text-base font-semibold text-slate-100">{tr("模型选择")}</p>
+              <p className="text-xs text-slate-500 mt-1">{tr("主模型、图谱向量和论文精选分别配置。论文精选默认使用 Codex CLI；更换主模型不会改变推荐调用方式。")}</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3">
@@ -533,18 +539,18 @@ export default function SettingsPage() {
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0">
                         <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                          {task.category} · {TASK_TYPE_LABELS[task.task_type]}
+                          {tr(task.category)} · {TASK_TYPE_LABELS[task.task_type]}
                         </p>
-                        <p className="mt-1 text-[17px] font-semibold tracking-tight text-slate-50">{task.label}</p>
-                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{task.description}</p>
+                        <p className="mt-1 text-[17px] font-semibold tracking-tight text-slate-50">{tr(task.label)}</p>
+                        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">{tr(task.description)}</p>
                       </div>
                       <div className="mt-0.5 shrink-0 rounded-full border border-slate-800 bg-slate-950/40 px-2.5 py-1 text-[10px] font-medium text-slate-400">
-                        {task.category}
+                        {tr(task.category)}
                       </div>
                     </div>
 
                     <div className="rounded-lg border border-slate-800/80 bg-slate-950/30 px-3 py-2 text-xs text-slate-500 mb-3">
-                      系统推荐：<span className="text-slate-300">{recommendedModel?.label || task.recommended_model_id || '未设置'}</span>
+                      {tr("系统推荐：")}<span className="text-slate-300">{recommendedModel?.label || task.recommended_model_id || tr("未设置")}</span>
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-5 gap-3">
@@ -626,7 +632,7 @@ export default function SettingsPage() {
                           className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg text-[13px] text-slate-200 px-3 py-2 disabled:opacity-60 focus:outline-none focus:border-indigo-500/60"
                         >
                           {task.task_type === 'embedding' ? (
-                            <option value="not_applicable">不适用</option>
+                            <option value="not_applicable">{tr("不适用")}</option>
                           ) : (
                             <>
                               <option value="low">low</option>
@@ -638,13 +644,13 @@ export default function SettingsPage() {
                       </Field>
 
                       <div className="sm:col-span-2 2xl:col-span-5 rounded-lg border border-slate-800/80 bg-slate-950/30 px-3 py-2 text-xs text-slate-500 leading-relaxed">
-                        当前路径：<span className="text-slate-300">{providerRouteLabel(currentRoute)}</span>
+                        {tr("当前路径：")}<span className="text-slate-300">{providerRouteLabel(currentRoute)}</span>
                         {' · '}
-                        品牌：<span className="text-slate-300">{providerBrandLabel(providerById[currentBrandProviderId])}</span>
+                        {tr("品牌：")}<span className="text-slate-300">{providerBrandLabel(providerById[currentBrandProviderId])}</span>
                         {currentModelId && (
                           <>
                             {' · '}
-                            模型：<span className="text-slate-300">{modelById[currentModelId]?.upstream_model || currentModelId}</span>
+                            {tr("模型：")}<span className="text-slate-300">{modelById[currentModelId]?.upstream_model || currentModelId}</span>
                           </>
                         )}
                       </div>
@@ -664,33 +670,29 @@ export default function SettingsPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-slate-200 font-medium flex items-center gap-2">
                   <ImageIcon size={13} className="text-slate-500" />
-                  为论文抽取附带首页图像
-                </p>
+                  {tr("为论文抽取附带首页图像")}</p>
                 <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                  首页通常包含标题、作者和摘要，有助于抽取模型更准确地识别元信息。只有绑定到支持视觉输入的模型时才有意义。
-                </p>
+                  {tr("首页通常包含标题、作者和摘要，有助于抽取模型更准确地识别元信息。只有绑定到支持视觉输入的模型时才有意义。")}</p>
                 {selectedPaperExtractModel && !selectedPaperExtractModel.supports_vision && (config.use_first_page_image ?? true) && (
                   <p className="text-xs text-amber-400 mt-2">
-                    当前“论文抽取”绑定的模型未声明支持视觉，首页图像会被忽略。
-                  </p>
+                    {tr("当前“论文抽取”绑定的模型未声明支持视觉，首页图像会被忽略。")}</p>
                 )}
               </div>
             </label>
 
             <p className="text-xs text-slate-500 mt-4 leading-relaxed">
-              `thinking_effort` 当前会作用于 `Responses API` 和 `Codex CLI` 路线；`embedding` 任务不适用，`chat.completions` 型模型会忽略这个参数。
-            </p>
+              {tr("`thinking_effort` 当前会作用于 `Responses API` 和 `Codex CLI` 路线；`embedding` 任务不适用，`chat.completions` 型模型会忽略这个参数。")}</p>
           </div>
         </SettingGroup>
 
-        <SettingGroup title="图谱" description="节点相似度连接阈值">
-          <Field icon={<GitBranch size={14} />} label="相似度阈值" hint="低阈值产生更多连接，高阈值更精确">
+        <SettingGroup title={tr("图谱")} description={tr("节点相似度连接阈值")}>
+          <Field icon={<GitBranch size={14} />} label={tr("相似度阈值")} hint={tr("低阈值产生更多连接，高阈值更精确")}>
             <div>
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setConfig(current => ({ ...current, similarity_threshold: Math.max(0.4, Math.round(((current.similarity_threshold ?? 0.6) - 0.05) * 100) / 100) }))}
                   className="w-7 h-7 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-sm leading-none flex items-center justify-center"
-                  title="减小 0.05"
+                  title={tr("减小 0.05")}
                 >−</button>
                 <div className="relative flex-1 h-7 flex items-center">
                   <input
@@ -711,15 +713,15 @@ export default function SettingsPage() {
                 <button
                   onClick={() => setConfig(current => ({ ...current, similarity_threshold: Math.min(0.9, Math.round(((current.similarity_threshold ?? 0.6) + 0.05) * 100) / 100) }))}
                   className="w-7 h-7 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-sm leading-none flex items-center justify-center"
-                  title="增加 0.05"
+                  title={tr("增加 0.05")}
                 >+</button>
                 <span className="text-base font-mono tabular-nums text-indigo-300 w-12 text-right">
                   {(config.similarity_threshold ?? 0.6).toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between text-[11px] text-slate-600 mt-1.5 px-9">
-                <span>0.40 更多连接</span>
-                <span>0.90 更精确</span>
+                <span>{tr("0.40 更多连接")}</span>
+                <span>{tr("0.90 更精确")}</span>
               </div>
             </div>
           </Field>
@@ -727,11 +729,11 @@ export default function SettingsPage() {
 
         <div className="my-10 flex items-center gap-3">
           <div className="flex-1 h-px bg-slate-800/80" />
-          <span className="text-[10px] tracking-[0.18em] uppercase text-slate-600 font-semibold">维护操作</span>
+          <span className="text-[10px] tracking-[0.18em] uppercase text-slate-600 font-semibold">{tr("维护操作")}</span>
           <div className="flex-1 h-px bg-slate-800/80" />
         </div>
 
-        <SettingGroup title="图谱维护" description="调整阈值或重新处理" defaultExpanded={false}>
+        <SettingGroup title={tr("图谱维护")} description={tr("调整阈值或重新处理")} defaultExpanded={false}>
           {maintenanceNotice && (
             <TaskNotice
               tone={maintenanceNotice.tone}
@@ -743,21 +745,21 @@ export default function SettingsPage() {
                   ? (maintenanceNotice.action === 'rebuild-edges' ? handleRebuildEdges : handleResetGraph)
                   : undefined
               }
-              retryLabel={maintenanceNotice.action === 'rebuild-edges' ? '重试重建' : '重试重置'}
+              retryLabel={maintenanceNotice.action === 'rebuild-edges' ? tr("重试重建") : tr("重试重置")}
             />
           )}
           <ActionRow
-            label="重建相似度边"
-            desc="用当前阈值重新计算节点间的相似边，不调用大模型，免费快速。"
-            buttonLabel={maintenanceBusy === 'rebuild-edges' ? '重建中' : '重建'}
+            label={tr("重建相似度边")}
+            desc={tr("用当前阈值重新计算节点间的相似边，不调用大模型，免费快速。")}
+            buttonLabel={maintenanceBusy === 'rebuild-edges' ? tr("重建中") : tr("重建")}
             icon={maintenanceBusy === 'rebuild-edges' ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             onClick={handleRebuildEdges}
             disabled={maintenanceBusy !== null}
           />
           <ActionRow
-            label="重置图谱"
-            desc="清空自动抽取的知识节点和边，将论文标记为未处理。手动新增的概念会保留；重新处理论文仍会调用大模型。"
-            buttonLabel={maintenanceBusy === 'reset-graph' ? '重置中' : '清空并重置'}
+            label={tr("重置图谱")}
+            desc={tr("清空自动抽取的知识节点和边，将论文标记为未处理。手动新增的概念会保留；重新处理论文仍会调用大模型。")}
+            buttonLabel={maintenanceBusy === 'reset-graph' ? tr("重置中") : tr("清空并重置")}
             icon={maintenanceBusy === 'reset-graph' ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
             destructive
             onClick={handleResetGraph}
@@ -777,6 +779,7 @@ function SettingGroup({
   children: React.ReactNode
   defaultExpanded?: boolean
 }) {
+  useLocale()
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
@@ -793,7 +796,7 @@ function SettingGroup({
               {description && <p className="panel-subtitle">{description}</p>}
             </div>
             <span className="shrink-0 mt-0.5 inline-flex items-center gap-1 text-xs text-slate-400">
-              {expanded ? '收起' : '展开'}
+              {expanded ? tr("收起") : tr("展开")}
               {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </span>
           </div>
@@ -811,6 +814,7 @@ function SettingGroup({
 function Field({
   icon, label, hint, children,
 }: { icon?: React.ReactNode; label: string; hint?: string; children: React.ReactNode }) {
+  useLocale()
   return (
     <div>
       <label className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
@@ -834,6 +838,7 @@ function ActionRow({
   destructive?: boolean
   disabled?: boolean
 }) {
+  useLocale()
   return (
     <div className="flex flex-col gap-4 bg-slate-900/40 border border-slate-800 rounded-xl p-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex-1 min-w-0">

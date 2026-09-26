@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useEffect, useState, useMemo, useRef, useCallback, createContext, useContext } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -103,6 +106,7 @@ interface ReviewPageProps {
 }
 
 export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
+  useLocale()
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<PaperDetail | null>(null)
@@ -365,7 +369,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
 
   const handleReprocess = async () => {
     if (!visibleDetail) return
-    const ok = confirm('确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。')
+    const ok = confirm(tr("确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。"))
     if (!ok) return
 
     setReprocessing(true)
@@ -389,13 +393,13 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
       cancelRawEdit()
       setActionNotice({
         tone: 'info',
-        title: `已提交重新处理：${visibleDetail.title || visibleDetail.filename}`,
-        detail: '论文状态已回退为待处理，后端完成后会在资料库/回顾页更新。',
+        title: tr("已提交重新处理：{0}", { 0: visibleDetail.title || visibleDetail.filename }),
+        detail: tr("论文状态已回退为待处理，后端完成后会在资料库/回顾页更新。"),
       })
     } catch (error) {
       setActionNotice({
         tone: 'error',
-        title: '重新处理启动失败',
+        title: tr("重新处理启动失败"),
         detail: getApiErrorMessage(error),
       })
     } finally {
@@ -442,7 +446,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
       {/* The paper navigator can be collapsed manually to a narrow rail.
           Opening the PDF still hides it completely until the PDF closes. */}
       <aside
-        className={`flex shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[#0f1117] lg:border-b-0 lg:border-r transition-[width,height,border] duration-200 ease-out ${
+        className={`flex shrink-0 flex-col overflow-hidden border-b border-slate-800/80 bg-[var(--surface-0f1117)] lg:border-b-0 lg:border-r transition-[width,height,border] duration-200 ease-out ${
           pdfOpenPaperId != null
             ? 'h-0 w-full lg:h-auto lg:w-0 lg:border-r-0'
             : paperListCollapsed
@@ -455,9 +459,9 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
             <button
               type="button"
               onClick={() => setPaperListCollapsed(false)}
-              title="展开论文导航"
-              aria-label="展开论文导航"
-              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800/70 hover:text-white"
+              title={tr("展开论文导航")}
+              aria-label={tr("展开论文导航")}
+              className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800/70 hover:text-foreground"
             >
               <PanelLeftOpen size={17} />
             </button>
@@ -468,17 +472,17 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
         <div className="p-4 border-b border-slate-800/80 space-y-3">
           <div className="flex items-baseline justify-between gap-3">
             <div>
-              <h2 className="text-lg font-semibold text-white tracking-tight">论文回顾</h2>
-              <p className="text-sm text-slate-500 mt-1">按结构化字段阅读论文摘要、方法与结论。</p>
+              <h2 className="text-lg font-semibold text-foreground tracking-tight">{tr("论文回顾")}</h2>
+              <p className="text-sm text-slate-500 mt-1">{tr("按结构化字段阅读论文摘要、方法与结论。")}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <span className="text-xs text-slate-500 tabular-nums">{filtered.length} / {papers.length}</span>
               <button
                 type="button"
                 onClick={() => setPaperListCollapsed(true)}
-                title="收起论文导航"
-                aria-label="收起论文导航"
-                className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-800/70 hover:text-white"
+                title={tr("收起论文导航")}
+                aria-label={tr("收起论文导航")}
+                className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-slate-800/70 hover:text-foreground"
               >
                 <PanelLeftClose size={15} />
               </button>
@@ -488,7 +492,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
             <input
               type="text"
-              placeholder="搜索标题、作者、文件名"
+              placeholder={tr("搜索标题、作者、文件名")}
               value={search}
               onChange={e => setSearch(e.target.value)}
               className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg text-sm leading-tight text-slate-200 pl-10 pr-3 py-1 focus:outline-none focus:border-indigo-500/60 focus:bg-slate-900 transition-colors placeholder:text-slate-500"
@@ -496,10 +500,10 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
           </div>
           <div className="flex flex-wrap gap-1.5 text-xs">
             {([
-              ['all', '全部'],
-              ['processed', '已处理'],
-              ['pending', '待处理'],
-              ['failed', '失败'],
+              ['all', tr("全部")],
+              ['processed', tr("已处理")],
+              ['pending', tr("待处理")],
+              ['failed', tr("失败")],
             ] as [Filter, string][]).map(([key, label]) => (
               <button
                 key={key}
@@ -523,7 +527,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   groupMode === m ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                {m === 'category' ? '按大类分组' : '按团队分组'}
+                {m === 'category' ? tr("按大类分组") : tr("按团队分组")}
               </button>
             ))}
           </div>
@@ -531,15 +535,15 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
-            <p className="text-sm text-slate-500 p-6 text-center">加载中…</p>
+            <p className="text-sm text-slate-500 p-6 text-center">{tr("加载中…")}</p>
           ) : loadError ? (
             <div className="m-4 p-3 rounded-lg border border-rose-500/40 bg-rose-500/10 text-[12px] text-rose-200">
-              <p className="font-semibold mb-1">论文列表加载失败</p>
+              <p className="font-semibold mb-1">{tr("论文列表加载失败")}</p>
               <p className="font-mono text-[11px] break-all">{loadError}</p>
-              <p className="text-rose-300/80 text-[11px] mt-1.5">检查后端是否在运行：<code className="font-mono">curl http://localhost:8000/api/papers</code></p>
+              <p className="text-rose-300/80 text-[11px] mt-1.5">{tr("检查后端是否在运行：")}<code className="font-mono">curl http://localhost:8000/api/papers</code></p>
             </div>
           ) : filtered.length === 0 ? (
-            <p className="text-sm text-slate-500 p-6 text-center">没有匹配的论文</p>
+            <p className="text-sm text-slate-500 p-6 text-center">{tr("没有匹配的论文")}</p>
           ) : (
             <div className="py-1">
               {groupedFiltered.map(([cat, ps]) => {
@@ -581,11 +585,11 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                                   <LearningStatusBadge status={p.learning_status} compact />
                                   <PaperProcessBadge paper={p} status={processStatus} />
                                   {p.year && <span className="text-slate-500">{p.year}</span>}
-                                  {p.num_pages && <span className="text-slate-600">· {p.num_pages} 页</span>}
+                                  {p.num_pages && <span className="text-slate-600">· {p.num_pages} {tr("页")}</span>}
                                 </div>
                                 {p.error && (
                                   <p className="text-[11px] leading-relaxed text-rose-300 text-safe-wrap">
-                                    最近错误：{summarizePaperError(p.error)}
+                                    {tr("最近错误：")}{' '}{summarizePaperError(p.error)}
                                   </p>
                                 )}
                               </button>
@@ -608,7 +612,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
       <section className="min-h-0 flex-1 min-w-0 overflow-y-auto">
         {!visibleDetail ? (
           <div className="flex h-full min-h-[16rem] items-center justify-center text-slate-500">
-            {papers.length === 0 ? '还没有论文' : '选择左侧论文查看详情'}
+            {papers.length === 0 ? tr("还没有论文") : tr("选择左侧论文查看详情")}
           </div>
         ) : (
           <article className="mx-auto w-full max-w-[112rem] px-4 py-6 fade-in sm:px-6 lg:px-7 lg:py-8 xl:px-8">
@@ -620,24 +624,22 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   <LearningStatusBadge status={visibleDetail.learning_status} />
                   {visibleDetail.processed_at && (
                     <span className="text-xs text-slate-500">
-                      于 {new Date(visibleDetail.processed_at).toLocaleString()} 处理
-                    </span>
+                      {tr("于")}{' '}{new Date(visibleDetail.processed_at).toLocaleString(getFormattingLocale())} {tr("处理")}</span>
                   )}
                   {visibleDetail.processed && (
                     visibleDetail.extraction_model ? (
                       <span
                         className="inline-flex items-center gap-1 rounded-md border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-mono text-indigo-200"
-                        title="本次抽取使用的模型"
+                        title={tr("本次抽取使用的模型")}
                       >
                         {visibleDetail.extraction_model}
                       </span>
                     ) : (
                       <span
                         className="inline-flex items-center gap-1 rounded-md border border-slate-700/60 bg-slate-800/60 px-1.5 py-0.5 text-[11px] text-slate-500"
-                        title="此论文在添加 extraction_model 列之前处理，模型信息未保存。下次重新处理后会记录。"
+                        title={tr("此论文在添加 extraction_model 列之前处理，模型信息未保存。下次重新处理后会记录。")}
                       >
-                        模型未记录
-                      </span>
+                        {tr("模型未记录")}</span>
                     )
                   )}
                 </div>
@@ -648,8 +650,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                       disabled={editingRaw || savingRaw}
                       className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                     >
-                      <Pencil size={10} /> 编辑 Response
-                    </button>
+                      <Pencil size={10} /> {tr("编辑 Response")}</button>
                   )}
                   <button
                     onClick={handleReprocess}
@@ -657,20 +658,18 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:bg-slate-900 hover:text-slate-200 disabled:cursor-not-allowed disabled:text-slate-600"
                   >
                     {reprocessing ? <Loader2 size={10} className="animate-spin" /> : <RotateCw size={10} />}
-                    重新处理
-                  </button>
+                    {tr("重新处理")}</button>
                   <a
                     href={pdfFileUrl(visibleDetail.id)}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
                   >
-                    <ExternalLink size={12} /> 打开 PDF
-                  </a>
+                    <ExternalLink size={12} /> {tr("打开 PDF")}</a>
                 </div>
               </div>
 
-              <h1 className="text-xl font-semibold leading-tight tracking-tight text-white text-safe-wrap sm:text-2xl">
+              <h1 className="text-xl font-semibold leading-tight tracking-tight text-foreground text-safe-wrap sm:text-2xl">
                 {parsed?.title || visibleDetail.title || visibleDetail.filename}
               </h1>
 
@@ -690,13 +689,12 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                 {visibleDetail.num_pages && (
                   <span className="inline-flex items-center gap-1.5">
                     <FileText size={13} className="text-slate-500" />
-                    {visibleDetail.num_pages} 页
-                  </span>
+                    {visibleDetail.num_pages} {tr("页")}</span>
                 )}
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                <span className="text-slate-500">学习状态</span>
+                <span className="text-slate-500">{tr("学习状态")}</span>
                 <LearningStatusControl
                   status={visibleDetail.learning_status}
                   saving={learningSaving}
@@ -711,21 +709,21 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   chip's title attribute so the row stays single-line where
                   possible. */}
               <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
-                <span className="text-slate-500">论文大类</span>
+                <span className="text-slate-500">{tr("论文大类")}</span>
                 <span
                   className="inline-flex items-center gap-1 rounded border border-indigo-500/30 bg-indigo-500/10 px-1.5 py-0.5 text-indigo-200"
                   title={
                     visibleDetail.paper_category_source === 'manual'
-                      ? `人工覆盖${visibleDetail.paper_category_model ? `（模型原值：${visibleDetail.paper_category_model}）` : ''}`
+                      ? tr("人工覆盖{0}", { 0: visibleDetail.paper_category_model ? `（模型原值：${visibleDetail.paper_category_model}）` : '' })
                       : visibleDetail.paper_category_source === 'model'
-                        ? '取自模型输出'
-                        : '未设置'
+                        ? tr("取自模型输出")
+                        : tr("未设置")
                   }
                 >
                   <Layers size={10} />
-                  {visibleDetail.paper_category || parsed?.paper_category || '未设置'}
+                  {visibleDetail.paper_category || parsed?.paper_category || tr("未设置")}
                   {visibleDetail.paper_category_source === 'manual' && (
-                    <span className="ml-0.5 text-[9px] text-indigo-300/70">人工</span>
+                    <span className="ml-0.5 text-[9px] text-indigo-300/70">{tr("人工")}</span>
                   )}
                 </span>
 
@@ -736,7 +734,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   className="ml-auto rounded border border-slate-700/70 bg-slate-950/70 px-1.5 py-0.5 text-[11px] text-slate-200 focus:border-indigo-500/60 focus:outline-none disabled:opacity-50"
                 >
                   <option value={CATEGORY_INHERIT}>
-                    跟随模型（{visibleDetail.paper_category_model || '未设置'}）
+                    {tr("跟随模型（")}{' '}{visibleDetail.paper_category_model || tr("未设置")}）
                   </option>
                   {categoryOptions.map(option => (
                     <option key={option} value={option}>{option}</option>
@@ -745,11 +743,10 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                 <button
                   onClick={saveCategory}
                   disabled={categorySaving}
-                  className="inline-flex items-center gap-1 rounded border border-slate-700/70 bg-slate-950/40 px-1.5 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-900 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex items-center gap-1 rounded border border-slate-700/70 bg-slate-950/40 px-1.5 py-0.5 text-[11px] text-slate-300 transition-colors hover:border-slate-600 hover:bg-slate-900 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {categorySaving ? <Loader2 size={10} className="animate-spin" /> : <Save size={10} />}
-                  保存
-                </button>
+                  {tr("保存")}</button>
                 {categoryError && (
                   <span className="basis-full text-[11px] text-red-300">{categoryError}</span>
                 )}
@@ -758,7 +755,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
               {visibleProcessMeta && (
                 <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
                   <p className="text-[11px] font-medium text-slate-200">
-                    处理阶段：{visibleProcessMeta.label}
+                    {tr("处理阶段：")}{' '}{visibleProcessMeta.label}
                   </p>
                   <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${visibleProcessMeta.stage === 'failed' ? 'text-rose-300' : 'text-slate-400'}`}>
                     {visibleProcessMeta.stage === 'failed'
@@ -774,7 +771,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   title={actionNotice.title}
                   detail={actionNotice.detail}
                   onRetry={actionNotice.tone === 'error' ? () => { void handleReprocess() } : undefined}
-                  retryLabel="重试重新处理"
+                  retryLabel={tr("重试重新处理")}
                   className="mt-3"
                 />
               )}
@@ -801,25 +798,22 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   {visibleDetail.error ? (
                     <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
                       <p className="font-semibold mb-2 flex items-center gap-2">
-                        <XCircle size={14} /> 处理失败
-                      </p>
+                        <XCircle size={14} /> {tr("处理失败")}</p>
                       <p className="break-words leading-relaxed">{visibleDetail.error}</p>
                     </div>
                   ) : !visibleDetail.raw_llm_response ? (
                     <div className="text-sm text-slate-500 py-8 text-center">
-                      该论文尚未处理。回到资料库点击「立即处理」。
-                    </div>
+                      {tr("该论文尚未处理。回到资料库点击「立即处理」。")}</div>
                   ) : parsed ? (
                     <StructuredBody data={parsed} detail={visibleDetail} onSaved={setDetail} />
                   ) : (
                     <div>
-                      <p className="text-sm text-amber-400 mb-2">⚠ 无法解析为 JSON，显示原文</p>
+                      <p className="text-sm text-amber-400 mb-2">{tr("⚠ 无法解析为 JSON，显示原文")}</p>
                       <button
                         onClick={startRawEdit}
                         className="mb-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200 transition-colors hover:bg-amber-500/15"
                       >
-                        <Pencil size={13} /> 编辑并修复 Response
-                      </button>
+                        <Pencil size={13} /> {tr("编辑并修复 Response")}</button>
                       <pre className="text-xs text-slate-300 bg-slate-900/60 rounded-xl p-4 whitespace-pre-wrap break-words font-mono leading-relaxed">
                         {visibleDetail.raw_llm_response}
                       </pre>
@@ -848,7 +842,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                       onNoteAdded={updated => {
                         setDetail(updated)
                         setPapers(prev => prev.map(p => (p.id === updated.id ? updated : p)))
-                        setActionNotice({ tone: 'success', title: '已存为个人笔记' })
+                        setActionNotice({ tone: 'success', title: tr("已存为个人笔记") })
                       }}
                     />
                   </div>
@@ -860,10 +854,9 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
             {visibleDetail.raw_llm_response && (
               <details className="mt-10 border-t border-slate-800 pt-6" open={showRaw} onToggle={e => setShowRaw((e.target as HTMLDetailsElement).open)}>
                 <summary className="text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none">
-                  查看原始模型输出
-                </summary>
+                  {tr("查看原始模型输出")}</summary>
                 <div className="mt-4">
-                  <p className="section-label mb-2">模型原文 JSON</p>
+                  <p className="section-label mb-2">{tr("模型原文 JSON")}</p>
                   <pre className="text-[11px] text-slate-400 bg-slate-900/60 rounded-lg p-3 max-h-96 overflow-auto whitespace-pre-wrap break-words font-mono leading-relaxed">
                     {visibleDetail.raw_llm_response}
                   </pre>
@@ -906,22 +899,22 @@ const LEARNING_STATUS_OPTIONS: {
 }[] = [
   {
     value: 'not_started',
-    label: '未学习',
-    short: '未学',
+    get label() { return tr("未学习") },
+    get short() { return tr("未学") },
     className: 'border-slate-700/70 bg-slate-900/70 text-slate-400',
     activeClassName: 'border-slate-500/50 bg-slate-700/50 text-slate-100',
   },
   {
     value: 'learning',
-    label: '正在学习',
-    short: '学习中',
+    get label() { return tr("正在学习") },
+    get short() { return tr("学习中") },
     className: 'border-cyan-500/30 bg-cyan-500/10 text-cyan-200',
     activeClassName: 'border-cyan-400/60 bg-cyan-500/20 text-cyan-100',
   },
   {
     value: 'completed',
-    label: '学习完成',
-    short: '完成',
+    get label() { return tr("学习完成") },
+    get short() { return tr("完成") },
     className: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
     activeClassName: 'border-emerald-400/60 bg-emerald-500/20 text-emerald-100',
   },
@@ -954,13 +947,14 @@ function learningStatusRowClass(status: PaperLearningStatus, active: boolean): s
 }
 
 function learningStatusTitleClass(status: PaperLearningStatus, active: boolean): string {
-  if (active) return 'text-white font-medium'
+  if (active) return 'text-foreground font-medium'
   if (status === 'learning') return 'text-cyan-50 font-medium'
   if (status === 'completed') return 'text-emerald-50 font-medium'
   return 'text-slate-300'
 }
 
 function LearningStatusIcon({ status, size = 11 }: { status?: string | null; size?: number }) {
+  useLocale()
   const normalized = normalizeLearningStatus(status)
   if (normalized === 'completed') return <CheckCircle2 size={size} />
   if (normalized === 'learning') return <PlayCircle size={size} />
@@ -974,6 +968,7 @@ function LearningStatusBadge({
   status?: string | null
   compact?: boolean
 }) {
+  useLocale()
   const meta = learningStatusMeta(status)
   return (
     <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium ${meta.className}`}>
@@ -992,6 +987,7 @@ function LearningStatusControl({
   saving: boolean
   onChange: (status: PaperLearningStatus) => void
 }) {
+  useLocale()
   const current = normalizeLearningStatus(status)
   return (
     <div className="inline-flex items-center rounded-lg border border-slate-800 bg-slate-950/50 p-0.5">
@@ -1029,12 +1025,13 @@ function FirstPagePreview({
   onOpenPdf: () => void
   onNoteAdded?: (updated: PaperDetail) => void
 }) {
+  useLocale()
   return (
     <div className="space-y-5">
       <PaperChatBox key={paper.id} paper={paper} onNoteAdded={onNoteAdded} />
       <ReviewBlock
         icon={<FileText size={14} />}
-        title="首页预览"
+        title={tr("首页预览")}
         action={
           // Emerald tint to draw the eye — this is the primary "open
           // the PDF for side-by-side reading" entry point and the user
@@ -1042,18 +1039,17 @@ function FirstPagePreview({
           <button
             type="button"
             onClick={onOpenPdf}
-            title="在右侧浮窗内浏览 PDF，可缩放、点击外部关闭并保留位置"
+            title={tr("在右侧浮窗内浏览 PDF，可缩放、点击外部关闭并保留位置")}
             className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-200 transition-colors hover:border-emerald-400/70 hover:bg-emerald-500/20 hover:text-emerald-100"
           >
-            <Maximize2 size={11} /> 展开 PDF
-          </button>
+            <Maximize2 size={11} /> {tr("展开 PDF")}</button>
         }
       >
         <div className="space-y-4">
           <button
             type="button"
             onClick={onOpenPdf}
-            title="点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）"
+            title={tr("点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）")}
             className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-emerald-500/60 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
           >
             <img
@@ -1064,7 +1060,7 @@ function FirstPagePreview({
           </button>
           {keywords.length > 0 && (
             <div>
-              <p className="section-label mb-2">关键词</p>
+              <p className="section-label mb-2">{tr("关键词")}</p>
               <div className="flex flex-wrap gap-1">
                 {keywords.map((k: string, i: number) => (
                   <span key={i} className="chip border border-slate-700/40 bg-slate-800/80 text-slate-400">
@@ -1085,11 +1081,11 @@ function formatRelativeTime(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   const diff = Date.now() - d.getTime()
   const min = Math.floor(diff / 60000)
-  if (min < 1) return '刚刚'
-  if (min < 60) return `${min} 分钟前`
+  if (min < 1) return tr("刚刚")
+  if (min < 60) return tr("{0} 分钟前", { 0: min })
   const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr} 小时前`
-  return d.toLocaleString()
+  if (hr < 24) return tr("{0} 小时前", { 0: hr })
+  return d.toLocaleString(getFormattingLocale())
 }
 
 function countdownTone(days: number | null | undefined): {
@@ -1097,18 +1093,18 @@ function countdownTone(days: number | null | undefined): {
   label: string
 } {
   if (days === null || days === undefined) {
-    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: '尚未开始会话' }
+    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: tr("尚未开始会话") }
   }
   if (days <= 0) {
-    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: '会话已过期' }
+    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: tr("会话已过期") }
   }
   if (days <= 7) {
-    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: `${days} 天后过期` }
+    return { className: 'border-red-500/40 bg-red-500/10 text-red-300', label: tr("{0} 天后过期", { 0: days }) }
   }
   if (days <= 14) {
-    return { className: 'border-amber-500/40 bg-amber-500/10 text-amber-200', label: `${days} 天后过期` }
+    return { className: 'border-amber-500/40 bg-amber-500/10 text-amber-200', label: tr("{0} 天后过期", { 0: days }) }
   }
-  return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: `会话有效 ${days} 天` }
+  return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: tr("会话有效 {0} 天", { 0: days }) }
 }
 
 function chatStatusTone(chat: ChatState): {
@@ -1116,13 +1112,13 @@ function chatStatusTone(chat: ChatState): {
   label: string
 } {
   if (!chat.ready) {
-    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: '处理中' }
+    return { className: 'border-slate-700/70 bg-slate-900 text-slate-400', label: tr("处理中") }
   }
   if (chat.days_remaining === null || chat.days_remaining === undefined) {
     if (chat.messages.length > 0) {
-      return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: '本地会话中' }
+      return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: tr("本地会话中") }
     }
-    return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: '可直接追问' }
+    return { className: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200', label: tr("可直接追问") }
   }
   return countdownTone(chat.days_remaining)
 }
@@ -1157,6 +1153,7 @@ function PaperChatBox({
   paper: PaperDetail
   onNoteAdded?: (updated: PaperDetail) => void
 }) {
+  useLocale()
   const [chat, setChat] = useState<ChatState>(paper.chat)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
@@ -1195,7 +1192,7 @@ function PaperChatBox({
   }
 
   const reset = async () => {
-    if (!confirm('清空本地对话记录并开启新会话？')) return
+    if (!confirm(tr("清空本地对话记录并开启新会话？"))) return
     try {
       const next = await resetPaperChat(paper.id)
       setChat(next)
@@ -1210,7 +1207,7 @@ function PaperChatBox({
     const blocks = parseNoteBlocks(paper.notes)
     blocks.push({
       id: newBlockId(),
-      title: (question || '追问').trim().slice(0, 200),
+      title: (question || tr("追问")).trim().slice(0, 200),
       content: (answer || '').trim(),
     })
     const updated = await updatePaperNotes(paper.id, serializeNoteBlocks(blocks))
@@ -1228,15 +1225,15 @@ function PaperChatBox({
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
             <MessageCircle size={14} />
           </span>
-          <h3 className="min-w-0 text-sm font-semibold tracking-tight text-slate-100">追问这篇论文</h3>
+          <h3 className="min-w-0 text-sm font-semibold tracking-tight text-slate-100">{tr("追问这篇论文")}</h3>
           <div className="ml-auto flex items-center gap-1.5">
-            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${tone.className}`} title={chat.expires_at ? `过期时间 ${new Date(chat.expires_at).toLocaleString()}` : undefined}>
+            <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${tone.className}`} title={chat.expires_at ? tr("过期时间 {0}", { 0: new Date(chat.expires_at).toLocaleString(getFormattingLocale()) }) : undefined}>
               <Timer size={10} /> {tone.label}
             </span>
             <button
               onClick={() => setExpanded(true)}
               disabled={!canChat}
-              title="展开完整对话"
+              title={tr("展开完整对话")}
               className="rounded-md border border-slate-800 bg-slate-950/30 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <Maximize2 size={12} />
@@ -1246,8 +1243,7 @@ function PaperChatBox({
         <div className="px-3 py-3 text-sm sm:px-4">
           {!canChat ? (
             <p className="py-3 text-center text-xs text-slate-500">
-              论文尚未完成处理，处理完成后即可追问。
-            </p>
+              {tr("论文尚未完成处理，处理完成后即可追问。")}</p>
           ) : (
             <div className="space-y-3">
               {user || assistant ? (
@@ -1276,8 +1272,7 @@ function PaperChatBox({
                 </div>
               ) : (
                 <p className="py-3 text-center text-xs text-slate-500">
-                  问我任何关于这篇论文的问题。
-                </p>
+                  {tr("问我任何关于这篇论文的问题。")}</p>
               )}
 
               {error && (
@@ -1293,7 +1288,7 @@ function PaperChatBox({
                 <input
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  placeholder="例如：第 3 节的推导为什么成立？"
+                  placeholder={tr("例如：第 3 节的推导为什么成立？")}
                   disabled={sending}
                   className="min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-xs text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600 disabled:opacity-60"
                 />
@@ -1311,8 +1306,7 @@ function PaperChatBox({
                   onClick={() => setExpanded(true)}
                   className="w-full text-center text-[11px] text-slate-500 transition-colors hover:text-slate-300"
                 >
-                  查看全部 {chat.messages.filter(m => m.role !== 'system').length} 条消息 →
-                </button>
+                  {tr("查看全部")}{' '}{chat.messages.filter(m => m.role !== 'system').length} {tr("条消息 →")}</button>
               )}
             </div>
           )}
@@ -1345,6 +1339,7 @@ function ChatModal({
   onClose: () => void
   onSaveToNote?: (question: string, answer: string) => Promise<void>
 }) {
+  useLocale()
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const tone = chatStatusTone(chat)
@@ -1382,27 +1377,26 @@ function ChatModal({
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#0f1117] shadow-2xl"
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-slate-800 bg-[var(--surface-0f1117)] shadow-2xl"
       >
         <header className="flex items-center gap-2.5 border-b border-slate-800/80 bg-slate-950/40 px-4 py-3">
           <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900 text-slate-400">
             <MessageCircle size={14} />
           </span>
-          <h3 className="text-sm font-semibold text-slate-100">追问这篇论文</h3>
+          <h3 className="text-sm font-semibold text-slate-100">{tr("追问这篇论文")}</h3>
           <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${tone.className}`}>
             <Timer size={10} /> {tone.label}
           </span>
           <div className="ml-auto flex items-center gap-1">
             <button
               onClick={onReset}
-              title="清空本地记录并开启新会话"
+              title={tr("清空本地记录并开启新会话")}
               className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/30 px-2 py-1 text-[11px] text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
             >
-              <RefreshCw size={11} /> 重置会话
-            </button>
+              <RefreshCw size={11} /> {tr("重置会话")}</button>
             <button
               onClick={onClose}
-              title="关闭"
+              title={tr("关闭")}
               className="rounded-md border border-slate-800 bg-slate-950/30 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
             >
               <X size={13} />
@@ -1413,8 +1407,7 @@ function ChatModal({
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
           {chat.messages.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-slate-500">
-              还没有对话。下面输入问题开始追问这篇论文。
-            </div>
+              {tr("还没有对话。下面输入问题开始追问这篇论文。")}</div>
           ) : (
             <ul className="space-y-3">
               {chat.messages.map((m, i) => {
@@ -1431,8 +1424,7 @@ function ChatModal({
               {sending && (
                 <li className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/40 px-3 py-2 text-xs text-slate-400">
-                    <Loader2 size={12} className="animate-spin" /> 正在思考…
-                  </div>
+                    <Loader2 size={12} className="animate-spin" /> {tr("正在思考…")}</div>
                 </li>
               )}
             </ul>
@@ -1451,7 +1443,7 @@ function ChatModal({
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="Enter 发送，Shift+Enter 换行"
+              placeholder={tr("Enter 发送，Shift+Enter 换行")}
               rows={2}
               disabled={sending}
               className="min-h-[2.5rem] w-full flex-1 resize-none rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-sm leading-6 text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600 disabled:opacity-60"
@@ -1462,8 +1454,7 @@ function ChatModal({
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
               {sending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-              发送
-            </button>
+              {tr("发送")}</button>
           </div>
         </div>
       </div>
@@ -1480,6 +1471,7 @@ function SaveToNoteButton({
   onSave: () => Promise<void>
   className?: string
 }) {
+  useLocale()
   const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle')
   const click = async () => {
     if (state !== 'idle') return
@@ -1496,7 +1488,7 @@ function SaveToNoteButton({
     <button
       onClick={click}
       disabled={state === 'saving'}
-      title="把这条问答一键存成个人笔记"
+      title={tr("把这条问答一键存成个人笔记")}
       className={`inline-flex items-center gap-1 text-[11px] transition-colors disabled:opacity-60 ${
         state === 'saved' ? 'text-emerald-300' : 'text-slate-500 hover:text-indigo-300'
       } ${className || ''}`}
@@ -1508,7 +1500,7 @@ function SaveToNoteButton({
       ) : (
         <NotebookPen size={11} />
       )}
-      {state === 'saved' ? '已存为笔记' : '存为笔记'}
+      {state === 'saved' ? tr("已存为笔记") : tr("存为笔记")}
     </button>
   )
 }
@@ -1520,6 +1512,7 @@ function ChatBubble({
   message: ChatMessage
   onSaveToNote?: () => Promise<void>
 }) {
+  useLocale()
   if (message.role === 'system') {
     return (
       <li className="flex justify-center">
@@ -1568,12 +1561,12 @@ function RawResponseEditor({
   onCancel: () => void
   onSave: () => void
 }) {
+  useLocale()
   return (
-    <ReviewBlock icon={<Pencil size={14} />} title="编辑模型 Response">
+    <ReviewBlock icon={<Pencil size={14} />} title={tr("编辑模型 Response")}>
       <div className="space-y-3">
         <p className="text-sm leading-6 text-slate-400">
-          修正 JSON 格式或字段小错误后保存，系统会重新解析这份 response，并重建当前论文的图谱节点。
-        </p>
+          {tr("修正 JSON 格式或字段小错误后保存，系统会重新解析这份 response，并重建当前论文的图谱节点。")}</p>
         {error && (
           <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
             {error}
@@ -1589,18 +1582,16 @@ function RawResponseEditor({
           <button
             onClick={onCancel}
             disabled={saving}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-foreground disabled:cursor-not-allowed disabled:text-slate-600"
           >
-            <X size={14} /> 取消
-          </button>
+            <X size={14} /> {tr("取消")}</button>
           <button
             onClick={onSave}
             disabled={saving || !value.trim()}
             className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-            保存并重建
-          </button>
+            {tr("保存并重建")}</button>
         </div>
       </div>
     </ReviewBlock>
@@ -1616,6 +1607,7 @@ function StructuredBody({
   detail: PaperDetail
   onSaved?: (updated: PaperDetail) => void
 }) {
+  useLocale()
   const principle: PrincipleBlock | null = typeof data.principle === 'string'
     ? { analogy: data.principle }
     : data.principle || null
@@ -1650,8 +1642,7 @@ function StructuredBody({
       {data.core_contribution && (
         <section className="relative overflow-hidden rounded-xl border border-indigo-500/30 bg-gradient-to-br from-indigo-500/15 via-slate-900/40 to-slate-900/30 px-5 py-4 shadow-[0_18px_40px_rgba(49,46,129,0.2)]">
           <div className="flex items-center gap-2 text-[11px] font-semibold tracking-[0.18em] uppercase text-indigo-300">
-            <Zap size={13} /> 核心贡献
-          </div>
+            <Zap size={13} /> {tr("核心贡献")}</div>
           <p className="mt-2.5 text-[15px] leading-8 text-slate-100">
             {data.core_contribution}
           </p>
@@ -1681,7 +1672,7 @@ function StructuredBody({
 
       {/* TL;DR / summary */}
       {data.abstract_summary && (
-        <ReviewBlock icon={<Sparkles size={14} />} title="摘要">
+        <ReviewBlock icon={<Sparkles size={14} />} title={tr("摘要")}>
           <p className="prose-reading text-[14px]">{data.abstract_summary}</p>
         </ReviewBlock>
       )}
@@ -1690,12 +1681,12 @@ function StructuredBody({
       {(data.problem || data.motivation) && (
         <div className="grid gap-4 lg:grid-cols-2">
           {data.problem && (
-            <ReviewBlock icon={<Target size={14} />} title="研究问题">
+            <ReviewBlock icon={<Target size={14} />} title={tr("研究问题")}>
               <p className="leading-7 text-slate-200">{data.problem}</p>
             </ReviewBlock>
           )}
           {data.motivation && (
-            <ReviewBlock icon={<Lightbulb size={14} />} title="研究动机">
+            <ReviewBlock icon={<Lightbulb size={14} />} title={tr("研究动机")}>
               <p className="leading-7 text-slate-200">{data.motivation}</p>
             </ReviewBlock>
           )}
@@ -1704,23 +1695,23 @@ function StructuredBody({
 
       {/* Principle — Feynman-style analogy + data flow */}
       {principle && (principle.analogy || principle.architecture_flow || (principle.key_formulas?.length ?? 0) > 0) && (
-        <ReviewBlock icon={<Lightbulb size={14} />} title="原理解析（费曼式）">
+        <ReviewBlock icon={<Lightbulb size={14} />} title={tr("原理解析（费曼式）")}>
           <div className="space-y-4">
             {principle.analogy && (
               <div>
-                <p className="section-label mb-1.5 text-amber-300/80">通俗比喻</p>
+                <p className="section-label mb-1.5 text-amber-300/80">{tr("通俗比喻")}</p>
                 <p className="prose-reading text-[14px] text-slate-200">{principle.analogy}</p>
               </div>
             )}
             {principle.architecture_flow && (
               <div>
-                <p className="section-label mb-1.5 text-sky-300/80">数据流动</p>
+                <p className="section-label mb-1.5 text-sky-300/80">{tr("数据流动")}</p>
                 <p className="prose-reading text-[14px] text-slate-200">{principle.architecture_flow}</p>
               </div>
             )}
             {Array.isArray(principle.key_formulas) && principle.key_formulas.length > 0 && (
               <div>
-                <p className="section-label mb-2 text-indigo-300/80">关键公式</p>
+                <p className="section-label mb-2 text-indigo-300/80">{tr("关键公式")}</p>
                 <ul className="space-y-2">
                   {principle.key_formulas.map((f, i) => (
                     <FormulaEditor key={i} formula={f} onSave={next => saveFormula(i, next)} />
@@ -1734,26 +1725,26 @@ function StructuredBody({
 
       {/* Innovations — vs previous work */}
       {data.innovations && (data.innovations.previous_work || data.innovations.this_work || data.innovations.why_better) && (
-        <ReviewBlock icon={<GitBranch size={14} />} title="关键创新点">
+        <ReviewBlock icon={<GitBranch size={14} />} title={tr("关键创新点")}>
           <div className="responsive-card-grid">
             {data.innovations.previous_work && (
               <InnovationCard
                 tone="slate"
-                label="以前是怎么做的"
+                label={tr("以前是怎么做的")}
                 text={data.innovations.previous_work}
               />
             )}
             {data.innovations.this_work && (
               <InnovationCard
                 tone="indigo"
-                label="这篇论文怎么做"
+                label={tr("这篇论文怎么做")}
                 text={data.innovations.this_work}
               />
             )}
             {data.innovations.why_better && (
               <InnovationCard
                 tone="emerald"
-                label="为什么更好"
+                label={tr("为什么更好")}
                 text={data.innovations.why_better}
               />
             )}
@@ -1770,7 +1761,7 @@ function StructuredBody({
 
       {/* Experimental gains */}
       {data.experimental_gains && (
-        <ReviewBlock icon={<Award size={14} />} title="实验效果比前人好在哪">
+        <ReviewBlock icon={<Award size={14} />} title={tr("实验效果比前人好在哪")}>
           <p className="prose-reading text-[14px]">{data.experimental_gains}</p>
         </ReviewBlock>
       )}
@@ -1785,7 +1776,7 @@ function StructuredBody({
 
       {/* Historical position */}
       {data.historical_position && (data.historical_position.builds_on || data.historical_position.inspired || data.historical_position.overall) && (
-        <ReviewBlock icon={<History size={14} />} title="背景地位">
+        <ReviewBlock icon={<History size={14} />} title={tr("背景地位")}>
           <div className="space-y-3">
             {data.historical_position.overall && (
               <p className="prose-reading text-[14px] text-slate-200">{data.historical_position.overall}</p>
@@ -1793,13 +1784,13 @@ function StructuredBody({
             <div className="grid gap-3 lg:grid-cols-2">
               {data.historical_position.builds_on && (
                 <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
-                  <p className="section-label mb-1.5 text-slate-400">站在谁的肩上</p>
+                  <p className="section-label mb-1.5 text-slate-400">{tr("站在谁的肩上")}</p>
                   <p className="text-sm leading-7 text-slate-300">{data.historical_position.builds_on}</p>
                 </div>
               )}
               {data.historical_position.inspired && (
                 <div className="rounded-lg border border-slate-800/80 bg-slate-950/35 px-3.5 py-3">
-                  <p className="section-label mb-1.5 text-fuchsia-300/80">启发了谁</p>
+                  <p className="section-label mb-1.5 text-fuchsia-300/80">{tr("启发了谁")}</p>
                   <p className="text-sm leading-7 text-slate-300">{data.historical_position.inspired}</p>
                 </div>
               )}
@@ -1810,7 +1801,7 @@ function StructuredBody({
 
       {/* Limitations */}
       {data.limitations && (
-        <ReviewBlock icon={<AlertTriangle size={14} />} title="这里的坑（局限性）">
+        <ReviewBlock icon={<AlertTriangle size={14} />} title={tr("这里的坑（局限性）")}>
           <p className="prose-reading text-[14px] text-amber-100/90">{data.limitations}</p>
         </ReviewBlock>
       )}
@@ -1819,14 +1810,14 @@ function StructuredBody({
       {data.pytorch_snippet && data.pytorch_snippet.code && (
         <ReviewBlock
           icon={<Code2 size={14} />}
-          title="PyTorch 最简实现"
+          title={tr("PyTorch 最简实现")}
           meta={data.pytorch_snippet.module_name}
         >
           <div className="space-y-3">
             <CodeBlock code={data.pytorch_snippet.code} />
             {data.pytorch_snippet.notes && (
               <p className="text-xs leading-6 text-slate-500">
-                <span className="text-slate-400">笔记：</span>
+                <span className="text-slate-400">{tr("笔记：")}</span>
                 {data.pytorch_snippet.notes}
               </p>
             )}
@@ -1836,7 +1827,7 @@ function StructuredBody({
 
       {/* Key findings */}
       {Array.isArray(data.key_findings) && data.key_findings.length > 0 && (
-        <ReviewBlock icon={<Lightbulb size={14} />} title="关键发现" meta={`${data.key_findings.length}`}>
+        <ReviewBlock icon={<Lightbulb size={14} />} title={tr("关键发现")} meta={`${data.key_findings.length}`}>
           <div className="space-y-2.5">
             {data.key_findings.map((f, i) => (
               <div
@@ -1859,7 +1850,7 @@ function StructuredBody({
 
       {/* Contributions */}
       {Array.isArray(data.contributions) && data.contributions.length > 0 && (
-        <ReviewBlock icon={<Award size={14} />} title="主要贡献" meta={`${data.contributions.length}`}>
+        <ReviewBlock icon={<Award size={14} />} title={tr("主要贡献")} meta={`${data.contributions.length}`}>
           <ol className="space-y-2.5">
             {data.contributions.map((c, i) => {
               const text = typeof c === 'string' ? c : (c.short || c.detail || JSON.stringify(c))
@@ -1880,7 +1871,7 @@ function StructuredBody({
           (findings + contributions) lands first; readers who want
           reproducibility specifics drop down to these sections. */}
       {Array.isArray(data.techniques) && data.techniques.length > 0 && (
-        <ReviewBlock icon={<Wrench size={14} />} title="技术方法" meta={`${data.techniques.length}`}>
+        <ReviewBlock icon={<Wrench size={14} />} title={tr("技术方法")} meta={`${data.techniques.length}`}>
           <div className="responsive-card-grid">
             {data.techniques.map((t, i) => (
               <div
@@ -1893,13 +1884,13 @@ function StructuredBody({
                 </div>
                 {Array.isArray(t.aliases) && t.aliases.length > 0 && (
                   <p className="mt-1 text-xs leading-5 text-slate-500">
-                    <span className="text-slate-600">别名 </span>
+                    <span className="text-slate-600">{tr("别名")}</span>
                     {t.aliases.join(' · ')}
                   </p>
                 )}
                 {Array.isArray(t.builds_on) && t.builds_on.length > 0 && (
                   <p className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-                    <span className="text-slate-600">基于</span>
+                    <span className="text-slate-600">{tr("基于")}</span>
                     {t.builds_on.map((b, j) => (
                       <span key={j} className="rounded-md border border-slate-700/70 bg-slate-900 px-2 py-0.5 text-[11px] text-emerald-200/80">
                         {b}
@@ -1917,7 +1908,7 @@ function StructuredBody({
         (Array.isArray(data.baselines) && data.baselines.length)) && (
         <div className="grid gap-4 lg:grid-cols-2">
           {Array.isArray(data.datasets) && data.datasets.length > 0 && (
-            <ReviewBlock icon={<Database size={14} />} title="数据集" meta={`${data.datasets.length}`}>
+            <ReviewBlock icon={<Database size={14} />} title={tr("数据集")} meta={`${data.datasets.length}`}>
               <ul className="space-y-2.5">
                 {data.datasets.map((d, i) => {
                   const name = typeof d === 'string' ? d : d.name
@@ -1935,7 +1926,7 @@ function StructuredBody({
             </ReviewBlock>
           )}
           {Array.isArray(data.baselines) && data.baselines.length > 0 && (
-            <ReviewBlock icon={<Swords size={14} />} title="对比基线" meta={`${data.baselines.length}`}>
+            <ReviewBlock icon={<Swords size={14} />} title={tr("对比基线")} meta={`${data.baselines.length}`}>
               <div className="flex flex-wrap gap-2">
                 {data.baselines.map((b, i) => (
                   <span key={i} className="rounded-md border border-slate-700/70 bg-slate-950/35 px-2.5 py-1 text-sm font-medium text-pink-200">
@@ -1950,7 +1941,7 @@ function StructuredBody({
 
       {/* Generated nodes */}
       {detail.knowledge_nodes.length > 0 && (
-        <ReviewBlock icon={<BookOpen size={14} />} title="生成的图谱节点" meta={`${detail.knowledge_nodes.length}`}>
+        <ReviewBlock icon={<BookOpen size={14} />} title={tr("生成的图谱节点")} meta={`${detail.knowledge_nodes.length}`}>
           <div className="flex flex-wrap gap-2">
             {detail.knowledge_nodes.map(n => (
               <span
@@ -1972,6 +1963,7 @@ function StructuredBody({
 function InnovationCard({
   tone, label, text,
 }: { tone: 'slate' | 'indigo' | 'emerald'; label: string; text: string }) {
+  useLocale()
   const styles = {
     slate:   'border-slate-700/70 bg-slate-950/40 text-slate-300',
     indigo:  'border-indigo-500/30 bg-indigo-500/10 text-indigo-100',
@@ -1991,6 +1983,7 @@ function InnovationCard({
 }
 
 function CodeBlock({ code }: { code: string }) {
+  useLocale()
   const [copied, setCopied] = useState(false)
   const onCopy = async () => {
     try {
@@ -2008,7 +2001,7 @@ function CodeBlock({ code }: { code: string }) {
         className="absolute right-2 top-2 inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/80 px-2 py-1 text-[11px] leading-none text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200"
       >
         {copied ? <Check size={11} /> : <Copy size={11} />}
-        {copied ? '已复制' : '复制'}
+        {copied ? tr("已复制") : tr("复制")}
       </button>
       <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-3 pt-10 font-mono text-[12px] leading-6 text-slate-200 sm:px-4 sm:pt-3 sm:pr-20">
         <code>{code}</code>
@@ -2028,6 +2021,7 @@ function ReviewBlock({
   action?: React.ReactNode
   children: React.ReactNode
 }) {
+  useLocale()
   return (
     <section className="overflow-hidden rounded-xl border border-slate-800/80 bg-slate-900/35 shadow-[0_12px_28px_rgba(2,6,23,0.16)]">
       <div className="flex min-h-12 items-center gap-2.5 border-b border-slate-800/70 bg-slate-950/25 px-3 py-2.5 sm:px-4">
@@ -2054,6 +2048,7 @@ function FormulaEditor({
   formula: { name?: string; formula?: string; plain?: string }
   onSave: (next: { name?: string; formula?: string; plain?: string }) => Promise<void>
 }) {
+  useLocale()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
   const [latex, setLatex] = useState('')
@@ -2096,7 +2091,7 @@ function FormulaEditor({
           )}
           <button
             onClick={startEdit}
-            title="编辑公式"
+            title={tr("编辑公式")}
             className="shrink-0 rounded p-1 text-slate-500 opacity-0 transition-opacity hover:bg-slate-800/60 hover:text-indigo-200 group-hover:opacity-100"
           >
             <Pencil size={12} />
@@ -2113,47 +2108,46 @@ function FormulaEditor({
       <input
         value={name}
         onChange={e => setName(e.target.value)}
-        placeholder="公式名称（可空）"
+        placeholder={tr("公式名称（可空）")}
         className="w-full rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-xs font-semibold text-indigo-100 focus:border-indigo-500/60 focus:outline-none"
       />
       <textarea
         value={latex}
         onChange={e => setLatex(e.target.value)}
         rows={2}
-        placeholder="LaTeX 公式，例如 z = E(x), \hat{x} = D(z)"
+        placeholder={tr("LaTeX 公式，例如 z = E(x), \\hat{x} = D(z)")}
         className="w-full resize-y rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 font-mono text-[12.5px] leading-6 text-slate-100 focus:border-indigo-500/60 focus:outline-none"
       />
       <div>
-        <p className="mb-0.5 text-[10.5px] uppercase tracking-wider text-slate-500">实时预览</p>
+        <p className="mb-0.5 text-[10.5px] uppercase tracking-wider text-slate-500">{tr("实时预览")}</p>
         {latex.trim() ? (
           <FormulaDisplay formula={latex} />
         ) : (
-          <p className="text-[11px] text-slate-600">（输入 LaTeX 后这里实时渲染；渲染失败会原样显示，方便排错）</p>
+          <p className="text-[11px] text-slate-600">{tr("（输入 LaTeX 后这里实时渲染；渲染失败会原样显示，方便排错）")}</p>
         )}
       </div>
       <textarea
         value={plain}
         onChange={e => setPlain(e.target.value)}
         rows={2}
-        placeholder="通俗解释（可空）"
+        placeholder={tr("通俗解释（可空）")}
         className="w-full resize-y rounded-md border border-slate-700 bg-slate-900/70 px-2.5 py-1.5 text-[13px] leading-6 text-slate-200 focus:border-indigo-500/60 focus:outline-none"
       />
-      {err && <p className="text-[11px] text-rose-300">保存失败：{err}</p>}
+      {err && <p className="text-[11px] text-rose-300">{tr("保存失败：")}{' '}{err}</p>}
       <div className="flex items-center justify-end gap-2">
         <button
           onClick={() => setEditing(false)}
           disabled={saving}
           className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-50"
         >
-          <X size={12} /> 取消
-        </button>
+          <X size={12} /> {tr("取消")}</button>
         <button
           onClick={save}
           disabled={saving}
           className="inline-flex items-center gap-1 rounded-md bg-indigo-500 px-3 py-1 text-[12px] font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
         >
           {saving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-          {saving ? '保存中…' : '保存'}
+          {saving ? tr("保存中…") : tr("保存")}
         </button>
       </div>
     </li>
@@ -2161,6 +2155,7 @@ function FormulaEditor({
 }
 
 function FormulaDisplay({ formula }: { formula: string }) {
+  useLocale()
   const normalized = useMemo(() => normalizeFormula(formula), [formula])
   const rendered = useMemo(() => {
     if (!normalized) return null
@@ -2260,6 +2255,7 @@ function NotesSection({
   paper: PaperDetail
   onUpdate: (paper: PaperDetail) => void
 }) {
+  useLocale()
   const [blocks, setBlocks] = useState<NoteBlockData[]>(() => parseNoteBlocks(paper.notes))
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftTitle, setDraftTitle] = useState('')
@@ -2330,7 +2326,7 @@ function NotesSection({
   }
 
   const deleteBlock = async (id: string) => {
-    if (!confirm('确定删除这个笔记块吗？')) return
+    if (!confirm(tr("确定删除这个笔记块吗？"))) return
     const next = blocks.filter(b => b.id !== id)
     const ok = await persist(next)
     if (ok && editingId === id) {
@@ -2342,14 +2338,13 @@ function NotesSection({
   return (
     <ReviewBlock
       icon={<NotebookPen size={14} />}
-      title="个人笔记"
+      title={tr("个人笔记")}
       meta={blocks.length > 0 ? `${blocks.length}` : undefined}
     >
       <div className="space-y-3">
         {blocks.length === 0 && (
           <p className="inline-flex items-center gap-1.5 text-sm text-slate-500">
-            <Eye size={13} /> 还没有笔记。可以按主题分块，每块只聚焦一个想法。
-          </p>
+            <Eye size={13} /> {tr("还没有笔记。可以按主题分块，每块只聚焦一个想法。")}</p>
         )}
 
         {blocks.map(block => (
@@ -2376,8 +2371,7 @@ function NotesSection({
           disabled={editingId !== null || saving}
           className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-700/70 bg-slate-950/30 px-3 py-2 text-sm text-slate-400 transition-colors hover:border-indigo-500/50 hover:bg-indigo-500/5 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-slate-700/70 disabled:hover:bg-slate-950/30 disabled:hover:text-slate-400"
         >
-          <Plus size={13} /> 新增笔记块
-        </button>
+          <Plus size={13} /> {tr("新增笔记块")}</button>
       </div>
     </ReviewBlock>
   )
@@ -2402,6 +2396,7 @@ function NoteBlockCard({
   onSave: () => void
   onDelete: () => void
 }) {
+  useLocale()
   if (editing) {
     return (
       <NoteBlockEditor
@@ -2431,7 +2426,7 @@ function NoteBlockCard({
           <button
             onClick={onStartEdit}
             disabled={locked}
-            title="编辑"
+            title={tr("编辑")}
             className="rounded-md border border-slate-800 bg-slate-950/50 p-1 text-slate-400 transition-colors hover:border-slate-700 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Pencil size={11} />
@@ -2439,7 +2434,7 @@ function NoteBlockCard({
           <button
             onClick={onDelete}
             disabled={locked}
-            title="删除"
+            title={tr("删除")}
             className="rounded-md border border-slate-800 bg-slate-950/50 p-1 text-slate-400 transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Trash2 size={11} />
@@ -2449,7 +2444,7 @@ function NoteBlockCard({
       {hasContent ? (
         <MarkdownView source={block.content} />
       ) : (
-        <p className="text-sm italic text-slate-600">（空白笔记）</p>
+        <p className="text-sm italic text-slate-600">{tr("（空白笔记）")}</p>
       )}
     </div>
   )
@@ -2468,6 +2463,7 @@ function NoteBlockEditor({
   onCancel: () => void
   onSave: () => void
 }) {
+  useLocale()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -2559,14 +2555,14 @@ function NoteBlockEditor({
       )}
       {uploadError && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm leading-6 text-red-200">
-          图片上传失败：{uploadError}
+          {tr("图片上传失败：")}{' '}{uploadError}
         </div>
       )}
       <input
         type="text"
         value={draftTitle}
         onChange={e => onDraftTitleChange(e.target.value)}
-        placeholder="标题（可选）"
+        placeholder={tr("标题（可选）")}
         className="w-full rounded-md border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-sm text-slate-200 outline-none transition-colors focus:border-indigo-500/60 placeholder:text-slate-600"
       />
       <div className="relative">
@@ -2580,7 +2576,7 @@ function NoteBlockEditor({
           onDragLeave={onDragLeave}
           spellCheck={false}
           autoFocus
-          placeholder="用 Markdown 写下这块笔记的内容；可直接粘贴或拖入截图…"
+          placeholder={tr("用 Markdown 写下这块笔记的内容；可直接粘贴或拖入截图…")}
           className={`min-h-[14rem] w-full resize-y rounded-md border bg-slate-950/60 px-3 py-2.5 font-mono text-xs leading-6 text-slate-200 outline-none transition-colors placeholder:text-slate-600 ${
             dragOver
               ? 'border-indigo-400 ring-2 ring-indigo-500/30'
@@ -2589,37 +2585,32 @@ function NoteBlockEditor({
         />
         {dragOver && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-indigo-500/5 text-xs font-medium text-indigo-200">
-            松开插入图片
-          </div>
+            {tr("松开插入图片")}</div>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <p className="mr-auto text-[11px] leading-5 text-slate-500">
           {uploading ? (
             <span className="inline-flex items-center gap-1 text-indigo-300">
-              <Loader2 size={10} className="animate-spin" /> 正在上传图片…
-            </span>
+              <Loader2 size={10} className="animate-spin" /> {tr("正在上传图片…")}</span>
           ) : (
             <span className="inline-flex items-center gap-1">
-              <FileText size={10} /> 支持粘贴 / 拖入图片
-            </span>
+              <FileText size={10} /> {tr("支持粘贴 / 拖入图片")}</span>
           )}
         </p>
         <button
           onClick={onCancel}
           disabled={saving}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white disabled:cursor-not-allowed disabled:text-slate-600"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-foreground disabled:cursor-not-allowed disabled:text-slate-600"
         >
-          <X size={13} /> 取消
-        </button>
+          <X size={13} /> {tr("取消")}</button>
         <button
           onClick={onSave}
           disabled={saving || uploading}
           className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
         >
           {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
-          保存
-        </button>
+          {tr("保存")}</button>
       </div>
     </div>
   )
@@ -2641,6 +2632,7 @@ function useLightbox(): LightboxAPI | null {
 }
 
 function LightboxProvider({ children }: { children: React.ReactNode }) {
+  useLocale()
   const [state, setState] = useState<{ src: string; alt: string } | null>(null)
 
   const open = useCallback((src: string, alt?: string) => {
@@ -2667,6 +2659,7 @@ function clampScale(v: number): number {
 }
 
 function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useLocale()
   const [scale, setScale] = useState(1)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -2713,29 +2706,29 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
         onClick={e => e.stopPropagation()}
       >
         <span className="text-xs text-slate-500">
-          {alt ? <span className="text-slate-300">{alt}</span> : '图片'}
+          {alt ? <span className="text-slate-300">{alt}</span> : tr("图片")}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <button
             onClick={zoomOut}
             disabled={scale <= MIN_SCALE}
-            title="缩小 (-)"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            title={tr("缩小 (-)")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ZoomOut size={14} />
           </button>
           <button
             onClick={reset}
-            title="重置 (0)"
-            className="inline-flex h-8 min-w-14 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 px-2 text-xs tabular-nums text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+            title={tr("重置 (0)")}
+            className="inline-flex h-8 min-w-14 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 px-2 text-xs tabular-nums text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground"
           >
             {pct}%
           </button>
           <button
             onClick={zoomIn}
             disabled={scale >= MAX_SCALE}
-            title="放大 (+)"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            title={tr("放大 (+)")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ZoomIn size={14} />
           </button>
@@ -2744,21 +2737,21 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
             target="_blank"
             rel="noreferrer"
             onClick={e => e.stopPropagation()}
-            title="在新标签页打开原图"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+            title={tr("在新标签页打开原图")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground"
           >
             <ExternalLink size={14} />
           </a>
           <button
             onClick={reset}
-            title="适合窗口"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-white"
+            title={tr("适合窗口")}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-slate-700 hover:text-foreground"
           >
             <Minimize size={14} />
           </button>
           <button
             onClick={onClose}
-            title="关闭 (Esc)"
+            title={tr("关闭 (Esc)")}
             className="ml-1 inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-950/40 text-slate-300 transition-colors hover:border-red-500/60 hover:text-red-200"
           >
             <X size={14} />
@@ -2788,13 +2781,13 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
         className="border-t border-slate-800/80 bg-slate-950/70 px-4 py-1.5 text-center text-[11px] text-slate-500"
         onClick={e => e.stopPropagation()}
       >
-        Shift + 滚轮缩放 · + / - 键缩放 · 0 重置 · Esc 关闭
-      </footer>
+        {tr("Shift + 滚轮缩放 · + / - 键缩放 · 0 重置 · Esc 关闭")}</footer>
     </div>
   )
 }
 
 function MarkdownView({ source }: { source: string }) {
+  useLocale()
   const lightbox = useLightbox()
   return (
     <div className="markdown-notes text-sm leading-7 text-slate-200">
@@ -2823,5 +2816,5 @@ function MarkdownView({ source }: { source: string }) {
 
 function getApiErrorMessage(error: unknown): string {
   const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
-  return apiError.response?.data?.detail || apiError.message || '操作失败'
+  return apiError.response?.data?.detail || apiError.message || tr("操作失败")
 }

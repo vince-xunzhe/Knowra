@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 /**
  * 云同步 — Settings sub-panel.
  *
@@ -23,6 +26,7 @@ import { getLastSyncAt } from '../api/cloud'
 type Mode = 'signin' | 'signup'
 
 export default function CloudSyncSection() {
+  useLocale()
   const auth = useCloudAuth()
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
@@ -41,7 +45,7 @@ export default function CloudSyncSection() {
         const session = await auth.signUp(email.trim(), password)
         setPassword('')
         if (!session) {
-          setInfo('注册成功，请到邮箱查收确认邮件后再登录。')
+          setInfo(tr("注册成功，请到邮箱查收确认邮件后再登录。"))
           setMode('signin')
         }
       }
@@ -64,10 +68,9 @@ export default function CloudSyncSection() {
         <div className="flex items-start gap-2">
           <CloudCog size={16} className="text-indigo-300 mt-0.5 shrink-0" />
           <div className="min-w-0">
-            <p className="text-base font-semibold text-slate-100">云端连接</p>
+            <p className="text-base font-semibold text-slate-100">{tr("云端连接")}</p>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              默认已连接到 Knowra 云端，直接登录即可。桌面端把抽取结果同步到云后端，移动端只读消费；PDF 仍只留本机，OpenAI key 也只在本机使用、不上传。
-            </p>
+              {tr("默认已连接到 Knowra 云端，直接登录即可。桌面端把抽取结果同步到云后端，移动端只读消费；PDF 仍只留本机，OpenAI key 也只在本机使用、不上传。")}</p>
           </div>
         </div>
 
@@ -77,15 +80,14 @@ export default function CloudSyncSection() {
           className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200 transition-colors"
         >
           {showAdvanced ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-          高级：自定义云端连接（自建后端时才需要）
-        </button>
+          {tr("高级：自定义云端连接（自建后端时才需要）")}</button>
 
         {showAdvanced && (
           <div className="space-y-4 pt-1">
             <FieldRow
               icon={<Globe size={14} />}
               label="Supabase URL"
-              hint="留空即用内置默认值"
+              hint={tr("留空即用内置默认值")}
               value={auth.config.supabaseUrl}
               placeholder="https://xxxxx.supabase.co"
               onChange={v => auth.updateConfig({ supabaseUrl: v })}
@@ -93,7 +95,7 @@ export default function CloudSyncSection() {
             <FieldRow
               icon={<KeyRound size={14} />}
               label="Supabase anon key"
-              hint="Settings → API → Project API keys → anon public（不是 service_role）"
+              hint={tr("Settings → API → Project API keys → anon public（不是 service_role）")}
               value={auth.config.supabaseAnonKey}
               placeholder="eyJ..."
               type="password"
@@ -101,14 +103,14 @@ export default function CloudSyncSection() {
             />
             <FieldRow
               icon={<CloudCog size={14} />}
-              label="云后端 URL"
-              hint="部署在 Fly.io 等的 FastAPI cloud；不含末尾斜杠。"
+              label={tr("云后端 URL")}
+              hint={tr("部署在 Fly.io 等的 FastAPI cloud；不含末尾斜杠。")}
               value={auth.config.baseUrl}
               placeholder="https://knowra-cloud.fly.dev"
               onChange={v => auth.updateConfig({ baseUrl: v })}
             />
             {!auth.configured && (
-              <p className="text-xs text-amber-300/90">三项都填好后才能登录与同步。</p>
+              <p className="text-xs text-amber-300/90">{tr("三项都填好后才能登录与同步。")}</p>
             )}
           </div>
         )}
@@ -133,13 +135,12 @@ export default function CloudSyncSection() {
                 className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg bg-slate-800/70 hover:bg-slate-700 text-slate-200 border border-slate-700/50"
               >
                 <LogOut size={12} />
-                登出
-              </button>
+                {tr("登出")}</button>
             </div>
             <div className="flex items-center gap-4 text-[11px] text-slate-500 pt-1 border-t border-slate-800/60">
               <span className="inline-flex items-center gap-1.5">
                 <RefreshCw size={11} />
-                上次同步：{lastSyncAt ? new Date(lastSyncAt).toLocaleString() : '从未'}
+                {tr("上次同步：")}{' '}{lastSyncAt ? new Date(lastSyncAt).toLocaleString(getFormattingLocale()) : tr("从未")}
               </span>
             </div>
           </div>
@@ -158,7 +159,7 @@ export default function CloudSyncSection() {
                         : 'text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    {m === 'signin' ? '登录' : '注册'}
+                    {m === 'signin' ? tr("登录") : tr("注册")}
                   </button>
                 ))}
               </div>
@@ -166,7 +167,7 @@ export default function CloudSyncSection() {
 
             <FieldRow
               icon={<Mail size={14} />}
-              label="邮箱"
+              label={tr("邮箱")}
               value={email}
               placeholder="you@example.com"
               type="email"
@@ -174,9 +175,9 @@ export default function CloudSyncSection() {
             />
             <FieldRow
               icon={<KeyRound size={14} />}
-              label="密码"
+              label={tr("密码")}
               value={password}
-              placeholder="至少 6 位"
+              placeholder={tr("至少 6 位")}
               type="password"
               onChange={setPassword}
             />
@@ -191,8 +192,8 @@ export default function CloudSyncSection() {
             >
               <LogIn size={14} />
               {mode === 'signin'
-                ? (auth.signingIn ? '登录中…' : '登录')
-                : (auth.signingUp ? '注册中…' : '注册')}
+                ? (auth.signingIn ? tr("登录中…") : tr("登录"))
+                : (auth.signingUp ? tr("注册中…") : tr("注册"))}
             </button>
           </form>
         )}
@@ -212,6 +213,7 @@ function FieldRow({
   type?: 'text' | 'password' | 'email'
   onChange: (v: string) => void
 }) {
+  useLocale()
   return (
     <div>
       <label className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">

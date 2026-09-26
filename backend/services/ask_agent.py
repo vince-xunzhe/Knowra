@@ -19,6 +19,8 @@ trace the UI can fold open for debugging.
 """
 from __future__ import annotations
 
+from presentation_preferences import response_instructions
+
 import json
 import logging
 import re
@@ -495,11 +497,13 @@ def _run_local_retrieval_agent(
             speaker = "用户" if role == "user" else "助手"
             history_lines.append(f"{speaker}: {content}")
 
-    user_prompt = (
+    user_prompt = response_instructions(
         "请基于下面提供的本地知识库材料回答问题。\n"
         "先综合 index、搜索结果和读到的 wiki 文件，再给出中文 markdown 答案。\n"
         "如果材料不足，请明确说明知识库里暂无足够材料，不要编造。\n"
-        "答案末尾必须包含 `## 📚 引用来源`，只列出你在材料区真正读到的文件名。\n\n"
+        "答案末尾必须包含 `## 📚 引用来源`，只列出你在材料区真正读到的文件名。\n\n",
+        cfg.get("prompt_locale", "zh"),
+    ) + (
         f"[历史对话]\n{chr(10).join(history_lines) or '[无历史对话]'}\n\n"
         f"[当前问题]\n{question}\n\n"
         f"[index.md]\n{index_text}\n\n"
@@ -509,7 +513,7 @@ def _run_local_retrieval_agent(
     final_answer = call_text_model(
         cfg,
         model_id=model,
-        system=LOCAL_ASK_SYSTEM_PROMPT,
+        system=response_instructions(LOCAL_ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
         user=user_prompt,
         reasoning_effort=reasoning_effort,
         max_tokens=2600,
@@ -596,7 +600,7 @@ def _run_ask_agent_inner(
             response = track_call(
                 lambda: client.responses.create(
                     model=model,
-                    instructions=ASK_SYSTEM_PROMPT,
+                    instructions=response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
                     input=next_input,
                     tools=RESPONSES_TOOLS,
                     tool_choice="auto",
@@ -658,7 +662,7 @@ def _run_ask_agent_inner(
             log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
             wrap_kwargs = {
                 "model": model,
-                "instructions": ASK_SYSTEM_PROMPT,
+                "instructions": response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
                 "input": [
                     {
                         "role": "user",
@@ -688,7 +692,7 @@ def _run_ask_agent_inner(
             )
             final_answer = _extract_responses_text(wrap_up)
     else:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": ASK_SYSTEM_PROMPT}]
+        messages: list[dict[str, Any]] = [{"role": "system", "content": response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh"))}]
         messages.extend(_history_messages(history))
         messages.append({"role": "user", "content": question})
 

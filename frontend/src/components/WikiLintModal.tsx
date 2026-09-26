@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useCallback, useEffect, useState } from 'react'
 import {
   X,
@@ -46,6 +48,7 @@ interface Props {
  * The durable artifact is data/wiki/lint-report.md (viewable in Obsidian).
  */
 export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept }: Props) {
+  useLocale()
   const [status, setStatus] = useState<LintReportStatus | null>(null)
   const { job, result, start, dismissNotification } = useWikiLint()
   const [submitting, setSubmitting] = useState(false)
@@ -219,14 +222,14 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
 
   return (
     <div className="fixed inset-0 z-40 bg-black/55 backdrop-blur-sm flex items-center justify-center p-6">
-      <div className="w-full max-w-3xl max-h-[86vh] bg-[#0d1016] border border-slate-800 rounded-xl shadow-2xl flex flex-col">
+      <div className="w-full max-w-3xl max-h-[86vh] bg-[var(--surface-0d1016)] border border-slate-800 rounded-xl shadow-2xl flex flex-col">
         <header className="px-5 py-3 border-b border-slate-800/80 flex items-center gap-2">
           <Stethoscope size={14} className="text-indigo-300" />
-          <h2 className="text-[13px] font-semibold text-white">Wiki 健康检查</h2>
+          <h2 className="text-[13px] font-semibold text-foreground">{tr("Wiki 健康检查")}</h2>
           {result && (
             <span className="text-[10.5px] text-slate-500">
-              扫描 {result.counts.concepts_scanned} 概念 · 待充实{' '}
-              {result.counts.stubs} · 可合并 {result.counts.merges} · 待建概念{' '}
+              {tr("扫描")}{' '}{result.counts.concepts_scanned} {tr("概念 · 待充实")}{' '}{' '}
+              {result.counts.stubs} {tr("· 可合并")}{' '}{result.counts.merges} {tr("· 待建概念")}{' '}{' '}
               {result.counts.missing_crosscut}
             </span>
           )}
@@ -249,7 +252,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
             ) : (
               <RefreshCw size={11} />
             )}
-            {submitting ? '正在提交…' : running ? '后台检查中…' : '运行检查'}
+            {submitting ? tr("正在提交…") : running ? tr("后台检查中…") : tr("运行检查")}
           </button>
           <label className="inline-flex items-center gap-1.5 text-slate-400 cursor-pointer">
             <input
@@ -259,18 +262,17 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
               onChange={e => setUseLlm(e.target.checked)}
               className="accent-indigo-500"
             />
-            调用 Agent 判定（关掉则只跑规则层）
-          </label>
+            {tr("调用 Agent 判定（关掉则只跑规则层）")}</label>
           {status?.exists && (
             <span className="ml-auto text-[10.5px] text-slate-600">
-              报告：{status.rel_path}
+              {tr("报告：")}{' '}{status.rel_path}
             </span>
           )}
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5 text-[12px]">
-          {running && <p className="text-indigo-200">{job?.phase || '正在提交检查'}。关闭窗口后检查会继续，可自由浏览其他页面。</p>}
-          {job?.error && <p role="alert" className="text-amber-300">{job.status === 'warning' ? '规则检查已完成，Agent 判定未完成：' : '检查失败：'}{job.error}</p>}
+          {running && <p className="text-indigo-200">{job?.phase || tr("正在提交检查")}{tr("。关闭窗口后检查会继续，可自由浏览其他页面。")}</p>}
+          {job?.error && <p role="alert" className="text-amber-300">{job.status === 'warning' ? tr("规则检查已完成，Agent 判定未完成：") : tr("检查失败：")}{job.error}</p>}
           {error && (
             <div className="px-3 py-2 rounded-lg border border-rose-500/40 bg-rose-500/10 text-rose-200">
               {error}
@@ -280,10 +282,9 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
           {!result && !running && (
             <div className="text-center text-slate-500 py-12">
               <Stethoscope size={20} className="mx-auto text-indigo-400/60 mb-3" />
-              <p>点「运行检查」扫描存量 wiki 的内容健康度。</p>
+              <p>{tr("点「运行检查」扫描存量 wiki 的内容健康度。")}</p>
               <p className="text-[11px] text-slate-600 mt-1">
-                规则层（待充实 / 相似合并 / 待建概念）零 token；Agent 判定一次调用。
-              </p>
+                {tr("规则层（待充实 / 相似合并 / 待建概念）零 token；Agent 判定一次调用。")}</p>
             </div>
           )}
 
@@ -291,9 +292,9 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
             <>
               {/* Merge candidates — most actionable, show first */}
               <Section
-                title="可合并概念对"
+                title={tr("可合并概念对")}
                 count={result.merges.length}
-                empty="没有发现高相似的概念对"
+                empty={tr("没有发现高相似的概念对")}
               >
                 {result.merges.map(m => {
                   const jm = mergeJudgeByPair.get(`${m.a_id}:${m.b_id}`)
@@ -309,13 +310,12 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                         <span className="text-slate-600">⇆</span>
                         <span className="text-slate-200">{m.b_title}</span>
                         <span className="text-[10.5px] text-slate-500 tabular-nums">
-                          cos={m.cosine} · 共享 {m.paper_overlap} 篇
-                        </span>
+                          cos={m.cosine} {tr("· 共享")}{' '}{m.paper_overlap} {tr("篇")}</span>
                       </div>
                       {jm && (
                         <p className="mt-1 text-[11px] text-slate-400">
-                          {jm.should_merge ? '✅ 建议合并' : '➖ 暂不合并'}
-                          {jm.keep ? ` · 保留 #${jm.keep}` : ''} — {jm.reason}
+                          {jm.should_merge ? tr("✅ 建议合并") : tr("➖ 暂不合并")}
+                          {jm.keep ? tr(" · 保留 #{0}", { 0: jm.keep }) : ''} — {jm.reason}
                         </p>
                       )}
                       {!isDone ? (
@@ -326,26 +326,25 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                               onClick={() => handleRejectDup(m.a_id, m.b_id, key)}
                               icon={<Trash2 size={10} />}
                             >
-                              保留「{m.a_title}」· 淘汰「{m.b_title}」
+                              {tr("保留「")}{' '}{m.a_title}{tr("」· 淘汰「")}{' '}{m.b_title}」
                             </ApplyBtn>
                             <ApplyBtn
                               busy={busyId === key}
                               onClick={() => handleRejectDup(m.b_id, m.a_id, key)}
                               icon={<Trash2 size={10} />}
                             >
-                              保留「{m.b_title}」· 淘汰「{m.a_title}」
+                              {tr("保留「")}{' '}{m.b_title}{tr("」· 淘汰「")}{' '}{m.a_title}」
                             </ApplyBtn>
                           </div>
                           {actionErrors[key] && (
                             <p className="mt-1.5 text-[11px] text-rose-300">
-                              操作失败：{actionErrors[key]}
+                              {tr("操作失败：")}{' '}{actionErrors[key]}
                             </p>
                           )}
                         </>
                       ) : (
                         <p className="mt-1.5 text-[11px] text-emerald-300">
-                          ✓ 已处理
-                        </p>
+                          {tr("✓ 已处理")}</p>
                       )}
                     </li>
                   )
@@ -354,9 +353,9 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
 
               {/* Stubs */}
               <Section
-                title="待充实条目"
+                title={tr("待充实条目")}
                 count={result.stubs.length}
-                empty="没有发现内容单薄的条目"
+                empty={tr("没有发现内容单薄的条目")}
               >
                 {result.stubs.map(s => {
                   const key = `stub:${s.concept_id}`
@@ -391,8 +390,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                               onClick={() => handleRecompile(s.concept_id)}
                               icon={<Sparkles size={10} />}
                             >
-                              重编译此概念页
-                            </ApplyBtn>
+                              {tr("重编译此概念页")}</ApplyBtn>
                           ) : (
                             // Single-source: recompiling is a near no-op
                             // (same lone snippet). Offer the honest actions
@@ -403,27 +401,24 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                                 onClick={() => handleRejectStub(s.concept_id)}
                                 icon={<Trash2 size={10} />}
                               >
-                                淘汰此概念
-                              </ApplyBtn>
+                                {tr("淘汰此概念")}</ApplyBtn>
                               <ApplyBtn
                                 busy={busyId === key}
                                 onClick={() => handleAcceptStub(s.concept_id)}
                                 icon={<Check size={10} />}
                               >
-                                标记可接受
-                              </ApplyBtn>
+                                {tr("标记可接受")}</ApplyBtn>
                             </>
                           )}
                           {actionErrors[key] && (
                             <p className="basis-full text-[11px] text-rose-300">
-                              操作失败：{actionErrors[key]}
+                              {tr("操作失败：")}{' '}{actionErrors[key]}
                             </p>
                           )}
                         </div>
                       ) : (
                         <p className="mt-1.5 text-[11px] text-emerald-300">
-                          ✓ 已处理
-                        </p>
+                          {tr("✓ 已处理")}</p>
                       )}
                     </li>
                   )
@@ -432,12 +427,12 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
 
               {/* Missing cross-cut */}
               <Section
-                title="建议新建的概念（串联多篇论文）"
+                title={tr("建议新建的概念（串联多篇论文）")}
                 count={
                   (j?.new_concepts || []).length ||
                   result.missing_crosscut.length
                 }
-                empty="没有发现孤立的论文簇"
+                empty={tr("没有发现孤立的论文簇")}
               >
                 {(j?.new_concepts && j.new_concepts.length > 0
                   ? j.new_concepts.map((n, i) => {
@@ -453,8 +448,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                             {n.rationale}
                           </p>
                           <p className="text-[10.5px] text-slate-600 mt-1">
-                            覆盖 {n.paper_ids.length} 篇论文
-                          </p>
+                            {tr("覆盖")}{' '}{n.paper_ids.length} {tr("篇论文")}</p>
                           {!isDone ? (
                             <div className="mt-1.5">
                               {onAdoptConcept && (
@@ -469,19 +463,17 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                                   }
                                   icon={<Plus size={10} />}
                                 >
-                                  采纳并新建概念
-                                </ApplyBtn>
+                                  {tr("采纳并新建概念")}</ApplyBtn>
                               )}
                               {actionErrors[key] && (
                                 <p className="mt-1.5 text-[11px] text-rose-300">
-                                  操作失败：{actionErrors[key]}
+                                  {tr("操作失败：")}{' '}{actionErrors[key]}
                                 </p>
                               )}
                             </div>
                           ) : (
                             <p className="mt-1.5 text-[11px] text-emerald-300">
-                              ✓ 已新建概念，将在下次编译概念页时生成 wiki
-                            </p>
+                              {tr("✓ 已新建概念，将在下次编译概念页时生成 wiki")}</p>
                           )}
                         </li>
                       )
@@ -492,8 +484,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                         className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2"
                       >
                         <p className="text-[11px] text-slate-400">
-                          {c.size} 篇论文簇未被任何概念串联
-                        </p>
+                          {c.size} {tr("篇论文簇未被任何概念串联")}</p>
                         <p className="text-[10.5px] text-slate-600 mt-1">
                           {c.paper_titles.slice(0, 4).join(' · ')}
                           {c.paper_titles.length > 4 ? ' …' : ''}
@@ -504,9 +495,9 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
 
               {/* Followups */}
               <Section
-                title="建议接着研究的问题"
+                title={tr("建议接着研究的问题")}
                 count={(j?.followups || []).length}
-                empty="本次未生成追问（可勾选 Agent 判定后重跑）"
+                empty={tr("本次未生成追问（可勾选 Agent 判定后重跑）")}
               >
                 {(j?.followups || []).map((q, i) => (
                   <li
@@ -517,11 +508,10 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
                     <button
                       onClick={() => navigator.clipboard?.writeText(q)}
                       className="shrink-0 inline-flex items-center gap-1 text-[10.5px] text-slate-500 hover:text-slate-200 transition-colors"
-                      title="复制问题，丢进 Ask"
+                      title={tr("复制问题，丢进 Ask")}
                     >
                       <Copy size={10} />
-                      复制
-                    </button>
+                      {tr("复制")}</button>
                   </li>
                 ))}
               </Section>
@@ -529,8 +519,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
               {j && !j.used_model && j.error && (
                 <div className="px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-200 text-[11px] flex items-center gap-1.5">
                   <AlertTriangle size={11} />
-                  Agent 判定未生效（{j.error}）— 仅展示规则层结果
-                </div>
+                  {tr("Agent 判定未生效（")}{' '}{j.error}{tr("）— 仅展示规则层结果")}</div>
               )}
             </>
           )}
@@ -540,8 +529,8 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
           {result && (
             <span className="text-[11px] text-slate-500">
               {done.size > 0
-                ? `已处理 ${done.size} 项 · 剩余建议可逐项处理或留待下次`
-                : '逐项处理上面的建议，或直接完成关闭'}
+                ? tr("已处理 {0} 项 · 剩余建议可逐项处理或留待下次", { 0: done.size })
+                : tr("逐项处理上面的建议，或直接完成关闭")}
             </span>
           )}
           <button
@@ -549,8 +538,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
             className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-100 text-[12px] font-medium transition-colors"
           >
             <Check size={12} />
-            完成
-          </button>
+            {tr("完成")}</button>
         </footer>
       </div>
     </div>
@@ -568,9 +556,10 @@ function Section({
   empty: string
   children?: React.ReactNode
 }) {
+  useLocale()
   return (
     <section>
-      <h3 className="text-[12px] font-semibold text-white mb-2 flex items-center gap-2">
+      <h3 className="text-[12px] font-semibold text-foreground mb-2 flex items-center gap-2">
         {title}
         <span className="text-[10.5px] text-slate-500 tabular-nums">{count}</span>
       </h3>
@@ -594,6 +583,7 @@ function ApplyBtn({
   icon: React.ReactNode
   children: React.ReactNode
 }) {
+  useLocale()
   return (
     <button
       onClick={onClick}

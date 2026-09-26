@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Sparkles, FileText } from 'lucide-react'
 import { getWikiStatus, type WikiCompileState } from '../api/client'
@@ -11,6 +13,7 @@ import { getWikiStatus, type WikiCompileState } from '../api/client'
 // because long OpenAI calls inside the compile thread occasionally make
 // status polls miss their window.
 export default function WikiCompileStatus() {
+  useLocale()
   const [status, setStatus] = useState<WikiCompileState | null>(null)
   const runningRef = useRef(false)
 
@@ -54,7 +57,7 @@ export default function WikiCompileStatus() {
   const total = Math.max(0, status.total)
   const done = Math.max(0, status.done)
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0
-  const kindLabel = status.kind === 'papers' ? '论文页' : '概念页'
+  const kindLabel = status.kind === 'papers' ? tr("论文页") : tr("概念页")
   const Icon = status.kind === 'papers' ? FileText : Sparkles
   const lastFailure = status.failed_items?.[status.failed_items.length - 1]
 
@@ -62,7 +65,7 @@ export default function WikiCompileStatus() {
     <div className="fixed top-24 right-5 bg-slate-900/95 backdrop-blur-md border border-indigo-500/30 rounded-2xl p-4 w-72 shadow-2xl shadow-indigo-500/10 z-50 fade-in">
       <div className="flex items-center gap-2.5 mb-2.5">
         <Icon size={14} className="text-indigo-400" />
-        <span className="text-sm text-slate-100 font-medium">编译 {kindLabel}</span>
+        <span className="text-sm text-slate-100 font-medium">{tr("编译")}{' '}{kindLabel}</span>
         <span className="ml-auto text-sm font-mono tabular-nums text-indigo-300">
           {total > 0 ? `${pct}%` : '...'}
         </span>
@@ -79,7 +82,7 @@ export default function WikiCompileStatus() {
         <Loader2 size={11} className="animate-spin text-indigo-300" />
         <span className="font-mono tabular-nums">{done}/{total || '?'}</span>
         {status.errors > 0 && (
-          <span className="text-amber-300">失败 {status.errors}</span>
+          <span className="text-amber-300">{tr("失败")}{' '}{status.errors}</span>
         )}
         {status.model && (
           <span className="ml-auto text-slate-600">{status.model}</span>
@@ -97,7 +100,7 @@ export default function WikiCompileStatus() {
           className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] px-2.5 py-2 text-[10.5px] leading-relaxed"
           title={`${lastFailure.label}: ${lastFailure.error}`}
         >
-          <p className="truncate text-amber-200">失败项：{lastFailure.label}</p>
+          <p className="truncate text-amber-200">{tr("失败项：")}{' '}{lastFailure.label}</p>
           <p className="mt-0.5 truncate text-amber-300/70">{lastFailure.error}</p>
         </div>
       )}

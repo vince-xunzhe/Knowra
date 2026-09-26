@@ -11,6 +11,7 @@ The user-override endpoint pins `promoted_by=user`, which makes future
 auto-runs skip the node.
 """
 from __future__ import annotations
+from presentation_preferences import Locale, default_prompt, get_prompt as localized_prompt, save_prompt
 
 import threading
 from datetime import datetime, timezone
@@ -33,9 +34,8 @@ from services.graph_service import (
     promotion_status,
 )
 from services import wiki_search as wiki_search_service
-from services.promotion_llm import PROMOTION_LLM_DEFAULT_PROMPT
 from services.wiki_compiler import reconcile_concept_pages_dir
-from config import load_config, save_config
+from config import load_config
 
 
 def _reconcile_curated_wiki(db: Session) -> None:
@@ -320,21 +320,20 @@ class PromotionPromptUpdate(BaseModel):
 
 
 @router.get("/prompt")
-def get_promotion_prompt():
+def get_promotion_prompt(locale: Locale = "zh"):
     """Returns the user's saved system prompt for the LLM stage plus the
     built-in default template the editor exposes as a starter."""
-    cfg = load_config()
     return {
-        "prompt": cfg.get("promotion_prompt") or "",
-        "default_template": PROMOTION_LLM_DEFAULT_PROMPT,
+        "prompt": localized_prompt("promotion", locale, load_config(resolve_presentation=False)),
+        "default_template": default_prompt("promotion", locale),
     }
 
 
 @router.put("/prompt")
-def update_promotion_prompt(body: PromotionPromptUpdate):
+def update_promotion_prompt(body: PromotionPromptUpdate, locale: Locale = "zh"):
     """Persist the user's edits. Empty string is allowed and means
     "skip the LLM stage; only run heuristic"."""
-    save_config({"promotion_prompt": body.prompt or ""})
+    save_prompt("promotion", locale, body.prompt or "")
     return {"prompt": body.prompt or ""}
 
 

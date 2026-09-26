@@ -1,3 +1,5 @@
+import { t as tr } from './i18n/catalog'
+import { useLocale } from './i18n/preferences'
 import { useState } from 'react'
 import { Network, BookOpen, FileText, Settings, BarChart3, Sparkles } from 'lucide-react'
 import GraphPage from './pages/GraphPage'
@@ -10,6 +12,7 @@ import ProcessingStatus from './components/ProcessingStatus'
 import WikiCompileStatus from './components/WikiCompileStatus'
 import WikiLintStatus from './components/WikiLintStatus'
 import { WikiLintProvider } from './hooks/useWikiLint'
+import knowraLogo from './assets/knowra-logo.jpeg'
 
 type Page = 'graph' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
 type NavItem =
@@ -27,25 +30,24 @@ type NavItem =
 // drawer + rescue modal) so curation happens in visual context instead of
 // as flat lists.
 //
-// Nav order goes from "high-altitude knowledge" → "narrative reading" →
-// "raw materials" → "observability" → "config" so the user passes the
-// finished artifact (graph) and synthesis (review) before the raw
-// inventory (materials).
+// Navigation: Knowledge → Library → Review → Discover → Dashboard.
 const NAV: NavItem[] = [
-  { id: 'graph', icon: Network, label: '知识' },
-  { id: 'review', icon: FileText, label: '回顾' },
-  { id: 'recommend', icon: Sparkles, label: '推荐' },
-  { id: 'papers', icon: BookOpen, label: '资料' },
-  { id: 'dashboard', icon: BarChart3, label: '看板' },
+  { id: 'graph', icon: Network, get label() { return tr("知识") } },
+  { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
+  { id: 'review', icon: FileText, get label() { return tr("回顾") } },
+  { id: 'recommend', icon: Sparkles, get label() { return tr("推荐") } },
+  { id: 'dashboard', icon: BarChart3, get label() { return tr("看板") } },
   { divider: true },
-  { id: 'settings', icon: Settings, label: '设置' },
+  { id: 'settings', icon: Settings, get label() { return tr("设置") } },
 ]
 
 export default function App() {
+  useLocale()
   return <WikiLintProvider><AppContent /></WikiLintProvider>
 }
 
 function AppContent() {
+  useLocale()
   const [page, setPage] = useState<Page>('graph')
   const [lintOpen, setLintOpen] = useState(false)
   const [reviewPaperId, setReviewPaperId] = useState<number | null>(null)
@@ -61,12 +63,10 @@ function AppContent() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#0b0d12] text-slate-200">
+    <div className="flex h-screen overflow-hidden bg-[var(--surface-0b0d12)] text-slate-200">
       {/* Sidebar */}
-      <nav className="w-[4.75rem] bg-[#0f1117] border-r border-slate-800/80 flex flex-col items-center py-4 gap-1 shrink-0">
-        <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/20">
-          <Network size={18} className="text-white" />
-        </div>
+      <nav className="w-[6.5rem] bg-[var(--surface-0f1117)] border-r border-slate-800/80 flex flex-col items-center py-4 gap-1 shrink-0">
+        <img src={knowraLogo} alt="Knowra" width={40} height={40} className="mb-4 h-10 w-10 shrink-0 rounded-xl bg-white object-contain" />
         {NAV.map((item, idx) => {
           if ('divider' in item) {
             return <div key={`d-${idx}`} className="w-7 h-px bg-slate-800/80 my-2" />
@@ -78,7 +78,7 @@ function AppContent() {
               key={id}
               onClick={() => openPage(id)}
               title={label}
-              className={`relative group w-14 h-14 px-1 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
+              className={`relative group w-[5.75rem] h-14 px-1 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
                 active
                   ? 'bg-indigo-500/15 text-indigo-100 shadow-inner shadow-indigo-500/10'
                   : 'text-slate-600 hover:text-slate-100 hover:bg-slate-800/50'

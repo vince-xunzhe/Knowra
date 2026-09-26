@@ -1,3 +1,6 @@
+import { getFormattingLocale } from '../i18n/store'
+import { t as tr } from '../i18n/catalog'
+import { useLocale } from '../i18n/preferences'
 /**
  * ⑤ 同步 — appended to PipelineConsole after the existing 4 stages.
  *
@@ -38,6 +41,7 @@ interface Props {
 }
 
 export default function SyncStageCard({ expanded, onToggle }: Props) {
+  const locale = useLocale()
   const auth = useCloudAuth()
   const [progress, setProgress] = useState<SyncProgress>({
     stage: 'idle', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0,
@@ -87,7 +91,7 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
       const data = await cloudMe()
       setCloudStatus({ loading: false, data, error: null, checkedAt: Date.now() })
     } catch (err) {
-      const message = (err as Error).message || '读取云端状态失败'
+      const message = (err as Error).message || tr("读取云端状态失败")
       setCloudStatus(s => ({ ...s, loading: false, error: message, checkedAt: Date.now() }))
     }
   }, [auth.user])
@@ -98,7 +102,7 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
       const data = await previewSnapshotCounts()
       setLocalPreview({ loading: false, data, error: null, checkedAt: Date.now() })
     } catch (err) {
-      const message = (err as Error).message || '读取本机快照失败'
+      const message = (err as Error).message || tr("读取本机快照失败")
       setLocalPreview(s => ({ ...s, loading: false, error: message, checkedAt: Date.now() }))
     }
   }, [])
@@ -116,17 +120,17 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
   }, [expanded, localPreview.data, localPreview.loading, refreshLocalPreview])
 
   const headline = useMemo(() => {
-    if (!auth.configured) return '未配置'
-    if (!auth.user) return '未登录'
+    if (!auth.configured) return tr("未配置", {}, locale)
+    if (!auth.user) return tr("未登录")
     if (running) {
       if (progress.stage === 'uploading' && progress.uploadsTotal > 0) {
-        return `上传 ${progress.uploadsDone}/${progress.uploadsTotal}`
+        return tr("上传 {0}/{1}", { 0: progress.uploadsDone, 1: progress.uploadsTotal })
       }
       return stageLabel(progress.stage)
     }
-    if (pending) return '待续传'
-    return lastSyncAt ? new Date(lastSyncAt).toLocaleString() : '从未同步'
-  }, [auth.configured, auth.user, running, progress, pending, lastSyncAt])
+    if (pending) return tr("待续传")
+    return lastSyncAt ? new Date(lastSyncAt).toLocaleString(getFormattingLocale()) : tr("从未同步")
+  }, [auth.configured, auth.user, running, progress, pending, lastSyncAt, locale])
 
   const handleRun = async () => {
     try {
@@ -146,7 +150,7 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
       await runSync(snapshot, setProgress)
       await refreshCloudStatus()
     } catch (err) {
-      const message = (err as Error).message || '同步失败'
+      const message = (err as Error).message || tr("同步失败")
       setProgress(p => ({ ...p, stage: 'error', error: message }))
     }
   }
@@ -167,23 +171,23 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
       <button
         onClick={onToggle}
         aria-expanded={expanded}
-        title={expanded ? '收起同步' : '展开同步'}
-        className="grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2.5 text-left"
+        title={expanded ? tr("收起同步") : tr("展开同步")}
+        className="flex w-full min-w-0 flex-col gap-1.5 px-3 py-2.5 text-left"
       >
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-full min-w-0 items-start gap-2 leading-5">
           {expanded ? (
-            <ChevronDown size={13} className="shrink-0 text-slate-500" />
+            <ChevronDown size={13} className="mt-1 shrink-0 text-slate-500" />
           ) : (
-            <ChevronRight size={13} className="shrink-0 text-slate-600" />
+            <ChevronRight size={13} className="mt-1 shrink-0 text-slate-600" />
           )}
           <span className={`shrink-0 text-[12px] font-mono tabular-nums ${palette.indexColor}`}>
             ⑤
           </span>
-          <SyncIcon tone={tone} />
-          <span className="shrink-0 whitespace-nowrap text-[13px] font-semibold text-slate-100">同步</span>
+          <span className="mt-0.5 shrink-0"><SyncIcon tone={tone} /></span>
+          <span className="min-w-0 break-words text-[13px] font-semibold text-slate-100">{tr("同步")}</span>
         </span>
         <span
-          className="min-w-0 justify-self-end truncate whitespace-nowrap text-right text-[11.5px] tabular-nums text-slate-300"
+          className="w-full min-w-0 whitespace-normal break-words pl-[21px] text-[11.5px] leading-relaxed tabular-nums text-slate-300"
           title={headline}
         >
           {headline}
@@ -194,18 +198,14 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
         <div className="px-3 pb-3 pt-1 border-t border-slate-800/40 space-y-2">
           {!auth.configured ? (
             <p className="text-[11.5px] text-amber-200/90 leading-relaxed">
-              请到 <span className="font-semibold">设置 → 云同步</span> 填写 Supabase URL / anon key / 云后端 URL。
-            </p>
+              {tr("请到")}<span className="font-semibold">{tr("设置 → 云同步")}</span> {tr("填写 Supabase URL / anon key / 云后端 URL。")}</p>
           ) : !auth.user ? (
             <p className="text-[11.5px] text-amber-200/90 leading-relaxed">
-              请到 <span className="font-semibold">设置 → 云同步</span> 登录云端账号后，才能把本地数据推送上去。
-            </p>
+              {tr("请到")}<span className="font-semibold">{tr("设置 → 云同步")}</span> {tr("登录云端账号后，才能把本地数据推送上去。")}</p>
           ) : (
             <>
               <p className="text-[11.5px] text-slate-400 leading-relaxed">
-                把本地论文 / 知识节点 / 编译好的 wiki 同步到云后端，供 iOS / Android 只读消费。
-                PDF 永远只在本机；OpenAI key 也不上传。
-              </p>
+                {tr("把本地论文 / 知识节点 / 编译好的 wiki 同步到云后端，供 iOS / Android 只读消费。 PDF 永远只在本机；OpenAI key 也不上传。")}</p>
 
               <SnapshotStatusPanel
                 status={localPreview}
@@ -227,15 +227,14 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                 progress.commit.rejected && progress.commit.rejected.length > 0 ? (
                   <div className="px-2 py-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 text-[11px] text-amber-200 space-y-1">
                     <div>
-                      ⚠ 本次写入/更新 · revision {progress.commit.revision} · 论文{' '}
-                      {progress.commit.accepted.papers} / 节点{' '}
-                      {progress.commit.accepted.knowledge_nodes} / 关系{' '}
+                      {tr("⚠ 本次写入/更新 · revision")}{' '}{progress.commit.revision} {tr("· 论文")}{' '}{' '}
+                      {progress.commit.accepted.papers} {tr("/ 节点")}{' '}{' '}
+                      {progress.commit.accepted.knowledge_nodes} {tr("/ 关系")}{' '}{' '}
                       {progress.commit.accepted.knowledge_edges} / Wiki{' '}
                       {progress.commit.accepted.wiki_files}
                     </div>
                     <div className="text-amber-300/90">
-                      {progress.commit.rejected.length} 个文件云端未收，下次同步会重试：
-                    </div>
+                      {progress.commit.rejected.length} {tr("个文件云端未收，下次同步会重试：")}</div>
                     <ul className="font-mono text-[10px] text-amber-100/80 space-y-0.5 max-h-24 overflow-y-auto">
                       {progress.commit.rejected.slice(0, 6).map((r, i) => (
                         <li key={i} className="truncate" title={r.reason}>
@@ -243,16 +242,16 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                         </li>
                       ))}
                       {progress.commit.rejected.length > 6 && (
-                        <li>… 等共 {progress.commit.rejected.length} 项</li>
+                        <li>{tr("… 等共")}{' '}{progress.commit.rejected.length} {tr("项")}</li>
                       )}
                     </ul>
                   </div>
                 ) : (
                   <div className="px-2 py-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-[11px] text-emerald-200">
-                    ✓ 本次写入/更新 · revision {progress.commit.revision} ·
-                    {' '}论文 {progress.commit.accepted.papers}
-                    {' '}/ 节点 {progress.commit.accepted.knowledge_nodes}
-                    {' '}/ 关系 {progress.commit.accepted.knowledge_edges}
+                    {tr("✓ 本次写入/更新 · revision")}{' '}{progress.commit.revision} ·
+                    {' '}{tr("论文")}{' '}{progress.commit.accepted.papers}
+                    {' '}{tr("/ 节点")}{' '}{progress.commit.accepted.knowledge_nodes}
+                    {' '}{tr("/ 关系")}{' '}{progress.commit.accepted.knowledge_edges}
                     {' '}/ Wiki {progress.commit.accepted.wiki_files}
                   </div>
                 )
@@ -269,12 +268,12 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                   onClick={handleRun}
                   disabled={running}
                   className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-100 border border-indigo-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="跑一次 prepare → upload → commit"
+                  title={tr("跑一次 prepare → upload → commit")}
                 >
                   {running
                     ? <Loader2 size={12} className="animate-spin" />
                     : <CloudUpload size={12} />}
-                  {running ? stageLabel(progress.stage) : '立即同步'}
+                  {running ? stageLabel(progress.stage) : tr("立即同步")}
                 </button>
 
                 {pending && (
@@ -282,18 +281,17 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
                     onClick={handleResume}
                     disabled={running}
                     className="inline-flex items-center justify-center gap-1.5 text-[12px] px-2.5 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 border border-amber-500/40 disabled:opacity-50"
-                    title={`续传上次的 session ${pending.sync_session_id.slice(0, 8)}…（已上传 ${pending.uploaded_count} 个文件）`}
+                    title={tr("续传上次的 session {0}…（已上传 {1} 个文件）", { 0: pending.sync_session_id.slice(0, 8), 1: pending.uploaded_count })}
                   >
                     <RotateCw size={12} />
-                    继续提交
-                  </button>
+                    {tr("继续提交")}</button>
                 )}
               </div>
 
               {lastSyncAt && (
                 <div className="text-[10.5px] text-slate-500 flex items-center gap-1.5">
                   <RefreshCw size={10} />
-                  上次成功：{new Date(lastSyncAt).toLocaleString()}
+                  {tr("上次成功：")}{' '}{new Date(lastSyncAt).toLocaleString(getFormattingLocale())}
                 </div>
               )}
             </>
@@ -323,17 +321,18 @@ function SnapshotStatusPanel({
   }
   onRefresh: () => Promise<void>
 }) {
-  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString() : null
+  useLocale()
+  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString(getFormattingLocale()) : null
 
   return (
     <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 px-2.5 py-2 space-y-2">
       <PanelHeader
         icon={<HardDrive size={11} className={status.error ? 'text-rose-300' : 'text-indigo-300'} />}
-        title={status.loading ? '正在读取本机快照' : status.error ? '本机快照读取失败' : '本机待提交快照'}
+        title={status.loading ? tr("正在读取本机快照") : status.error ? tr("本机快照读取失败") : tr("本机待提交快照")}
         checkedAt={checkedAt}
         loading={status.loading}
         onRefresh={onRefresh}
-        refreshTitle="刷新本机快照"
+        refreshTitle={tr("刷新本机快照")}
       />
 
       {status.error ? (
@@ -342,10 +341,10 @@ function SnapshotStatusPanel({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-1.5">
-          <CloudMetric icon={<Database size={11} />} label="论文行" value={status.data ? String(status.data.papers) : '...'} />
-          <CloudMetric icon={<Database size={11} />} label="节点" value={status.data ? String(status.data.knowledge_nodes) : '...'} />
-          <CloudMetric icon={<Database size={11} />} label="关系" value={status.data ? String(status.data.knowledge_edges) : '...'} />
-          <CloudMetric icon={<HardDrive size={11} />} label="Wiki 文件" value={status.data ? String(status.data.wiki_files) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("论文行")} value={status.data ? String(status.data.papers) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("节点")} value={status.data ? String(status.data.knowledge_nodes) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("关系")} value={status.data ? String(status.data.knowledge_edges) : '...'} />
+          <CloudMetric icon={<HardDrive size={11} />} label={tr("Wiki 文件")} value={status.data ? String(status.data.wiki_files) : '...'} />
         </div>
       )}
     </div>
@@ -364,21 +363,22 @@ function CloudStatusPanel({
   }
   onRefresh: () => Promise<void>
 }) {
+  useLocale()
   const stats = status.data?.stats
-  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString() : null
+  const checkedAt = status.checkedAt ? new Date(status.checkedAt).toLocaleTimeString(getFormattingLocale()) : null
   const lastCloudSync = stats?.last_desktop_sync_at
-    ? new Date(stats.last_desktop_sync_at).toLocaleString()
-    : '暂无'
+    ? new Date(stats.last_desktop_sync_at).toLocaleString(getFormattingLocale())
+    : tr("暂无")
 
   return (
     <div className="rounded-lg border border-slate-800/80 bg-slate-950/45 px-2.5 py-2 space-y-2">
       <PanelHeader
         icon={<Server size={11} className={status.error ? 'text-rose-300' : 'text-emerald-300'} />}
-        title={status.loading ? '正在读取云端总量' : status.error ? '云端状态读取失败' : '云端总量'}
+        title={status.loading ? tr("正在读取云端总量") : status.error ? tr("云端状态读取失败") : tr("云端总量")}
         checkedAt={checkedAt}
         loading={status.loading}
         onRefresh={onRefresh}
-        refreshTitle="刷新云端状态"
+        refreshTitle={tr("刷新云端状态")}
       />
 
       {status.error ? (
@@ -387,19 +387,19 @@ function CloudStatusPanel({
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-1.5">
-          <CloudMetric icon={<Database size={11} />} label="去重论文" value={stats ? String(stats.papers) : '...'} />
-          <CloudMetric icon={<Database size={11} />} label="节点" value={stats ? String(stats.nodes ?? stats.concepts) : '...'} />
-          <CloudMetric icon={<Database size={11} />} label="关系" value={stats ? String(stats.edges) : '...'} />
-          <CloudMetric icon={<HardDrive size={11} />} label="Wiki 文件" value={stats ? `${stats.wiki_files} · ${formatBytes(stats.wiki_size_bytes)}` : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("去重论文")} value={stats ? String(stats.papers) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("节点")} value={stats ? String(stats.nodes ?? stats.concepts) : '...'} />
+          <CloudMetric icon={<Database size={11} />} label={tr("关系")} value={stats ? String(stats.edges) : '...'} />
+          <CloudMetric icon={<HardDrive size={11} />} label={tr("Wiki 文件")} value={stats ? `${stats.wiki_files} · ${formatBytes(stats.wiki_size_bytes)}` : '...'} />
         </div>
       )}
 
       <div className="flex items-center justify-between gap-2 text-[10.5px] text-slate-500">
         <span className="truncate" title={status.data?.email || undefined}>
-          {status.data?.email || status.data?.user_id || '已登录账号'}
+          {status.data?.email || status.data?.user_id || tr("已登录账号")}
         </span>
         <span className="shrink-0 tabular-nums" title={lastCloudSync}>
-          云端记录：{lastCloudSync}
+          {tr("云端记录：")}{' '}{lastCloudSync}
         </span>
       </div>
     </div>
@@ -421,6 +421,7 @@ function PanelHeader({
   onRefresh: () => Promise<void>
   refreshTitle: string
 }) {
+  useLocale()
   return (
     <div className="flex items-center justify-between gap-2">
       <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-slate-300">
@@ -435,8 +436,7 @@ function PanelHeader({
         title={refreshTitle}
       >
         <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
-        刷新
-      </button>
+        {tr("刷新")}</button>
     </div>
   )
 }
@@ -450,6 +450,7 @@ function CloudMetric({
   label: string
   value: string
 }) {
+  useLocale()
   return (
     <div className="min-w-0 rounded-md border border-slate-800/70 bg-slate-900/45 px-2 py-1.5">
       <div className="flex items-center gap-1 text-[10px] text-slate-500">
@@ -478,16 +479,17 @@ function formatBytes(bytes: number) {
 
 function stageLabel(stage: SyncProgress['stage']): string {
   switch (stage) {
-    case 'preparing': return '准备中'
-    case 'uploading': return '上传中'
-    case 'committing': return '提交中'
-    case 'done': return '完成'
-    case 'error': return '错误'
-    default: return '空闲'
+    case 'preparing': return tr("准备中")
+    case 'uploading': return tr("上传中")
+    case 'committing': return tr("提交中")
+    case 'done': return tr("完成")
+    case 'error': return tr("错误")
+    default: return tr("空闲")
   }
 }
 
 function SyncIcon({ tone }: { tone: 'idle' | 'running' | 'ok' | 'warning' | 'danger' }) {
+  useLocale()
   const base = 'shrink-0'
   if (tone === 'running') return <Loader2 size={14} className={`${base} text-indigo-300 animate-spin`} />
   if (tone === 'ok')      return <CheckCircle2 size={14} className={`${base} text-emerald-300`} />

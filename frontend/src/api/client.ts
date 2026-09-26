@@ -1,3 +1,5 @@
+import { t as tr } from '../i18n/catalog'
+import { getLocale, type Locale } from '../i18n/store'
 import axios from 'axios'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
@@ -221,10 +223,10 @@ export const testModelGatewayProvider = (providerId: string, modelGateway?: Mode
   ).then(r => r.data)
 
 // Prompt
-export const getPrompt = () => api.get<PromptData>('/prompt').then(r => r.data)
-export const updatePrompt = (extraction_prompt: string) =>
-  api.post<{ message: string; length: number }>('/prompt', { extraction_prompt }).then(r => r.data)
-export const resetPrompt = () => api.post<PromptData>('/prompt/reset').then(r => r.data)
+export const getPrompt = (locale: Locale = getLocale()) => api.get<PromptData>('/prompt', { params: { locale } }).then(r => r.data)
+export const updatePrompt = (extraction_prompt: string, locale: Locale = getLocale()) =>
+  api.post<{ message: string; length: number }>('/prompt', { extraction_prompt }, { params: { locale } }).then(r => r.data)
+export const resetPrompt = (locale: Locale = getLocale()) => api.post<PromptData>('/prompt/reset', null, { params: { locale } }).then(r => r.data)
 
 // Papers
 export interface DuplicatePaperFile {
@@ -927,10 +929,10 @@ export async function waitForWikiLint(initial: LintJobState) {
   while (job.status === 'running') {
     await new Promise(resolve => setTimeout(resolve, 2500))
     job = await getWikiLintJob()
-    if (job.job_id !== initial.job_id) throw new Error('健康检查任务已变更，请查看最新报告。')
+    if (job.job_id !== initial.job_id) throw new Error(tr("健康检查任务已变更，请查看最新报告。"))
   }
   if (job.status === 'failed' || job.status === 'warning') {
-    throw new Error(job.error || '健康检查未完整完成，请查看报告。')
+    throw new Error(job.error || tr("健康检查未完整完成，请查看报告。"))
   }
   return job
 }
@@ -1077,12 +1079,12 @@ export interface PromotionPromptPayload {
   default_template: string
 }
 
-export const getPromotionPrompt = () =>
-  api.get<PromotionPromptPayload>('/promotion/prompt').then(r => r.data)
+export const getPromotionPrompt = (locale: Locale = getLocale()) =>
+  api.get<PromotionPromptPayload>('/promotion/prompt', { params: { locale } }).then(r => r.data)
 
-export const updatePromotionPrompt = (prompt: string) =>
+export const updatePromotionPrompt = (prompt: string, locale: Locale = getLocale()) =>
   api
-    .put<{ prompt: string }>('/promotion/prompt', { prompt })
+    .put<{ prompt: string }>('/promotion/prompt', { prompt }, { params: { locale } })
     .then(r => r.data)
 
 export const acceptLLMProposals = () =>
@@ -1243,3 +1245,6 @@ export const startLocalRecommendationWorker = (url: string, token: string) => ap
 export const stopLocalRecommendationWorker = () => api.post('/recommendations/worker/stop').then(r => r.data)
 
 export const startWorkspaceRecommendationWorker = () => api.post('/recommendations/worker/start-local').then(r => r.data)
+
+export const getPresentationPreferences = () => api.get<{ locale: Locale }>('/prompt/preferences').then(r => r.data)
+export const savePresentationLanguage = (locale: Locale) => api.put<{ locale: Locale }>('/prompt/preferences', { locale }).then(r => r.data)
