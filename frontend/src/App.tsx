@@ -12,6 +12,7 @@ import ProcessingStatus from './components/ProcessingStatus'
 import WikiCompileStatus from './components/WikiCompileStatus'
 import WikiLintStatus from './components/WikiLintStatus'
 import { WikiLintProvider } from './hooks/useWikiLint'
+import knowraLogo from './assets/knowra-logo.jpeg'
 
 type Page = 'graph' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
 type NavItem =
@@ -68,9 +69,7 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden bg-[var(--surface-0b0d12)] text-slate-200">
       {/* Sidebar */}
       <nav className="w-[6.5rem] bg-[var(--surface-0f1117)] border-r border-slate-800/80 flex flex-col items-center py-4 gap-1 shrink-0">
-        <div className="w-10 h-10 bg-gradient-to-br from-indigo-500 to-violet-600 rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-indigo-500/20">
-          <Network size={18} className="text-foreground" />
-        </div>
+        <img src={knowraLogo} alt="Knowra" width={40} height={40} className="mb-4 h-10 w-10 shrink-0 rounded-xl bg-white object-contain" />
         {NAV.map((item, idx) => {
           if ('divider' in item) {
             return <div key={`d-${idx}`} className="w-7 h-px bg-slate-800/80 my-2" />
