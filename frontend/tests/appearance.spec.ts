@@ -56,6 +56,7 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; out
 
 async function openSettings(page: Page, label = '设置') {
   await page.getByRole('navigation').getByRole('button', { name: label, exact: true }).click()
+  await expect(page.getByRole('heading', { name: label, exact: true })).toBeVisible()
   await expect(page.locator('#appearance-language')).toBeVisible()
 }
 
@@ -178,6 +179,7 @@ test('all source UI messages have complete catalogs', () => {
 test('Light updates the canvas without recreating the graph or translating source labels', async ({ page }) => {
   await mockBackend(page, { graph: true })
   await page.goto('/')
+  await page.locator('.ge-node-list').getByRole('button', { name: /未分类/ }).click()
   const canvas = page.getByTestId('knowledge-graph-canvas')
   await expect(canvas.locator('canvas').first()).toBeVisible()
   await canvas.evaluate(el => {
