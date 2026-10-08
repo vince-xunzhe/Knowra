@@ -18,6 +18,7 @@ from database import enable_sqlite_wal
 from models import Base, Paper, KnowledgeNode, KnowledgeEdge
 from routers import papers
 from services import graph_service
+from services import graph_mutation_service
 from services.local_instance import LocalBackendLock
 from services.paper_pipeline_service import is_recoverable_error
 from services.sqlite_backup import backup_sqlite
@@ -165,7 +166,7 @@ class SQLiteConcurrencyTests(unittest.TestCase):
         pdf = self.root / "paper.pdf"
         pdf.touch()
         calls = {"failures": 0}
-        original = graph_service._add_similarity_edges
+        original = graph_mutation_service.add_edge
         original_set_state = papers._set_pipeline_state
         state_failures = []
 
@@ -206,7 +207,7 @@ class SQLiteConcurrencyTests(unittest.TestCase):
             stack.enter_context(patch.object(papers, "_set_pipeline_state", side_effect=set_state))
             embed = stack.enter_context(patch.object(graph_service, "get_embedding", return_value=[1.0, 0.0]))
             if not fail_preprocess:
-                stack.enter_context(patch.object(graph_service, "_add_similarity_edges", side_effect=fail_once))
+                stack.enter_context(patch.object(graph_mutation_service, "add_edge", side_effect=fail_once))
             model = stack.enter_context(patch.object(papers, "extract_knowledge_from_paper", return_value=(
                 self.extraction, json.dumps(self.extraction), None, None, None, None)))
             papers._process_single("p")

@@ -1,6 +1,6 @@
 import json
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker, Session
 from pathlib import Path
 from models import Base
@@ -171,7 +171,7 @@ def _create_unique_index_if_clean(
     )
 
 
-def _migrate():
+def _migrate(*, additive_only: bool = False):
     """Idempotent ALTER TABLE migrations for SQLite.
 
     SQLAlchemy's create_all() doesn't add new columns to existing tables, so
@@ -299,8 +299,11 @@ def _migrate():
                 "    hidden = COALESCE(hidden, 0)"
             )
         )
-        # Drop finding nodes (one-shot cleanup; no-op once table is clean).
-        _drop_finding_nodes(conn)
+        # Drop finding nodes only during the idle maintenance startup.  The
+        # compatibility preflight can run while a surviving worker is active
+        # and therefore performs additive schema work only.
+        if not additive_only:
+            _drop_finding_nodes(conn)
         if promotion_columns_added:
             # Backfill: anything that satisfied the legacy publishable rule
             # (auto concept-eligible types with >= 2 source papers, OR a
@@ -335,6 +338,9 @@ def _migrate():
         # backfill.  Duplicate consolidation is handled by graph_service
         # after ORM startup so JSON contribution histories can be merged.
         migrate_edge_provenance_columns(conn)
+
+        if additive_only:
+            return
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")
@@ -376,6 +382,51 @@ def _migrate():
                 )
 
 
+def schema_preflight_report(bind=engine) -> dict:
+    """Verify the ORM columns needed by the paper/graph write path.
+
+    This deliberately checks names rather than trusting ``create_all``:
+    SQLAlchemy does not add columns to existing SQLite tables.  A successful
+    report is therefore authoritative evidence that a worker can start
+    without encountering a late ``no such column`` failure.
+    """
+
+    from models import KnowledgeEdge, KnowledgeNode, LLMCall, Paper
+
+    required = {
+        model.__tablename__: {column.name for column in model.__table__.columns}
+        for model in (Paper, KnowledgeNode, KnowledgeEdge, LLMCall)
+    }
+    inspector = inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+    missing_tables = sorted(set(required) - existing_tables)
+    missing_columns: dict[str, list[str]] = {}
+    for table, columns in required.items():
+        if table not in existing_tables:
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table)}
+        missing = sorted(columns - existing)
+        if missing:
+            missing_columns[table] = missing
+    return {
+        "ok": not missing_tables and not missing_columns,
+        "missing_tables": missing_tables,
+        "missing_columns": missing_columns,
+        "checked_tables": sorted(required),
+    }
+
+
+def assert_processing_schema(bind=engine) -> dict:
+    report = schema_preflight_report(bind)
+    if not report["ok"]:
+        details = json.dumps(report, ensure_ascii=False, sort_keys=True)
+        raise RuntimeError(
+            "Database migration preflight failed; processing is disabled until "
+            f"the schema is repaired: {details}"
+        )
+    return report
+
+
 def ensure_runtime_schema():
     """Install schema changes required by the currently running ORM.
 
@@ -390,6 +441,10 @@ def ensure_runtime_schema():
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
         migrate_edge_provenance_columns(conn)
+    # Install every currently-known additive column before validating.  The
+    # destructive legacy cleanup remains reserved for the idle init_db path.
+    _migrate(additive_only=True)
+    return assert_processing_schema(engine)
 
 
 def init_db():
