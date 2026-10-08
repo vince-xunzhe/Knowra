@@ -10,6 +10,10 @@ Knowra 是一个本地优先的研究工作台，目标是把论文逐步沉淀�
 
 ## 亮点功能
 
+- **持久化独立后台任务**：自动管理的独立 worker 执行论文抽取、Wiki 编译、筛选与健检；
+  全流程不再由浏览器推进，刷新页面或重启 API 不会终止正在执行的 worker，异常中断后可从检查点恢复。
+  配置、恢复边界和运维见 [后台任务说明](docs/TASK-WORKERS.md)。
+
 - **个性化论文精选**：桌面直接从本地知识库建立兴趣画像，画像、调度和入库反馈保存在本机，无需云端登录或 Fly.io。仅用 arXiv 标题和摘要筛选，默认使用本机 Codex CLI，也支持显式 API；以后可迁移至 SSH 主机。手机精选仍为独立的可选云端模式。启动步骤见 [推荐运行手册](docs/RECOMMENDATION-RUNBOOK.md)。
 
 - **按任务绑定模型**：不再用一个全局模型覆盖所有能力；现在可以分别给 `paper_extract`、`paper_chat`、`embedding`、`wiki_compile`、`ask_agent`、`ask_synthesis`、`promotion_judge` 绑定不同模型。

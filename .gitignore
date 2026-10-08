@@ -44,6 +44,8 @@ data/*.db.worker.lock
 data/*.sqlite
 data/*.sqlite3
 data/knowledge.db
+data/tasks.db
+data/tasks.worker.lock
 data/artifacts/*
 !data/artifacts/.gitkeep
 data/paper_records/*

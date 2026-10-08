@@ -209,8 +209,9 @@ def get_paper_page_raw(filename: str):
 
 @router.get("/status")
 def get_status():
+    from services.task_runtime import snapshot
     with _state_lock:
-        return dict(compile_state)
+        return snapshot('compile', compile_state)
 
 
 @router.get("/freshness")
@@ -224,9 +225,10 @@ def get_freshness(db: Session = Depends(get_db)):
 
 @router.get("/graph")
 def get_wiki_graph(db: Session = Depends(get_db)):
-    with _state_lock:
-        active_kind = compile_state.get("current_item_kind")
-        active_id = compile_state.get("current_item_id")
+    from services.task_runtime import snapshot
+    state = snapshot('compile', compile_state)
+    active_kind = state.get("current_item_kind") if state.get('running') else None
+    active_id = state.get("current_item_id") if state.get('running') else None
     return build_wiki_graph(db, active_kind=active_kind, active_id=active_id)
 
 
@@ -295,6 +297,11 @@ def wiki_lint_run(
     body: LintRunRequest = LintRunRequest(),
 ):
     """Submit a background job, reusing the active job on repeated clicks."""
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        job = submit_job('lint', 'lint', body.dict())
+        return dict(job, status='running', phase='排队等待独立 worker', use_llm=body.use_llm)
     try:
         return lint_job.start(body.use_llm)
     except Exception as exc:  # noqa: BLE001
@@ -303,11 +310,27 @@ def wiki_lint_run(
 
 @router.get("/lint/job")
 def wiki_lint_job_status():
-    return lint_job.snapshot()
+    from services.task_runtime import snapshot, store
+    state = snapshot('lint', lint_job.snapshot())
+    job = store().latest('lint', summary=True)
+    if job and job['status'] in ('queued', 'running'):
+        state.update(job_id=job['job_id'], status='running')
+    elif state.get('job_status') in ('interrupted', 'failed'):
+        state.update(status='failed')
+    return state
 
 
 @router.get("/lint/result")
 def wiki_lint_result():
+    from services.task_runtime import store
+    state = store().snapshot('lint')
+    job = store().get(state['job_id']) if state else None
+    if job:
+        result = job['result'] if job['kind'] == 'lint' else job['checkpoints'].get('lint')
+        if not result and isinstance(job.get('result'), dict) and 'judgment' in job['result']:
+            result = job['result']
+        if result:
+            return {'job_id': job['job_id'], 'result': result}
     return lint_job.report()
 
 
@@ -463,6 +486,10 @@ def _spawn(target) -> None:
 def recompile_all_concepts():
     """Force a full re-compile of every concept page in the background.
     Returns immediately; poll /api/wiki/status for live progress."""
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', {'all': 'concepts'})
     cfg = load_config()
     model = task_model_id(cfg, "wiki_compile")
     if not _try_acquire("concepts", total=0, model=model):
@@ -476,6 +503,10 @@ def recompile_all_paper_pages():
     """One-shot: compile a wiki/papers/{id}.md for every already-processed
     paper. Useful when adopting Phase 1 against an existing corpus —
     `_process_single` only auto-compiles for newly-processed papers."""
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', {'all': 'papers'})
     cfg = load_config()
     model = task_model_id(cfg, "wiki_compile")
     if not _try_acquire("papers", total=0, model=model):
@@ -489,6 +520,10 @@ def recompile_one_paper(paper_id: str, db: Session = Depends(get_db)):
     """Single-paper wiki recompile — used by the graph drawer's "重编译此页"
     button so the user can refresh one paper without retriggering the
     full extraction pipeline."""
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', {'paper_ids': [paper_id], 'single': True})
     cfg = load_config()
     paper = db.query(Paper).filter(Paper.id == paper_id).first()
     if not paper:
@@ -524,6 +559,10 @@ def recompile_one_paper(paper_id: str, db: Session = Depends(get_db)):
 
 @router.post("/concepts/{concept_id}/recompile")
 def recompile_one_concept(concept_id: str, db: Session = Depends(get_db)):
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', {'concept_ids': [concept_id], 'single': True})
     cfg = load_config()
     node = db.query(KnowledgeNode).filter(KnowledgeNode.id == concept_id).first()
     if not node:
@@ -797,6 +836,10 @@ def recompile_dirty_items(
     Each item is compiled independently so one failure won't block others.
     """
     req = body or RecompileDirtyInput()
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', dict(req.dict(), dirty=True))
     freshness_before = compute_freshness_summary(db)
     dirty_papers, dirty_concepts = _dirty_ids_from_freshness(
         freshness_before,
@@ -826,6 +869,10 @@ def recompile_by_ids(
     db: Session = Depends(get_db),
 ):
     """Incremental compile by explicit paper/concept ids only."""
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('compile', 'compile', body.dict())
     paper_ids = _normalize_id_list(body.paper_ids)
     concept_ids = _normalize_id_list(body.concept_ids)
     if not paper_ids and not concept_ids:

@@ -1,4 +1,5 @@
 import { useLocale } from '../i18n/preferences'
+import { readWithRetry } from '../api/polling'
 import { t as tr } from '../i18n/catalog'
 // Central polling + action surface for the [知识] page pipeline.
 //
@@ -139,7 +140,6 @@ export interface UsePipelineStateOptions {
 const FAST_POLL = 1500
 const SLOW_POLL = 5000
 const PROMOTION_POLL = 1200
-const MAX_PROMOTION_POLL_FAILURES = 5
 
 const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
 
@@ -148,7 +148,6 @@ async function waitForPromotionRun(
   onProgress?: (status: PromotionRunStatus) => void,
 ): Promise<PromotionRunResponse> {
   let status = initial
-  let failures = 0
 
   while (true) {
     onProgress?.(status)
@@ -161,13 +160,7 @@ async function waitForPromotionRun(
     }
 
     await sleep(PROMOTION_POLL)
-    try {
-      status = await getPromotionRunStatus()
-      failures = 0
-    } catch (error) {
-      failures += 1
-      if (failures >= MAX_PROMOTION_POLL_FAILURES) throw error
-    }
+    status = await readWithRetry(getPromotionRunStatus)
   }
 }
 
@@ -214,6 +207,8 @@ export function usePipelineState({
 
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let lastSummaryPoll = 0
 
     const pollFreshness = async () => {
       try {
@@ -297,29 +292,27 @@ export function usePipelineState({
     }
 
     const tick = async () => {
+      // Expensive library-wide summaries need not run at progress cadence.
+      const refreshSummary = Date.now() - lastSummaryPoll >= 15000
+      if (refreshSummary) lastSummaryPoll = Date.now()
       await Promise.all([
-        pollFreshness(),
-        pollPromotion(),
+        ...(refreshSummary ? [pollFreshness(), pollPromotion(), pollLint()] : []),
         pollProcessing(),
         pollCompile(),
-        pollLint(),
       ])
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        setLoading(false)
+        timer = setTimeout(() => { void tick() }, processing?.running || compileStatus?.running || promotionRunStatus?.running ? FAST_POLL : SLOW_POLL)
+      }
     }
 
     // Kick off
     void tick()
     void pollPrompt()
 
-    // Pick cadence based on whether anything is running. We re-check this
-    // on every interval so the cadence adapts.
-    const id = setInterval(() => {
-      void tick()
-    }, processing?.running || compileStatus?.running || promotionRunStatus?.running ? FAST_POLL : SLOW_POLL)
-
     return () => {
       cancelled = true
-      clearInterval(id)
+      clearTimeout(timer)
     }
   }, [refreshNonce, processing?.running, compileStatus?.running, promotionRunStatus?.running])
 

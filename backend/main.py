@@ -8,6 +8,7 @@ from services.local_instance import LocalBackendLock
 from logging_utils import configure_app_logging
 from models import Paper
 from routers import (
+    jobs,
     papers,
     graph,
     config,
@@ -44,6 +45,8 @@ app.include_router(wiki.router)
 app.include_router(promotion.router)
 app.include_router(ask.router)
 app.include_router(dashboard.router)
+if not is_cloud_mode():
+    app.include_router(jobs.router)
 
 # Local-only: snapshot exporter that the desktop sync agent calls before
 # pushing to the cloud. The router itself short-circuits in cloud mode
@@ -103,10 +106,19 @@ if is_cloud_mode():
 def startup():
     if not is_cloud_mode():
         _local_backend_lock.acquire()
+    if not is_cloud_mode():
+        from services.task_runtime import store, ensure_worker
+        queue = store()
+        if DB_PATH.exists() and queue.active():
+            # API restarts must not run repair/migration writes alongside a
+            # surviving worker. Maintenance runs on the next idle startup.
+            ensure_worker()
+            return
     init_db()
     db = None
     try:
         db = SessionLocal()
+        papers.reconcile_paper_records(db)
         changed = False
         for paper in db.query(Paper).all():
             extraction = None
@@ -157,6 +169,9 @@ def startup():
 
 
 if not is_cloud_mode():
+    from services.task_runtime import start_supervisor, stop_supervisor
+    app.add_event_handler("startup", start_supervisor)
+    app.add_event_handler("shutdown", stop_supervisor)
     # Registered after startup() so the existing library schema is ready first.
     app.add_event_handler("startup", recommendation_local.start_local)
     app.add_event_handler("shutdown", _local_backend_lock.release)

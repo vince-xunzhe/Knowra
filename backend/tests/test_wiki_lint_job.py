@@ -12,6 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from routers import wiki
 from services.wiki_lint_job import WikiLintJob
+from services import task_runtime, task_executor
+from services.task_store import TaskStore
 
 
 class WikiLintJobTests(unittest.TestCase):
@@ -20,6 +22,13 @@ class WikiLintJobTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "job.json"
         self.job = WikiLintJob(self.path)
+        self.queue = TaskStore(Path(self.tmp.name) / 'tasks.db')
+        self.queue.initialize()
+        for mock in [patch.object(task_runtime, '_store', self.queue),
+                     patch.object(task_runtime, 'ensure_worker'),
+                     patch.object(task_runtime, 'in_worker', return_value=False)]:
+            mock.start()
+            self.addCleanup(mock.stop)
 
     def wait_done(self):
         deadline = time.monotonic() + 3
@@ -47,20 +56,25 @@ class WikiLintJobTests(unittest.TestCase):
             try:
                 response = client.post("/api/wiki/lint/run", json={"use_llm": True})
                 self.assertEqual(response.status_code, 202)
+                runner.assert_not_called()
+                worker = threading.Thread(target=task_executor.execute, args=(self.queue, self.queue.claim()))
+                worker.start()
                 self.assertTrue(entered.wait(2))
                 self.assertEqual(client.get("/api/wiki/lint/job").json()["status"], "running")
-                repeated = client.post("/api/wiki/lint/run", json={"use_llm": False})
+                repeated = client.post("/api/wiki/lint/run", json={"use_llm": True})
                 self.assertEqual(response.json()["job_id"], repeated.json()["job_id"])
+                changed = client.post("/api/wiki/lint/run", json={"use_llm": False})
+                self.assertEqual(changed.status_code, 409)
                 self.assertEqual(runner.call_count, 1)
             finally:
                 release.set()
-                self.wait_done()
+                worker.join(3)
+                self.assertFalse(worker.is_alive())
             self.assertEqual(client.get("/api/wiki/lint/job").json()["status"], "completed")
             self.assertEqual(client.get("/api/wiki/lint/result").json()["result"]["counts"]["concepts_scanned"], 2)
             db_factory.return_value.__exit__.assert_called_once()
-        restored = WikiLintJob(self.path)
-        self.assertEqual(restored.report(), self.job.report())
-        self.assertEqual(restored.snapshot()["status"], "completed")
+        restored = TaskStore(self.queue.path)
+        self.assertEqual(restored.latest('lint')['status'], 'completed')
 
     def test_agent_failure_keeps_rule_report_as_warning(self):
         result = {"judgment": {"used_model": False, "error": "model timeout"}, "stubs": []}

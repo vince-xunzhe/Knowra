@@ -186,6 +186,12 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               title: tr("处理结束，{0} 篇论文失败", { 0: errors }),
               detail: tr("可切换到论文页查看失败摘要并执行重试。"),
             }
+          : !pipeline.processing?.total || pipeline.processing.done < pipeline.processing.total
+          ? {
+              tone: 'warning',
+              title: tr("处理任务已停止"),
+              detail: tr("未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。"),
+            }
           : {
               tone: 'success',
               title: tr("处理完成"),
@@ -195,7 +201,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
     }
     prevRunningRef.current = running
     prevErrorsRef.current = errors
-  }, [pipeline.processing?.running, pipeline.processing?.errors])
+  }, [pipeline.processing?.running, pipeline.processing?.errors, pipeline.processing?.total, pipeline.processing?.done])
 
   const visibleData = useMemo(() => {
     // First strip types we never want on the node-graph canvas (e.g.

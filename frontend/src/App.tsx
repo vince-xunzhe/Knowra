@@ -9,6 +9,7 @@ import RecommendPage from './pages/RecommendPage'
 import SettingsPage from './pages/SettingsPage'
 import DashboardPage from './pages/DashboardPage'
 import ProcessingStatus from './components/ProcessingStatus'
+import BackgroundTasks from './components/BackgroundTasks'
 import WikiCompileStatus from './components/WikiCompileStatus'
 import WikiLintStatus from './components/WikiLintStatus'
 import { WikiLintProvider } from './hooks/useWikiLint'
@@ -111,6 +112,7 @@ function AppContent() {
       </main>
 
       <ProcessingStatus />
+      <BackgroundTasks />
       <WikiCompileStatus />
       <WikiLintStatus onOpen={() => { setPage('graph'); setLintOpen(true) }} />
     </div>

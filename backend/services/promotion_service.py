@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Iterable, Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from models import KnowledgeNode
 from services.graph_service import (
@@ -268,7 +268,7 @@ def status_counts(db: Session) -> dict[str, int]:
     counts = {s: 0 for s in PROMOTION_STATUSES}
     nodes = db.query(KnowledgeNode).filter(
         KnowledgeNode.node_type.in_(list(AUTO_CONCEPT_NODE_TYPES))
-    ).all()
+    ).options(defer(KnowledgeNode.embedding)).all()
     for node in nodes:
         counts[promotion_status(node)] = counts.get(promotion_status(node), 0) + 1
     return counts
@@ -281,7 +281,7 @@ def promotion_summary(db: Session) -> dict:
     state is."""
     nodes = db.query(KnowledgeNode).filter(
         KnowledgeNode.node_type.in_(list(AUTO_CONCEPT_NODE_TYPES))
-    ).all()
+    ).options(defer(KnowledgeNode.embedding)).all()
     counts = {s: 0 for s in PROMOTION_STATUSES}
     by: dict[str, int] = {"user": 0, "llm": 0, "heuristic": 0, "legacy": 0, "unset": 0}
     last_eval: Optional[datetime] = None

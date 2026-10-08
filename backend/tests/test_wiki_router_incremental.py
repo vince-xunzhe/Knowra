@@ -33,6 +33,9 @@ class _SeqDB:
 
 class WikiRouterIncrementalTests(unittest.TestCase):
     def setUp(self):
+        executor = patch('services.task_runtime.in_worker', return_value=True)
+        executor.start()
+        self.addCleanup(executor.stop)
         wiki.compile_state["running"] = False
 
     @patch("routers.wiki.wiki_search_service.rebuild_index", return_value={"ok": True})

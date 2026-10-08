@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 from sqlalchemy import inspect
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from presentation_preferences import response_instructions
 from config import load_config, task_reasoning_effort
@@ -262,16 +262,19 @@ def _concept_compile_signature(
     })
 
 
-def list_publishable_concept_nodes(db: Session) -> List[KnowledgeNode]:
+def list_publishable_concept_nodes(db: Session, *, include_embeddings: bool = True) -> List[KnowledgeNode]:
     processed_ids = {
         row[0] for row in db.query(Paper.id).filter(Paper.processed.is_(True)).all()
     }
-    nodes = db.query(KnowledgeNode).all()
+    query = db.query(KnowledgeNode)
+    if not include_embeddings:
+        query = query.options(defer(KnowledgeNode.embedding))
+    nodes = query.all()
     return [node for node in nodes if is_publishable_concept_node(node, processed_ids)]
 
 
 def count_publishable_concepts(db: Session) -> int:
-    return len(list_publishable_concept_nodes(db))
+    return len(list_publishable_concept_nodes(db, include_embeddings=False))
 
 
 # --- LLM call ---------------------------------------------------------------
@@ -1030,8 +1033,12 @@ def compute_freshness_summary(db: Session) -> dict:
     user doesn't have to remember whether they reprocessed papers since the
     last compile run.
     """
-    papers = db.query(Paper).filter(Paper.processed.is_(True)).all()
-    nodes = list_publishable_concept_nodes(db)
+    papers = db.query(Paper).options(
+        defer(Paper.extracted_text), defer(Paper.chat_history),
+    ).filter(Paper.processed.is_(True)).all()
+    nodes = list_publishable_concept_nodes(db, include_embeddings=False)
+    canonical_papers = {str(p.id): p for p in papers}
+    finish_read_snapshot(db)
 
     # IDs are opaque strings (UUID post-migration). Wiki .md frontmatter
     # may carry the canonical UUID (compiled after migration) OR the
@@ -1135,7 +1142,8 @@ def compute_freshness_summary(db: Session) -> dict:
     concept_ok = 0
     for node in nodes:
         expected_name = _concept_page_path(node).name
-        source_papers = _published_concept_source_papers(node, db)
+        source_papers = [canonical_papers[str(pid)] for pid in normalize_source_paper_ids(node.source_paper_ids)
+                         if str(pid) in canonical_papers]
         candidates = []
         for key in _both_ids(node):
             candidates = concept_pages_by_id.get(key)

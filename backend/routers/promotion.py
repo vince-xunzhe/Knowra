@@ -79,8 +79,9 @@ def _now_iso() -> str:
 
 
 def _run_state_snapshot() -> dict:
+    from services.task_runtime import snapshot
     with _run_state_lock:
-        return dict(promotion_run_state)
+        return snapshot('promotion', promotion_run_state)
 
 
 def _set_run_state(**changes) -> None:
@@ -228,6 +229,11 @@ def run_promotion(body: RunRequest = RunRequest()):
     the current state and can resume polling instead of spawning duplicate
     model work.
     """
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        submit_job('promotion', 'promotion', body.dict())
+        return _run_state_snapshot()
     if _try_begin_run(body):
         try:
             threading.Thread(

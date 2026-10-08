@@ -3,6 +3,7 @@ import unittest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -103,6 +104,9 @@ class PromotionRunStateTests(unittest.TestCase):
     def setUp(self):
         from routers import promotion
 
+        executor = patch("services.task_runtime.in_worker", return_value=True)
+        executor.start()
+        self.addCleanup(executor.stop)
         self.router = promotion
         self.original_state = dict(promotion.promotion_run_state)
         promotion._set_run_state(

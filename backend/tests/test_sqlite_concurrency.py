@@ -26,6 +26,9 @@ from services.scanner_service import scan_directory
 
 class SQLiteConcurrencyTests(unittest.TestCase):
     def setUp(self):
+        snapshot = patch.object(papers, '_processing_snapshot', side_effect=lambda: dict(papers.processing_state))
+        snapshot.start()
+        self.addCleanup(snapshot.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
@@ -98,8 +101,8 @@ class SQLiteConcurrencyTests(unittest.TestCase):
                  patch.object(papers, "_prepare_reprocess") as prepare, \
                  patch.object(papers, "_start_processing_worker") as start:
                 result = papers.retry_failed_papers(db)
-                prepare.assert_called_once_with(db, failed)
-                start.assert_called_once_with(["p"])
+                prepare.assert_not_called()
+                start.assert_called_once_with(["p"], force=True)
                 self.assertEqual(result["retried"], 1)
 
     def test_real_write_lock_is_recoverable_and_rollback_allows_retry(self):

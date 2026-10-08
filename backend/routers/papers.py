@@ -12,7 +12,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
+from services.db_snapshot import finish_read_snapshot
 from sqlalchemy.exc import SQLAlchemyError
 from database import get_db
 from services.paper_work_counts import paper_work_counts
@@ -96,9 +97,9 @@ def _safe_parse(raw):
         return None
 
 
-def _paper_pub_year(p: Paper) -> Optional[int]:
+def _paper_pub_year(p: Paper, extraction=None) -> Optional[int]:
     """Publication year from the paper's extraction (or None)."""
-    ext = _safe_parse(p.raw_llm_response)
+    ext = extraction if extraction is not None else _safe_parse(p.raw_llm_response)
     raw = ext.get("year") if isinstance(ext, dict) else None
     if raw is None:
         return None
@@ -228,6 +229,11 @@ processing_state = {
 }
 
 
+def _processing_snapshot():
+    from services.task_runtime import snapshot
+    return snapshot('papers', processing_state)
+
+
 def _retry_settings(cfg: dict) -> tuple[int, float, float]:
     try:
         max_retries = int(cfg.get("paper_process_max_retries", 3))
@@ -343,7 +349,7 @@ THREAD_TTL_DAYS = 60
 
 
 def _nodes_for_paper(db: Session, paper_id: str):
-    nodes = db.query(KnowledgeNode).all()
+    nodes = db.query(KnowledgeNode).options(defer(KnowledgeNode.embedding)).all()
     matches = []
     for node in nodes:
         raw_ids = node.source_paper_ids or []
@@ -441,8 +447,14 @@ def _sync_paper_from_record_if_needed(db: Session, p: Paper):
 
 @router.post("/scan")
 def scan_papers(db: Session = Depends(get_db)):
+    from services.task_runtime import in_worker
+    if not in_worker():
+        from routers.jobs import submit_job
+        return submit_job('scan', 'scan', {})
     cfg = load_config()
     try:
+        if not _processing_snapshot()["running"]:
+            reconcile_paper_records(db)
         return scan_directory(cfg["scan_directory"], db)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -564,6 +576,15 @@ async def upload_papers(
 
 @router.get("/papers")
 def list_papers(db: Session = Depends(get_db)):
+    papers = db.query(Paper).options(
+        defer(Paper.extracted_text), defer(Paper.notes), defer(Paper.chat_history),
+    ).order_by(Paper.created_at.desc()).all()
+    finish_read_snapshot(db)
+    return [_serialize_paper_list_item(p) for p in papers]
+
+
+def reconcile_paper_records(db: Session) -> None:
+    """Maintenance on startup/explicit scan, never on a browsing request."""
     papers = db.query(Paper).order_by(Paper.created_at.desc()).all()
     changed = False
     healed_papers: list[Paper] = []
@@ -577,8 +598,11 @@ def list_papers(db: Session = Depends(get_db)):
         db.commit()
     for paper in healed_papers:
         sync_record_from_paper(paper, event="auto_repair")
-    return [
-        {
+
+
+def _serialize_paper_list_item(p: Paper) -> dict:
+    extraction = _safe_parse(p.raw_llm_response) or {}
+    return {
             "id": p.id,
             "filename": p.filename,
             "filepath": p.filepath,
@@ -592,21 +616,19 @@ def list_papers(db: Session = Depends(get_db)):
             "last_error_stage": p.last_error_stage,
             "last_error_reason": p.last_error_reason,
             "last_error_recoverable": p.last_error_recoverable,
-            "paper_category": effective_paper_category(p, _safe_parse(p.raw_llm_response)),
+            "paper_category": effective_paper_category(p, extraction),
             "paper_category_model": normalize_paper_category(p.paper_category_model),
             "paper_category_override": normalize_paper_category(p.paper_category_override),
             "paper_category_source": paper_category_source(p),
-            "paper_team": effective_paper_team(p, _safe_parse(p.raw_llm_response)),
+            "paper_team": effective_paper_team(p, extraction),
             "paper_team_model": normalize_team(p.paper_team_model),
             "paper_team_override": normalize_team(p.paper_team_override),
             "paper_team_source": paper_team_source(p),
             "learning_status": normalize_learning_status(p.learning_status),
-            "year": _paper_pub_year(p),
+            "year": _paper_pub_year(p, extraction),
             "error": p.error,
             "created_at": p.created_at.isoformat() if p.created_at else None,
         }
-        for p in papers
-    ]
 
 
 def _sync_bulk_record_state(p: Paper) -> bool:
@@ -618,12 +640,9 @@ def get_paper(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if not processing_state["running"]:
-        _sync_paper_from_record_if_needed(db, p)
-    if _reconcile_processed_paper(p):
-        db.commit()
-        sync_record_from_paper(p, event="auto_repair")
-    return _serialize_paper_detail(p, db)
+    result = _serialize_paper_detail(p, db)
+    db.close()
+    return result
 
 
 @router.put("/papers/{paper_id}/learning-status")
@@ -729,22 +748,8 @@ def _process_single(paper_id: str):
         max_retries, backoff_base_s, backoff_max_s = _retry_settings(cfg)
         processing_state["max_retries"] = max_retries
 
-        if not cfg.get("openai_api_key"):
-            _set_pipeline_state(
-                db,
-                p,
-                status=PIPELINE_STATUS_FAILED,
-                retry_count=0,
-                error="OpenAI API key not configured",
-                error_stage=PIPELINE_STATUS_EXTRACTING,
-                error_recoverable=False,
-            )
-            _sync_processing_record(p, event="process_error")
-            processing_state["done"] += 1
-            processing_state["errors"] += 1
-            processing_state["failed_papers"].append(_paper_failure_item(p))
-            return
-
+        # The gateway validates the selected provider. Codex CLI does not
+        # require an OpenAI API key, nor do non-OpenAI API task bindings.
         processing_state["current"] = p.filename
         attempt = 1
         extraction_result = None
@@ -1143,23 +1148,11 @@ def _serialize_processing_submission(handler):
     return wrapped
 
 
-def _start_processing_worker(paper_ids: list[str]) -> None:
+def _start_processing_worker(paper_ids: list[str], force: bool = False) -> None:
     if not paper_ids:
         return
-    _mark_processing_started(paper_ids)
-    try:
-        # Request-level BackgroundTasks keep Uvicorn waiting during reload.
-        # The worker opens its own DB sessions; never pass the request session.
-        threading.Thread(
-            target=_process_many_background, args=(list(paper_ids),),
-            name="paper-processing", daemon=True,
-        ).start()
-    except Exception as exc:
-        processing_state.update(
-            running=False, batch_error=str(exc), last_message="论文处理任务启动失败",
-            finished_at=datetime.now(timezone.utc).isoformat(),
-        )
-        raise HTTPException(status_code=503, detail="Failed to start paper processing") from exc
+    from routers.jobs import submit_job
+    submit_job('papers', 'papers', {'paper_ids': list(paper_ids), 'force': force})
 
 
 def _prepare_reprocess(db: Session, p: Paper):
@@ -1216,8 +1209,8 @@ def _reconcile_failed_papers(db: Session) -> list[Paper]:
 @router.post("/process")
 @_serialize_processing_submission
 def process_all(db: Session = Depends(get_db)):
-    if processing_state["running"]:
-        return {"message": "Processing already running", **processing_state}
+    if _processing_snapshot()["running"]:
+        return {"message": "Processing already running", **_processing_snapshot()}
     pending = db.query(Paper).filter(
         Paper.processed == False, Paper.error == None
     ).all()
@@ -1226,11 +1219,11 @@ def process_all(db: Session = Depends(get_db)):
         counts = paper_work_counts(db)
         message = (f"没有新的待处理论文；有 {counts['failed_count']} 篇失败论文，请点击重试失败。"
                    if counts["failed_count"] else "没有待处理论文，请先扫描目录。")
-        return {**processing_state, **counts, "accepted": False,
+        return {**_processing_snapshot(), **counts, "accepted": False,
                 "message": message, "last_message": message}
     db.close()
     _start_processing_worker(ids)
-    return {"message": "Processing started", "accepted": True, **processing_state}
+    return {"message": "Processing started", "accepted": True, **_processing_snapshot()}
 
 
 @router.post("/papers/{paper_id}/process")
@@ -1239,12 +1232,12 @@ def process_one(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if processing_state["running"]:
-        return {"message": "Processing already running", **processing_state}
+    if _processing_snapshot()["running"]:
+        return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
     db.close()
     _start_processing_worker([paper_id])
-    return {"message": f"Processing started for {filename}", **processing_state}
+    return {"message": f"Processing started for {filename}", **_processing_snapshot()}
 
 
 @router.post("/papers/{paper_id}/retry")
@@ -1254,26 +1247,25 @@ def retry_paper(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if processing_state["running"]:
-        return {"message": "Processing already running", **processing_state}
-    _prepare_reprocess(db, p)
+    if _processing_snapshot()["running"]:
+        return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
     db.close()
-    _start_processing_worker([paper_id])
-    return {"message": f"Retry started for {filename}", **processing_state}
+    _start_processing_worker([paper_id], force=True)
+    return {"message": f"Retry started for {filename}", **_processing_snapshot()}
 
 
 @router.post("/papers/retry_failed")
 @_serialize_processing_submission
 def retry_failed_papers(db: Session = Depends(get_db)):
     """Retry all failed papers in one batch."""
-    if processing_state["running"]:
-        return {"message": "Processing already running", **processing_state}
+    if _processing_snapshot()["running"]:
+        return {"message": "Processing already running", **_processing_snapshot()}
 
-    failed = _reconcile_failed_papers(db)
+    failed = db.query(Paper).filter(Paper.processed.is_(False), Paper.error.isnot(None)).all()
     if not failed:
         return {
-            **processing_state,
+            **_processing_snapshot(),
             **paper_work_counts(db),
             "accepted": False,
             "message": "没有失败论文需要重试。",
@@ -1285,16 +1277,15 @@ def retry_failed_papers(db: Session = Depends(get_db)):
     failed_items: list[dict] = []
     for paper in failed:
         failed_items.append(_paper_failure_item(paper))
-        _prepare_reprocess(db, paper)
         ids.append(paper.id)
 
     db.close()
-    _start_processing_worker(ids)
+    _start_processing_worker(ids, force=True)
     return {
         "message": f"Retry started for {len(ids)} failed papers",
         "retried": len(ids),
         "failed_papers": failed_items,
-        **processing_state,
+        **_processing_snapshot(),
     }
 
 
@@ -1305,12 +1296,11 @@ def reprocess_paper(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
-    if processing_state["running"]:
-        return {"message": "Processing already running", **processing_state}
-    _prepare_reprocess(db, p)
+    if _processing_snapshot()["running"]:
+        return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
     db.close()
-    _start_processing_worker([paper_id])
+    _start_processing_worker([paper_id], force=True)
     return {"message": f"Reprocessing started for {filename}"}
 
 
@@ -2032,4 +2022,4 @@ def reset_chat(paper_id: str, db: Session = Depends(get_db)):
 
 @router.get("/status")
 def get_status(db: Session = Depends(get_db)):
-    return {**processing_state, **paper_work_counts(db)}
+    return {**_processing_snapshot(), **paper_work_counts(db)}

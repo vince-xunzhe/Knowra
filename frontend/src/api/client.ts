@@ -1,6 +1,8 @@
 import { t as tr } from '../i18n/catalog'
 import { getLocale, type Locale } from '../i18n/store'
 import axios from 'axios'
+import { resolveJobResult, type BackgroundJob } from './jobs'
+import { readWithRetry, singleFlight } from './polling'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
 
@@ -254,8 +256,8 @@ export interface PaperScanResult {
 
 export const scanPapers = () =>
   api
-    .post<PaperScanResult>('/scan')
-    .then(r => r.data)
+    .post<PaperScanResult | BackgroundJob>('/scan')
+    .then(r => resolveJobResult<PaperScanResult>(r.data))
 
 export const revealScannedFile = (path: string) =>
   api
@@ -544,17 +546,17 @@ export const listPaperPages = () =>
 export const getPaperPage = (filename: string) =>
   api.get<WikiPageDetail>(`/wiki/papers/${encodeURIComponent(filename)}`).then(r => r.data)
 export const recompileConcept = (conceptId: string | number) =>
-  api.post<{ path: string; filename: string }>(
+  api.post<{ path: string; filename: string } | BackgroundJob>(
     `/wiki/concepts/${conceptId}/recompile`,
     undefined,
     { timeout: 120000 },
-  ).then(r => r.data)
+  ).then(r => resolveJobResult<{ path: string; filename: string }>(r.data))
 export const recompilePaper = (paperId: string | number) =>
-  api.post<{ path: string; filename: string }>(
+  api.post<{ path: string; filename: string } | BackgroundJob>(
     `/wiki/papers/${paperId}/recompile`,
     undefined,
     { timeout: 120000 },
-  ).then(r => r.data)
+  ).then(r => resolveJobResult<{ path: string; filename: string }>(r.data))
 export const recompileAllConcepts = () =>
   api.post<{ message: string }>('/wiki/concepts/recompile').then(r => r.data)
 export const recompileAllPaperPages = () =>
@@ -582,8 +584,8 @@ export interface WikiCompileState {
   }>
 }
 
-export const getWikiStatus = () =>
-  api.get<WikiCompileState>('/wiki/status', { timeout: 8000 }).then(r => r.data)
+export const getWikiStatus = singleFlight(() =>
+  api.get<WikiCompileState>('/wiki/status', { timeout: 8000 }).then(r => r.data))
 
 export interface WikiGraphNode {
   id: string
@@ -673,8 +675,8 @@ export interface WikiFreshnessSummary {
   concepts: FreshnessBucket<FreshnessConceptItem, FreshnessConceptItem>
 }
 
-export const getWikiFreshness = () =>
-  api.get<WikiFreshnessSummary>('/wiki/freshness', { timeout: 12000 }).then(r => r.data)
+export const getWikiFreshness = singleFlight(() =>
+  api.get<WikiFreshnessSummary>('/wiki/freshness', { timeout: 12000 }).then(r => r.data))
 
 // FTS5 search across the LLM-compiled wiki layer. Pure local SQLite —
 // zero token cost. snippet contains <mark>...</mark> spans; render via
@@ -918,8 +920,8 @@ export interface LintJobState {
 export const runWikiLint = (useLlm = true) =>
   api.post<LintJobState>('/wiki/lint/run', { use_llm: useLlm }, { timeout: 10000 }).then(r => r.data)
 
-export const getWikiLintJob = () =>
-  api.get<LintJobState>('/wiki/lint/job', { timeout: 8000 }).then(r => r.data)
+export const getWikiLintJob = singleFlight(() =>
+  api.get<LintJobState>('/wiki/lint/job', { timeout: 8000 }).then(r => r.data))
 
 export const getWikiLintResult = () =>
   api.get<{ job_id: string | null; result: LintResult | null }>('/wiki/lint/result', { timeout: 10000 }).then(r => r.data)
@@ -928,7 +930,7 @@ export async function waitForWikiLint(initial: LintJobState) {
   let job = initial
   while (job.status === 'running') {
     await new Promise(resolve => setTimeout(resolve, 2500))
-    job = await getWikiLintJob()
+    job = await readWithRetry(getWikiLintJob)
     if (job.job_id !== initial.job_id) throw new Error(tr("健康检查任务已变更，请查看最新报告。"))
   }
   if (job.status === 'failed' || job.status === 'warning') {
@@ -937,8 +939,8 @@ export async function waitForWikiLint(initial: LintJobState) {
   return job
 }
 
-export const getWikiLintStatus = () =>
-  api.get<LintReportStatus>('/wiki/lint/status').then(r => r.data)
+export const getWikiLintStatus = singleFlight(() =>
+  api.get<LintReportStatus>('/wiki/lint/status').then(r => r.data))
 
 export const getWikiLintReport = () =>
   api
@@ -1047,10 +1049,10 @@ export const runPromotion = (params: { force_all?: boolean; use_llm?: boolean } 
     .post<PromotionRunStatus>('/promotion/run', params, { timeout: 15000 })
     .then(r => r.data)
 
-export const getPromotionRunStatus = () =>
+export const getPromotionRunStatus = singleFlight(() =>
   api
     .get<PromotionRunStatus>('/promotion/run/status', { timeout: 8000 })
-    .then(r => r.data)
+    .then(r => r.data))
 
 export const listPromotionCandidates = (status?: PromotionStatus, limit = 500) =>
   api
@@ -1069,10 +1071,10 @@ export const updatePromotionStatus = (
     .patch<{ node: PromotionCandidate }>(`/promotion/${nodeId}`, { status, reason })
     .then(r => r.data)
 
-export const getPromotionCounts = () =>
+export const getPromotionCounts = singleFlight(() =>
   api
     .get<{ counts: PromotionCounts; summary: PromotionSummary }>('/promotion/counts')
-    .then(r => r.data)
+    .then(r => r.data))
 
 export interface PromotionPromptPayload {
   prompt: string

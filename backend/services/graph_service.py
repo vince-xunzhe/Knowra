@@ -1,8 +1,9 @@
 from __future__ import annotations
 import json
+import math
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import func, or_
 from models import Paper, KnowledgeNode, KnowledgeEdge
 from logging_utils import get_logger
@@ -142,7 +143,7 @@ def _find_existing_node(db: Session, name: str, aliases: list) -> Optional[Knowl
     # Alias overlap via tags (we store aliases in tags)
     all_nodes = db.query(KnowledgeNode).filter(
         KnowledgeNode.node_origin != MANUAL_NODE_ORIGIN,
-    ).all()
+    ).options(defer(KnowledgeNode.embedding)).all()
     for n in all_nodes:
         existing = {_normalize_name(a) for a in (n.tags or []) if a}
         existing.add(_normalize_name(n.title))
@@ -610,19 +611,28 @@ def _add_similarity_edges(
     threshold: float,
     *,
     context: str = "incremental_build",
+    candidates=None,
+    norms=None,
 ) -> dict[str, int]:
     summary = {"candidate_edges": 0, "final_edges": 0}
     if not isinstance(node.embedding, list) or not node.embedding:
         return summary
-    others = db.query(KnowledgeNode).filter(
+    others = candidates if candidates is not None else db.query(KnowledgeNode).filter(
         KnowledgeNode.id != node.id,
         KnowledgeNode.embedding.isnot(None),
     ).all()
     for other in others:
+        if other.id == node.id:
+            continue
         if not isinstance(other.embedding, list) or not other.embedding:
             continue
         summary["candidate_edges"] += 1
-        sim = cosine_similarity(node.embedding, other.embedding)
+        if norms is None:
+            sim = cosine_similarity(node.embedding, other.embedding)
+        else:
+            denominator = norms[node.id] * norms[other.id]
+            sim = (sum(x * y for x, y in zip(node.embedding, other.embedding)) / denominator
+                   if denominator else 0.0)
         if sim >= threshold:
             rounded = round(sim, 4)
             edge = _add_edge(db, node.id, other.id, "similar", rounded)
@@ -934,8 +944,12 @@ def add_nodes_from_paper_extraction(
 
     # --- Similarity edges for newly-touched nodes ---
     touched = list({n.id: n for n in name_to_node.values()}.values())
+    # Decode the vector table once per paper, not once per extracted node.
+    candidates = db.query(KnowledgeNode).filter(KnowledgeNode.embedding.isnot(None)).all()
+    norms = {n.id: math.sqrt(sum(x * x for x in n.embedding))
+             for n in candidates if isinstance(n.embedding, list) and n.embedding}
     for node in touched:
-        _add_similarity_edges(db, node, similarity_threshold)
+        _add_similarity_edges(db, node, similarity_threshold, candidates=candidates, norms=norms)
     db.flush()
     # Caller owns commit/rollback, including the paper's completion state.
     return [n.id for n in touched]
@@ -1060,7 +1074,7 @@ def get_graph_data(db: Session, *, include_candidates: bool = False) -> dict:
     """Curated graph by default; pass include_candidates=True to also surface
     pending/rejected concept nodes for the review UI."""
     processed_ids = _processed_paper_ids(db)
-    all_nodes = db.query(KnowledgeNode).all()
+    all_nodes = db.query(KnowledgeNode).options(defer(KnowledgeNode.embedding)).all()
     if include_candidates:
         nodes = [n for n in all_nodes if not node_is_hidden(n)]
     else:

@@ -1,4 +1,5 @@
 import { t as tr } from '../i18n/catalog'
+import { latestJob, startPipeline, waitForJob } from '../api/jobs'
 import { useLocale } from '../i18n/preferences'
 // Left-rail control panel for the [知识] page. Replaces the previous
 // PipelineStatusBar (top) + CandidatePanel (bottom-left floating). All
@@ -42,16 +43,9 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import {
-  getPromotionCounts,
-  getStatus,
-  getWikiFreshness,
-  getWikiStatus,
   revealScannedFile,
-  runWikiLint,
-  waitForWikiLint,
   type DuplicatePaperFile,
   type PaperScanResult,
-  type WikiCompileState,
 } from '../api/client'
 import { getLastSyncAt } from '../api/cloud'
 import { useCloudAuth } from '../hooks/useCloudAuth'
@@ -124,12 +118,35 @@ export default function PipelineConsole({
   const [useLlm, setUseLlm] = useState(true)
   const [forceAll, setForceAll] = useState(false)
   const autoScanStartedRef = useRef(false)
+  const runAllInFlightRef = useRef(false)
   const scanForDirectory = state.scan
   const [runAllStatus, setRunAllStatus] = useState<RunAllStatus>({
     running: false,
     label: tr("全流程编排"),
     tone: 'idle',
   })
+
+  useEffect(() => {
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout>
+    const restore = async () => {
+      try {
+        const job = await latestJob('pipeline')
+        if (stopped) return
+        if (job && !runAllInFlightRef.current) {
+          const running = job.status === 'queued' || job.status === 'running'
+          setRunAllStatus({ running, label: job.progress.label || tr('后台全流程编排'),
+            detail: job.error || (running ? tr('独立 worker 执行中，可离开页面') : tr('本地流程已完成；云端同步可在同步栏执行')),
+            tone: running ? 'running' : job.status === 'completed' ? 'success' : 'warning' })
+        }
+      } catch {
+        // Retain the last confirmed task state while the API reconnects.
+      }
+      if (!stopped) timer = setTimeout(() => { void restore() }, 2500)
+    }
+    void restore()
+    return () => { stopped = true; clearTimeout(timer) }
+  }, [])
 
   useEffect(() => {
     if (autoScanStartedRef.current) return
@@ -240,88 +257,17 @@ export default function PipelineConsole({
       state.compileStatus?.running ||
       state.promotionRunStatus?.running
     ) return
+    runAllInFlightRef.current = true
     setError(null)
     setRunAllStep(tr("扫描论文目录"))
     try {
-      const scanResult = await state.scan()
-      showScanResult(scanResult)
-
-      const pendingPapers = scanResult.pending ?? scanResult.unprocessed
-      if (pendingPapers > 0) {
-        setRunAllStep(tr("处理论文"), tr("{0} 篇待处理", { 0: pendingPapers }))
-        await state.process()
-        const processingResult = await waitForProcessingDone(s => {
-          if (s.running) setRunAllStep(tr("处理论文"), `${s.done}/${s.total}`)
-        })
-        if (processingResult.errors > 0) {
-          const firstFailure = processingResult.failedPapers[0]
-          throw new Error(
-            firstFailure?.reason ||
-              processingResult.batchError ||
-              tr("{0} 篇论文处理失败", { 0: processingResult.errors }),
-          )
-        }
-      }
-
-      const afterProcessing = await getStatus()
-      if ((afterProcessing.failed_count ?? 0) > 0) {
-        throw new Error(tr("有 {0} 篇失败论文，请先在录入阶段点击“重试失败”。", { 0: afterProcessing.failed_count }))
-      }
-      setRunAllStep(tr("自动筛选候选概念"))
-      const beforePromotion = await getPromotionCounts()
-      if ((beforePromotion.summary.counts.pending ?? 0) > 0) {
-        await state.runPromotionRun(
-          { use_llm: true, force_all: false },
-          status => {
-            if (status.phase === 'heuristic') {
-              setRunAllStep(tr("自动筛选候选概念"), tr("启发式预筛选"))
-            } else if (status.phase === 'llm') {
-              setRunAllStep(
-                tr("自动筛选候选概念"),
-                status.total > 0
-                  ? tr("Agent 判断 {0}/{1}", { 0: status.done, 1: status.total })
-                  : tr("准备 Agent 判断"),
-              )
-            } else if (status.phase === 'reconcile') {
-              setRunAllStep(tr("自动筛选候选概念"), tr("同步概念页与搜索索引"))
-            }
-          },
+      const job = await startPipeline(crypto.randomUUID())
+      await waitForJob(job, current => {
+        setRunAllStep(
+          current.progress.label || tr("后台全流程编排"),
+          current.progress.state?.current || tr("独立 worker 执行中，可离开页面"),
         )
-      }
-      const afterPromotion = await getPromotionCounts()
-      if ((afterPromotion.summary.by.llm ?? 0) > 0) {
-        setRunAllStep(tr("确认 Agent 筛选结果"), tr("{0} 个判断", { 0: afterPromotion.summary.by.llm }))
-        await state.acceptPromotion()
-      }
-
-      let freshness = await getWikiFreshness()
-      const paperIssues = freshness.papers.missing_count + freshness.papers.stale_count
-      if (paperIssues > 0) {
-        setRunAllStep(tr("编译论文页"), tr("{0} 个待处理", { 0: paperIssues }))
-        await state.recompilePapers()
-        await waitForWikiCompileDone(s => {
-          if (s.running) setRunAllStep(tr("编译论文页"), `${s.done}/${s.total}`)
-        })
-      }
-
-      freshness = await getWikiFreshness()
-      const conceptIssues = freshness.concepts.missing_count + freshness.concepts.stale_count
-      if (conceptIssues > 0) {
-        setRunAllStep(tr("编译概念页"), tr("{0} 个待处理", { 0: conceptIssues }))
-        await state.recompileConcepts()
-        await waitForWikiCompileDone(s => {
-          if (s.running) setRunAllStep(tr("编译概念页"), `${s.done}/${s.total}`)
-        })
-      }
-
-      freshness = await getWikiFreshness()
-      const compileTotalNodes =
-        (freshness.papers.total_processed ?? 0) +
-        (freshness.concepts.total_nodes ?? 0)
-      if (compileTotalNodes > 0) {
-        setRunAllStep(tr("运行健康检查"), tr("规则 + Agent"))
-        await waitForWikiLint(await runWikiLint(true))
-      }
+      })
 
       if (auth.configured && auth.user) {
         setRunAllStep(tr("同步到云端"), tr("准备快照"))
@@ -353,10 +299,12 @@ export default function PipelineConsole({
       setError(message)
       setRunAllStatus({
         running: false,
-        label: tr("全流程编排中断"),
+        label: tr("请查看后台任务状态"),
         detail: message,
         tone: 'warning',
       })
+    } finally {
+      runAllInFlightRef.current = false
     }
   }
 
@@ -1263,64 +1211,6 @@ function stagePalette(tone: StageSnapshot['tone']) {
         iconColor: 'text-slate-500',
         indexColor: 'text-slate-500',
       }
-  }
-}
-
-type ProcessingPollStatus = NonNullable<PipelineState['processing']>
-
-const sleep = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms))
-
-async function waitForProcessingDone(onTick: (status: ProcessingPollStatus) => void) {
-  let sawRunning = false
-  let idlePolls = 0
-  for (;;) {
-    const raw = await getStatus()
-    const status: ProcessingPollStatus = {
-      running: !!raw.running,
-      total: raw.total ?? 0,
-      done: raw.done ?? 0,
-      errors: raw.errors ?? 0,
-      current: raw.current ?? '',
-      succeeded: raw.succeeded ?? Math.max(0, (raw.done ?? 0) - (raw.errors ?? 0)),
-      pending: typeof raw.pending === 'number' ? raw.pending : null,
-      failedCount: raw.failed_count ?? 0,
-      failedPapers: (raw.failed_papers ?? []).map(item => ({
-        id: item.id,
-        filename: item.filename,
-        stage: item.stage,
-        reason: item.reason,
-        recoverable: item.recoverable,
-        retryCount: item.retry_count,
-      })),
-      batchError: raw.batch_error ?? null,
-      lastMessage: raw.last_message ?? raw.message ?? '',
-    }
-    onTick(status)
-    if (status.running) {
-      sawRunning = true
-      idlePolls = 0
-    } else {
-      if (sawRunning || idlePolls >= 2) return status
-      idlePolls += 1
-    }
-    await sleep(1500)
-  }
-}
-
-async function waitForWikiCompileDone(onTick: (status: WikiCompileState) => void) {
-  let sawRunning = false
-  let idlePolls = 0
-  for (;;) {
-    const status = await getWikiStatus()
-    onTick(status)
-    if (status.running) {
-      sawRunning = true
-      idlePolls = 0
-    } else {
-      if (sawRunning || idlePolls >= 2) return status
-      idlePolls += 1
-    }
-    await sleep(1500)
   }
 }
 
