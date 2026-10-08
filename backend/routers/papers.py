@@ -757,6 +757,8 @@ def _process_single(paper_id: str):
         while attempt <= max_retries:
             stage = PIPELINE_STATUS_SCANNING
             try:
+                from model_gateway.runtime import preflight_task_runtime
+                preflight_task_runtime(cfg, 'paper_extract')
                 _set_pipeline_state(
                     db,
                     p,

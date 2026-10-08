@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from config import load_config, task_model_id, task_model_name, task_reasoning_effort
 from database import get_db
-from models import KnowledgeEdge, KnowledgeNode, Paper
+from models import KnowledgeNode, Paper
 from model_gateway import call_text_model, task_context
 from services import ask_agent, wiki_index, wiki_output_service
 from services import wiki_search as wiki_search_service
@@ -28,6 +28,7 @@ from services.graph_service import (
     find_existing_concept_node,
     normalize_source_paper_ids,
 )
+from services.edge_provenance import EdgeSpec, add_edge
 from services.synthesis_concept_service import analyze_synthesis_concept
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
@@ -277,6 +278,9 @@ def _sync_synthesis_relation_edges(
     *,
     source_node_id: str,
     related_links: list,
+    source_paper_ids: Optional[list] = None,
+    evidence: Optional[str] = None,
+    extractor_version: Optional[str] = None,
 ) -> list[dict]:
     if not related_links:
         return []
@@ -285,13 +289,8 @@ def _sync_synthesis_relation_edges(
         for node in db.query(KnowledgeNode).all()
         if getattr(node, "id", None) != source_node_id and (node.node_type or "") != "paper"
     }
-    symmetric_relations = {"related", "contrasts_with", "similar"}
-    existing_edges = {
-        (edge.source_id, edge.target_id, edge.relation_type)
-        for edge in db.query(KnowledgeEdge).all()
-    }
     resolved: list[dict] = []
-    created = False
+    changed = False
     for link in related_links:
         target = node_map.get(getattr(link, "concept_id", None))
         relation = (getattr(link, "relation_type", "") or "").strip().lower()
@@ -302,19 +301,25 @@ def _sync_synthesis_relation_edges(
             "title": target.title,
             "relation_type": relation,
         })
-        key = (source_node_id, target.id, relation)
-        reverse_key = (target.id, source_node_id, relation)
-        if key in existing_edges or (relation in symmetric_relations and reverse_key in existing_edges):
-            continue
-        db.add(KnowledgeEdge(
-            source_id=source_node_id,
-            target_id=target.id,
-            relation_type=relation,
-            weight=1.0,
-        ))
-        existing_edges.add(key)
-        created = True
-    if created:
+        paper_ids = normalize_source_paper_ids(source_paper_ids)
+        for paper_id in paper_ids or [None]:
+            result = add_edge(db, EdgeSpec(
+                source_id=source_node_id,
+                target_id=target.id,
+                relation_type=relation,
+                origin="inferred",
+                weight=1.0,
+                source_paper_id=paper_id,
+                source_field="ask_synthesis.related_links",
+                evidence=evidence,
+                metadata={
+                    "created_by": "ask_synthesis",
+                    "synthesis_node_id": str(source_node_id),
+                },
+                extractor_version=extractor_version,
+            ))
+            changed = changed or result.created or result.provenance_added
+    if changed:
         db.commit()
     return resolved
 
@@ -503,6 +508,9 @@ def create_concept_from_synthesis(
         db,
         source_node_id=node.id,
         related_links=list(analysis.related_links or []),
+        source_paper_ids=paper_ids,
+        evidence=body.source_question,
+        extractor_version=analysis.model if analysis.used_model else "ask-synthesis-rule-v1",
     )
 
     # Write the .md file directly. We bypass `compile_concept_page` so we

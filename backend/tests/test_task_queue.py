@@ -30,6 +30,47 @@ class TaskQueueTests(unittest.TestCase):
         self.assertIsNotNone(self.queue.claim())
         self.assertIsNone(self.queue.claim())
 
+    def test_old_revision_cannot_claim_after_upgrade_request(self):
+        self.queue.submit('test', 'papers', {})
+        self.queue.target_revision('new')
+        self.assertIsNone(self.queue.claim('old'))
+        self.assertIsNotNone(self.queue.claim('new'))
+
+    def test_legacy_heartbeat_schema_stays_compatible(self):
+        self.queue.heartbeat(123, 'new')
+        with self.queue.connect() as db:
+            db.execute('INSERT OR REPLACE INTO worker VALUES (1,456,?)', (time.time(),))
+        self.assertIsNone(self.queue.worker()['revision'])
+        self.queue.clear_worker(123)
+        self.assertEqual(self.queue.worker()['pid'], 456)
+
+    def test_healthy_managed_worker_receives_revision_without_duplicate_spawn(self):
+        self.queue.heartbeat(123, 'old')
+        with patch.object(task_runtime, '_store', self.queue), \
+             patch.object(task_runtime, 'runtime_revision', return_value='new'), \
+             patch.object(task_runtime, 'in_worker', return_value=False), \
+             patch.object(task_runtime, 'policy', return_value={'mode': 'managed'}), \
+             patch.object(task_runtime.subprocess, 'Popen') as spawn:
+            task_runtime.ensure_worker()
+            spawn.assert_not_called()
+            self.assertTrue(task_runtime.health()['restart_pending'])
+        self.assertEqual(self.queue.target_revision(), 'new')
+
+    def test_revision_tracks_source_and_environment_not_secrets(self):
+        from services.worker_revision import runtime_revision
+        root = Path(self.tmp.name)
+        (root / 'backend').mkdir()
+        source = root / 'backend/app.py'
+        source.write_text('VERSION = 1')
+        original = runtime_revision(root)
+        self.assertEqual(original, runtime_revision(root))
+        with patch.dict(os.environ, {'CODEX_CLI_PATH': '/new/codex'}):
+            self.assertNotEqual(original, runtime_revision(root))
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'not-real'}):
+            self.assertEqual(original, runtime_revision(root))
+        source.write_text('VERSION = 2')
+        self.assertNotEqual(original, runtime_revision(root))
+
     def test_request_key_survives_completion(self):
         job = self.queue.submit('papers', 'papers', {}, 'key')
         self.assertEqual(self.queue.submit('papers', 'papers', {}, 'second-key')['job_id'], job['job_id'])
@@ -148,6 +189,33 @@ main()
         self.assertLess(time.monotonic() - start, 1)
         result = self.wait_status(job, 'completed')
         self.assertNotEqual(result['result']['pid'], os.getpid())
+
+    def test_managed_upgrade_drains_current_job_before_replacement(self):
+        first_job = self.queue.submit('test', 'papers', {})
+        code = '''
+import os,time
+os.environ['KNOWRA_WORKER_MANAGED']='1'
+from services.task_executor import HANDLERS
+HANDLERS['test']=lambda ctx,payload: (time.sleep(1.5) or {'pid':os.getpid()})
+from scripts.task_worker import main
+main()
+'''
+        first = self.start_worker(code)
+        self.wait_status(first_job, 'running')
+        second_job = self.queue.submit('test', 'compile', {})
+        self.queue.target_revision('upgrade-request')
+        self.assertIsNone(first.poll())
+        self.wait_status(first_job, 'completed')
+        self.assertEqual(first.wait(timeout=8), 0)
+        self.assertIsNone(self.queue.worker())
+        self.assertEqual(self.queue.get(second_job['job_id'])['status'], 'queued')
+        # Use the same revision function and environment as the replacement.
+        replacement = self.start_worker(code.replace('main()',
+            "from services.task_runtime import store\nfrom services.worker_revision import runtime_revision\n"
+            "store().target_revision(runtime_revision())\nmain()"))
+        result = self.wait_status(second_job, 'completed')
+        self.assertEqual(result['result']['pid'], replacement.pid)
+        self.assertEqual(self.queue.get(first_job['job_id'])['attempt'], 1)
 
     def test_api_lifecycles_do_not_own_worker_lifetime(self):
         from fastapi import FastAPI

@@ -191,6 +191,13 @@ class CloudKnowledgeEdge(CloudBase):
     target_id = Column(String, nullable=False)
     relation_type = Column(String, default="related")
     weight = Column(Float, default=0.0)
+    origin = Column(String, nullable=True, default="legacy")
+    confidence = Column(Float, nullable=True)
+    source_paper_id = Column(String, nullable=True)
+    source_field = Column(String, nullable=True)
+    evidence = Column(Text, nullable=True)
+    edge_metadata = Column("metadata", JSON, nullable=True)
+    extractor_version = Column(String, nullable=True)
 
     created_at = Column(DateTime, default=_utcnow, nullable=False)
     updated_at = Column(DateTime, default=_utcnow, nullable=False)

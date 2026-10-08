@@ -55,6 +55,37 @@ the existing Sync action. No browser credentials are copied to the worker.
 
 ## Operations / 运维
 
+### Runtime upgrades / 运行时升级
+
+Managed workers publish a runtime fingerprint (Python sources, interpreter, PATH,
+CODEX_CLI_PATH and PYTHONPATH). The API publishes the desired fingerprint every five
+seconds. On a mismatch, the worker finishes its **current queue job**, releases its
+lifetime lock and exits before claiming another job. The API then starts a replacement
+with its current environment. A batch/pipeline is one job; upgrading does not interrupt
+a model call midway or replay successful work. Source files should be deployed together,
+not edited repeatedly during an active production job.
+
+托管 worker 不再因为心跳正常就永久沿用旧代码。升级时先完成当前整批任务，再换代，
+不强杀正在运行的模型请求。修改启动环境变量后需要重启 API，worker 才能继承新环境；
+网页中的模型/Provider 配置仍在后续执行时重新加载。指纹不包含密钥或认证文件。
+外部托管模式不自动退出或替换进程，升级由运维在任务完成后进行。
+
+`/api/jobs/runtime` reports `restart_pending` while a managed worker is draining.
+`legacy_worker: true` identifies workers started before this protocol existed: once,
+after verifying no queued/running jobs, stop that old worker and restart the API. Do not
+kill a busy legacy worker merely to upgrade. The heartbeat schema stays backward-compatible.
+
+CLI resolution is repeated for every call, including desktop app updates. Precedence:
+explicit Provider executable path, `CODEX_CLI_PATH`, PATH, then known installation locations
+(including old flat and new embedded Codex/ChatGPT app bundles). Invalid explicit paths
+fail clearly rather than silently choosing another installation. No executable is installed
+automatically. Paper jobs check CLI availability **before** clearing old extraction results;
+missing/non-executable CLI errors are configuration failures, not retryable parsing failures.
+Availability checks do not call a model or verify login/network/model access.
+
+首次升级需手动替换不支持协议的旧 worker；之后由托管模式自动完成安全换代。
+缺少 CLI 时修复配置后再重试，既有论文结果不会因批处理启动预检失败而被删除。
+
 - `GET /api/jobs/runtime`: selected policy, worker PID and heartbeat.
 - `GET /api/jobs`: recent tasks; `GET /api/jobs/{id}`: durable progress/result.
 - `POST /api/jobs/{id}/resume`: explicit checkpoint resume.

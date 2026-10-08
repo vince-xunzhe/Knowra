@@ -255,6 +255,13 @@ def _create_knowledge_edges_v2(conn: Connection) -> None:
                 target_id       TEXT NOT NULL,
                 relation_type   TEXT DEFAULT 'related',
                 weight          REAL DEFAULT 0.0,
+                origin          TEXT DEFAULT 'legacy',
+                confidence      REAL,
+                source_paper_id TEXT,
+                source_field    TEXT,
+                evidence        TEXT,
+                metadata        TEXT,
+                extractor_version TEXT,
                 created_at      DATETIME
             )
             """

@@ -140,6 +140,18 @@ class KnowledgeEdge(Base):
     target_id = Column(String, nullable=False)
     relation_type = Column(String, default="related")
     weight = Column(Float, default=0.0)
+    # Edge-level provenance.  ``metadata`` is a reserved declarative
+    # attribute in SQLAlchemy, so the Python attribute is named
+    # ``edge_metadata`` while the physical/on-wire column stays metadata.
+    # The columns remain nullable for rolling compatibility; every new write
+    # goes through EdgeSpec and the SQLite migration backfills legacy rows.
+    origin = Column(String, nullable=True, default="legacy")
+    confidence = Column(Float, nullable=True)
+    source_paper_id = Column(String, nullable=True)
+    source_field = Column(String, nullable=True)
+    evidence = Column(Text, nullable=True)
+    edge_metadata = Column("metadata", JSON, nullable=True)
+    extractor_version = Column(String, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

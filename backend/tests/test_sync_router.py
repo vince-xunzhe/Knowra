@@ -446,6 +446,13 @@ class SyncRouterTests(unittest.TestCase):
                         "source_id": "node-a",
                         "target_id": "node-b",
                         "relation_type": "related",
+                        "origin": "explicit",
+                        "confidence": 0.9,
+                        "source_paper_id": None,
+                        "source_field": "techniques[].builds_on",
+                        "evidence": "A supports B.",
+                        "metadata": {"provenance": [{"origin": "explicit"}]},
+                        "extractor_version": "paper-extraction-v1",
                     },
                 ],
                 "wiki_files": [],
@@ -465,6 +472,12 @@ class SyncRouterTests(unittest.TestCase):
                 {e.id for e in db.query(CloudKnowledgeEdge).all()},
                 {"edge-keep"},
             )
+            edge = db.query(CloudKnowledgeEdge).one()
+            self.assertEqual(edge.origin, "explicit")
+            self.assertEqual(edge.confidence, 0.9)
+            self.assertEqual(edge.source_field, "techniques[].builds_on")
+            self.assertEqual(edge.evidence, "A supports B.")
+            self.assertEqual(edge.edge_metadata["provenance"][0]["origin"], "explicit")
             self.assertFalse(
                 db.query(CloudDeletion).filter(
                     CloudDeletion.table_name == "knowledge_edges",
@@ -531,6 +544,69 @@ class SyncRouterTests(unittest.TestCase):
         self.assertEqual(len(resp["validation_errors"]), 1)
         self.assertEqual(resp["validation_errors"][0]["code"], "USER_ID_MISMATCH")
         self.assertEqual(resp["validation_errors"][0]["table"], "papers")
+
+    def test_commit_rejects_cross_user_edge_references_in_sqlite_too(self):
+        db = self.SessionLocal()
+        try:
+            db.add_all([
+                CloudKnowledgeNode(
+                    id="node-b-owned", user_id=USER_B,
+                    title="B node", content="B", node_type="concept",
+                ),
+                CloudPaper(
+                    id="paper-b-owned", user_id=USER_B,
+                    filepath="/b/paper.pdf", filename="paper.pdf",
+                    file_hash="paper-b-hash",
+                ),
+            ])
+            db.commit()
+        finally:
+            db.close()
+
+        base_nodes = [
+            {
+                "id": "node-a-1", "user_id": USER_A,
+                "title": "A1", "content": "A1", "node_type": "concept",
+            },
+            {
+                "id": "node-a-2", "user_id": USER_A,
+                "title": "A2", "content": "A2", "node_type": "concept",
+            },
+        ]
+
+        for target_id, source_paper_id in (
+            ("node-b-owned", None),
+            ("node-a-2", "paper-b-owned"),
+        ):
+            payload = {
+                "api_version": "1",
+                "device_id": "dev-cross-user",
+                "tables": {
+                    "papers": [],
+                    "knowledge_nodes": base_nodes,
+                    "knowledge_edges": [{
+                        "id": f"edge-{target_id}-{source_paper_id}",
+                        "user_id": USER_A,
+                        "source_id": "node-a-1",
+                        "target_id": target_id,
+                        "relation_type": "related",
+                        "origin": "explicit",
+                        "source_paper_id": source_paper_id,
+                    }],
+                    "wiki_files": [],
+                },
+            }
+            prep = self.client.post("/api/sync/prepare", json=payload).json()
+            resp = self.client.post("/api/sync/commit", json={
+                "api_version": "1",
+                "sync_session_id": prep["sync_session_id"],
+                "uploaded": [],
+            })
+            self.assertEqual(resp.status_code, 409, resp.text)
+            self.assertEqual(
+                resp.json()["detail"]["error"],
+                "invalid_edge_reference",
+            )
 
     # ---- re-sync (idempotent push) ------------------------------------
     #

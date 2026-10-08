@@ -489,6 +489,10 @@ def _to_node_dict(row: KnowledgeNodeRow) -> dict:
 
 def _to_edge_dict(row: KnowledgeEdgeRow) -> dict:
     d = row.model_dump()
+    # SQLAlchemy reserves ``metadata`` on declarative models.  The physical
+    # column and wire field keep that public name; only the ORM attribute is
+    # called edge_metadata.
+    d["edge_metadata"] = d.pop("metadata", None)
     d.pop("api_version", None)
     return d
 
@@ -560,6 +564,90 @@ def _rewrite_paper_refs(value: Any, aliases: dict[str, str]) -> Any:
     if value is None:
         return None
     return aliases.get(str(value), value)
+
+
+def _rewrite_edge_paper_refs(payload: dict, aliases: dict[str, str]) -> None:
+    """Keep scalar and contribution-level provenance on canonical paper IDs."""
+    if not aliases:
+        return
+    if payload.get("source_paper_id"):
+        payload["source_paper_id"] = _rewrite_paper_refs(
+            payload["source_paper_id"], aliases
+        )
+    metadata = payload.get("edge_metadata")
+    if not isinstance(metadata, dict):
+        return
+    contributions = metadata.get("provenance")
+    if not isinstance(contributions, list):
+        return
+    for item in contributions:
+        if isinstance(item, dict) and item.get("source_paper_id"):
+            item["source_paper_id"] = _rewrite_paper_refs(
+                item["source_paper_id"], aliases
+            )
+
+
+def _edge_paper_refs(payload: dict) -> set[str]:
+    refs: set[str] = set()
+    if payload.get("source_paper_id"):
+        refs.add(str(payload["source_paper_id"]))
+    metadata = payload.get("edge_metadata")
+    contributions = metadata.get("provenance") if isinstance(metadata, dict) else None
+    if isinstance(contributions, list):
+        for item in contributions:
+            if isinstance(item, dict) and item.get("source_paper_id"):
+                refs.add(str(item["source_paper_id"]))
+    return refs
+
+
+def _validate_edge_references(
+    db: Session,
+    *,
+    edge_payloads: list[dict],
+    node_payloads: list[dict],
+    user_id: str,
+) -> None:
+    """Mirror Postgres ownership/FK guards in the SQLite cloud test path."""
+    incoming_node_ids = {
+        str(payload["id"]) for payload in node_payloads if payload.get("id") is not None
+    }
+    referenced_node_ids = {
+        str(payload[key])
+        for payload in edge_payloads
+        for key in ("source_id", "target_id")
+        if payload.get(key) is not None
+    }
+    missing_nodes = sorted(referenced_node_ids - incoming_node_ids)
+    if missing_nodes:
+        raise _err(
+            status.HTTP_409_CONFLICT,
+            "invalid_edge_reference",
+            "edge references a node outside the current user snapshot",
+            node_ids=missing_nodes,
+        )
+
+    paper_refs = {
+        paper_id
+        for payload in edge_payloads
+        for paper_id in _edge_paper_refs(payload)
+    }
+    if not paper_refs:
+        return
+    owned_papers = {
+        str(row_id)
+        for (row_id,) in db.query(CloudPaper.id).filter(
+            CloudPaper.user_id == user_id,
+            CloudPaper.id.in_(paper_refs),
+        ).all()
+    }
+    missing_papers = sorted(paper_refs - owned_papers)
+    if missing_papers:
+        raise _err(
+            status.HTTP_409_CONFLICT,
+            "invalid_edge_reference",
+            "edge source paper is missing or belongs to another user",
+            paper_ids=missing_papers,
+        )
 
 
 def _delete_rows_by_ids(
@@ -825,6 +913,15 @@ def commit(
             _to_edge_dict(KnowledgeEdgeRow.model_validate(raw))
             for raw in tables.get("knowledge_edges", [])
         ]
+        if paper_id_aliases:
+            for payload in edge_payloads:
+                _rewrite_edge_paper_refs(payload, paper_id_aliases)
+        _validate_edge_references(
+            db,
+            edge_payloads=edge_payloads,
+            node_payloads=node_payloads,
+            user_id=user.user_id,
+        )
         # The desktop sends a full local snapshot. Treat derived graph rows
         # as a mirror: edges are replaced wholesale, and stale nodes are
         # pruned after old edges are gone so FK cascades never mask the

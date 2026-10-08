@@ -1,0 +1,124 @@
+{
+  "fixture_schema_version": 1,
+  "description": "Synthetic, privacy-safe contract fixture for Phase-0 graph and Ask evaluation.",
+  "nodes": [
+    {"id": "paper:a", "title": "Alpha Study", "node_type": "paper", "tags": [], "hidden": false, "promotion_status": "promoted"},
+    {"id": "paper:b", "title": "Beta Study", "node_type": "paper", "tags": [], "hidden": false, "promotion_status": "promoted"},
+    {"id": "paper:c", "title": "Disconnected Study", "node_type": "paper", "tags": [], "hidden": false, "promotion_status": "promoted"},
+    {"id": "concept:shared", "title": "Shared Encoder", "node_type": "technique", "tags": ["shared-encoder-alias"], "hidden": false, "promotion_status": "promoted"},
+    {"id": "concept:data", "title": "SyntheticSet", "node_type": "dataset", "tags": [], "hidden": false, "promotion_status": "promoted"},
+    {"id": "concept:root", "title": "Representation Learning", "node_type": "concept", "tags": [], "hidden": false, "promotion_status": "promoted"},
+    {"id": "concept:duplicate", "title": "Shared Encoder", "node_type": "technique", "tags": ["duplicate"], "hidden": false, "promotion_status": "pending"},
+    {"id": "concept:hidden", "title": "Hidden Encoder", "node_type": "technique", "tags": ["hidden-encoder-alias"], "hidden": true, "promotion_status": "rejected"}
+  ],
+  "edges": [
+    {"id": "edge:1", "source": "paper:a", "target": "concept:shared", "relation_type": "uses", "weight": 1.0},
+    {"id": "edge:2", "source": "paper:b", "target": "concept:shared", "relation_type": "uses", "weight": 1.0},
+    {"id": "edge:3", "source": "paper:a", "target": "concept:data", "relation_type": "evaluated_on", "weight": 1.0},
+    {"id": "edge:4", "source": "paper:b", "target": "concept:data", "relation_type": "trained_on", "weight": 1.0},
+    {"id": "edge:5", "source": "concept:shared", "target": "concept:root", "relation_type": "builds_on", "weight": 1.0},
+    {"id": "edge:6", "source": "paper:a", "target": "concept:hidden", "relation_type": "uses", "weight": 1.0}
+  ],
+  "structure_cases": [
+    {
+      "id": "single_node_neighbors",
+      "operation": "neighbors",
+      "input": {"node_id": "concept:shared"},
+      "expected_node_ids": ["concept:root", "paper:a", "paper:b"]
+    },
+    {
+      "id": "shortest_path",
+      "operation": "shortest_path",
+      "input": {"source_id": "paper:a", "target_id": "paper:b"},
+      "expected_node_ids": ["paper:a", "concept:data", "paper:b"]
+    },
+    {
+      "id": "shared_concepts",
+      "operation": "shared_concepts",
+      "input": {"paper_ids": ["paper:a", "paper:b"]},
+      "expected_node_ids": ["concept:data", "concept:shared"]
+    },
+    {
+      "id": "papers_for_concept",
+      "operation": "papers_for_concept",
+      "input": {"concept_id": "concept:shared"},
+      "expected_node_ids": ["paper:a", "paper:b"]
+    },
+    {
+      "id": "disconnected_nodes",
+      "operation": "shortest_path",
+      "input": {"source_id": "paper:a", "target_id": "paper:c"},
+      "expected_node_ids": []
+    },
+    {
+      "id": "duplicate_title_lookup",
+      "operation": "visible_search",
+      "input": {"query": "Shared Encoder"},
+      "expected_node_ids": ["concept:shared"],
+      "notes": "The pending duplicate must not enter the default curated result."
+    },
+    {
+      "id": "visible_alias_lookup",
+      "operation": "visible_search",
+      "input": {"query": "shared-encoder-alias"},
+      "expected_node_ids": ["concept:shared"]
+    },
+    {
+      "id": "hidden_alias_lookup",
+      "operation": "visible_search",
+      "input": {"query": "hidden-encoder-alias"},
+      "expected_node_ids": [],
+      "notes": "Hidden aliases must not enter the default curated result."
+    }
+  ],
+  "wiki_documents": [
+    {"filename": "paper-alpha.md", "kind": "paper", "title": "Alpha Study", "body": "Alpha uses Shared Encoder and evaluates on SyntheticSet."},
+    {"filename": "paper-beta.md", "kind": "paper", "title": "Beta Study", "body": "Beta uses Shared Encoder and trains on SyntheticSet."},
+    {"filename": "shared-encoder.md", "kind": "concept", "title": "Shared Encoder", "body": "Shared Encoder is a representation-learning component supported by Alpha and Beta."}
+  ],
+  "ask_cases": [
+    {
+      "id": "content_definition",
+      "category": "content",
+      "question": "What is Shared Encoder in this library?",
+      "expected_tools": ["search_wiki", "read_wiki"],
+      "required_evidence": ["shared-encoder.md"]
+    },
+    {
+      "id": "content_dataset_role",
+      "category": "content",
+      "question": "How is SyntheticSet used by Alpha Study?",
+      "expected_tools": ["search_wiki", "read_wiki"],
+      "required_evidence": ["paper-alpha.md"]
+    },
+    {
+      "id": "structure_shared_concepts",
+      "category": "structure",
+      "question": "Which concepts are shared by Alpha Study and Beta Study?",
+      "expected_tools": ["find_shared_neighbors"],
+      "required_node_ids": ["concept:data", "concept:shared"]
+    },
+    {
+      "id": "structure_path",
+      "category": "structure",
+      "question": "What connects Alpha Study to Beta Study?",
+      "expected_tools": ["shortest_path"],
+      "required_node_ids": ["paper:a", "concept:data", "paper:b"]
+    },
+    {
+      "id": "hybrid_compare",
+      "category": "hybrid",
+      "question": "How do Alpha and Beta share an encoder but use SyntheticSet differently?",
+      "expected_tools": ["find_shared_neighbors", "read_wiki"],
+      "required_node_ids": ["concept:data", "concept:shared"],
+      "required_evidence": ["paper-alpha.md", "paper-beta.md"]
+    },
+    {
+      "id": "hybrid_insufficient",
+      "category": "hybrid",
+      "question": "How is Disconnected Study related to Shared Encoder?",
+      "expected_tools": ["shortest_path", "search_wiki"],
+      "expected_outcome": "insufficient_evidence"
+    }
+  ]
+}

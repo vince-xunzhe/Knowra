@@ -39,6 +39,7 @@ from model_gateway import (
     get_model_entry,
     get_provider_entry,
 )
+from model_gateway.runtime import ProviderConfigurationError
 
 
 class PaperExtractionError(RuntimeError):
@@ -807,6 +808,8 @@ def extract_knowledge_from_paper(
                     temperature=0.1,
                     timeout_s=LOCAL_EXTRACTION_CHUNK_TIMEOUT_S,
                 ).strip()
+            except ProviderConfigurationError:
+                raise
             except Exception as exc:
                 _log(
                     f"codex chunk notes failed for pages {chunk['start_page']}-{chunk['end_page']}: {exc}"
@@ -887,7 +890,7 @@ def extract_knowledge_from_paper(
                     file_id="",
                     assistant_id="",
                 )
-        except PaperExtractionError:
+        except (PaperExtractionError, ProviderConfigurationError):
             raise
         except Exception as e:
             preview = raw if raw else "<empty response>"

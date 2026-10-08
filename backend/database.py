@@ -10,6 +10,53 @@ from path_utils import portable_data_path, resolve_paper_path
 # migration self-contained and avoid an import cycle on cold startup.
 _LEGACY_AUTO_CONCEPT_TYPES = {"technique", "dataset", "problem_area", "concept"}
 
+_EDGE_PROVENANCE_COLUMNS = {
+    "origin": "VARCHAR",
+    "confidence": "FLOAT",
+    "source_paper_id": "VARCHAR",
+    "source_field": "VARCHAR",
+    "evidence": "TEXT",
+    "metadata": "JSON",
+    "extractor_version": "VARCHAR",
+}
+
+
+def migrate_edge_provenance_columns(conn) -> None:
+    """Install and backfill Phase-1 edge provenance columns.
+
+    This helper intentionally accepts a SQLAlchemy connection so tests and
+    repair tooling can run it against a copied database.  It is safe to run
+    repeatedly.  Historical semantic edges are labelled ``legacy`` rather
+    than receiving invented evidence; the only origins that can be inferred
+    reliably from the old schema are similarity and curated/manual links.
+    """
+    rows = conn.execute(text("PRAGMA table_info(knowledge_edges)")).fetchall()
+    existing = {row[1] for row in rows}
+    if not existing:
+        return
+    for name, sql_type in _EDGE_PROVENANCE_COLUMNS.items():
+        if name not in existing:
+            conn.execute(
+                text(f"ALTER TABLE knowledge_edges ADD COLUMN {name} {sql_type}")
+            )
+
+    conn.execute(
+        text(
+            "UPDATE knowledge_edges SET origin = CASE "
+            "  WHEN relation_type = 'similar' THEN 'embedding' "
+            "  WHEN relation_type = 'curated_link' THEN 'manual' "
+            "  ELSE 'legacy' END "
+            "WHERE origin IS NULL OR TRIM(origin) = ''"
+        )
+    )
+    conn.execute(
+        text(
+            "UPDATE knowledge_edges SET confidence = weight "
+            "WHERE relation_type = 'similar' AND confidence IS NULL "
+            "  AND weight >= 0.0 AND weight <= 1.0"
+        )
+    )
+
 
 def _drop_finding_nodes(conn) -> None:
     """Remove all `finding` knowledge nodes + edges referencing them.
@@ -268,9 +315,7 @@ def _migrate():
                 )
             )
 
-        # W3.2 multitenant prep for the remaining tables. knowledge_edges
-        # and llm_calls don't get any other migration logic here, so we
-        # just patch the two new columns and move on.
+        # W3.2 multitenant prep for the remaining tables.
         for tbl in ("knowledge_edges", "llm_calls"):
             try:
                 tbl_cols = conn.execute(text(f"PRAGMA table_info({tbl})")).fetchall()
@@ -285,6 +330,11 @@ def _migrate():
                 conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN user_id VARCHAR"))
             if "legacy_id" not in tbl_existing:
                 conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN legacy_id INTEGER"))
+
+        # Phase 1: nullable provenance columns plus conservative, idempotent
+        # backfill.  Duplicate consolidation is handled by graph_service
+        # after ORM startup so JSON contribution histories can be merged.
+        migrate_edge_provenance_columns(conn)
 
         rows = conn.execute(
             text("SELECT id, filepath, first_page_image_path, error FROM papers")
@@ -326,10 +376,24 @@ def _migrate():
                 )
 
 
-def init_db():
+def ensure_runtime_schema():
+    """Install schema changes required by the currently running ORM.
+
+    Keep this preflight deliberately limited to additive, idempotent DDL and
+    conservative backfills.  It is safe to run while a surviving task worker
+    is idle, and must happen before the API's active-worker startup shortcut:
+    otherwise freshly imported ORM models can query columns that an older
+    local database does not have yet.
+    """
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     enable_sqlite_wal(engine)
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        migrate_edge_provenance_columns(conn)
+
+
+def init_db():
+    ensure_runtime_schema()
     _migrate()
 
 

@@ -288,6 +288,37 @@ def require_lease(db, worker, job_id, lease, now=None):
     return job
 
 
+def recommendation_exclusions(db, user_id, now=None):
+    """Published selections count even when the client never reports exposure."""
+    now = now or utcnow()
+    ids, titles = set(), set()
+
+    def remember(aid, title):
+        if canonical := base_id(aid):
+            ids.add(canonical)
+        if normalized := normalized_title(title):
+            titles.add(normalized)
+
+    batches = db.query(RecBatch.items).filter(
+        RecBatch.user_id == user_id,
+        RecBatch.status == "completed",
+        RecBatch.completed_at >= now - timedelta(days=HISTORY_DAYS),
+    )
+    for (items,) in batches:
+        for item in items:
+            remember(item.get("arxiv_id"), item.get("title"))
+    events = db.query(RecEvent).filter(
+        RecEvent.user_id == user_id,
+        or_(
+            RecEvent.kind == "adopted",
+            RecEvent.created_at >= now - timedelta(days=30),
+        ),
+    )
+    for event in events:
+        remember(event.arxiv_id, event.payload.get("title"))
+    return sorted(ids), sorted(titles)
+
+
 def claim(db, worker, now=None):
     now = now or utcnow()
     enqueue(db, worker.user_id, now=now)
@@ -331,18 +362,7 @@ def claim(db, worker, now=None):
         return None
     db.flush()
     db.refresh(job)
-    excluded = [
-        e.arxiv_id
-        for e in db.query(RecEvent)
-        .filter(
-            RecEvent.user_id == worker.user_id,
-            or_(
-                RecEvent.kind == "adopted",
-                RecEvent.created_at >= now - timedelta(days=30),
-            ),
-        )
-        .all()
-    ]
+    excluded, excluded_titles = recommendation_exclusions(db, worker.user_id, now)
     # Freeze ranking inputs with the lease; asynchronous browsing must not make
     # the worker's valid AI result fail validation against a different shortlist.
     profile = refresh_profile(db, worker.user_id, now)
@@ -351,6 +371,7 @@ def claim(db, worker, now=None):
         "version": profile.version,
         "as_of": now.isoformat(),
         "excluded": excluded,
+        "excluded_titles": excluded_titles,
     }
     candidates = [
         c.metadata_json
@@ -484,13 +505,17 @@ def complete(db, worker, job_id, lease, candidates, output=None, note=None):
             cached = cached_features.get(item["arxiv_id"])
             if cached and cached.features:
                 item["features"] = cached.features.get("dimensions", {})
-    # Library may change while the worker is running. Recheck before publishing.
+    # Validate AI against frozen inputs first, then recheck the library and other
+    # completed batches under the per-user lock acquired by require_lease.
     current = refresh_profile(db, worker.user_id)
+    published_ids, published_titles = recommendation_exclusions(db, worker.user_id)
+    excluded_ids = set(current.snapshot["library_ids"]) | set(published_ids)
+    excluded_titles = set(current.snapshot["library_titles"]) | set(published_titles)
     ranked = [
         r
         for r in ranked
-        if r["arxiv_id"] not in current.snapshot["library_ids"]
-        and normalized_title(r["title"]) not in current.snapshot["library_titles"]
+        if r["arxiv_id"] not in excluded_ids
+        and normalized_title(r["title"]) not in excluded_titles
     ]
     job.items = select_diverse(ranked)
     job.status, job.completed_at, job.error = "completed", utcnow(), note

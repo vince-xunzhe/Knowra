@@ -247,6 +247,9 @@ def _similarity(weights, words):
 def rank_candidates(profile, candidates, *, excluded=(), now=None):
     now = now or utcnow()
     excluded = set(excluded) | set(profile.get("library_ids", []))
+    excluded_titles = set(profile.get("library_titles", [])) | set(
+        profile.get("excluded_titles", [])
+    )
     ranked, seen = [], set()
     for candidate in candidates:
         aid = base_id(candidate.get("arxiv_id"))
@@ -254,8 +257,7 @@ def rank_candidates(profile, candidates, *, excluded=(), now=None):
             not aid
             or aid in excluded
             or aid in seen
-            or normalized_title(candidate.get("title"))
-            in profile.get("library_titles", [])
+            or normalized_title(candidate.get("title")) in excluded_titles
         ):
             continue
         seen.add(aid)

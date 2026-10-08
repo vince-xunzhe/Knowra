@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -186,6 +187,14 @@ class ModelGatewayHealthcheckTests(unittest.TestCase):
 
 
 class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        env = patch.dict(os.environ, {'CODEX_CLI_PATH': ''})
+        env.start()
+        self.addCleanup(env.stop)
+        executable = patch('model_gateway.runtime.validate_codex_cli', return_value='codex')
+        executable.start()
+        self.addCleanup(executable.stop)
+
     @patch("model_gateway.runtime.shutil.which", return_value=None)
     @patch("model_gateway.runtime._default_codex_cli_candidates")
     def test_codex_cli_falls_back_to_desktop_app_binary(
@@ -381,6 +390,79 @@ class ModelGatewayCodexCliRuntimeTests(unittest.TestCase):
         self.assertIn("gpt-6-astra", message)
         self.assertIn("更新版本", message)
         self.assertIn("升级", message)
+
+
+class CodexDiscoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        env = patch.dict(os.environ, {'PATH': '/usr/bin:/bin', 'CODEX_CLI_PATH': ''})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def binary(self, name):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('#!/bin/sh\nexit 0\n')
+        path.chmod(0o755)
+        return path
+
+    def test_new_and_legacy_app_layouts_are_candidates(self):
+        from model_gateway.runtime import _default_codex_cli_candidates
+        candidates = _default_codex_cli_candidates()
+        for root in (Path('/Applications'), Path.home() / 'Applications'):
+            for app in ('Codex.app', 'ChatGPT.app'):
+                resources = root / app / 'Contents/Resources'
+                self.assertIn(resources / 'codex', candidates)
+                self.assertIn(resources / 'codex-cli/CodexCLI.app/Contents/MacOS/codex', candidates)
+
+    def test_discovery_is_fresh_after_app_replacement(self):
+        from model_gateway.runtime import validate_codex_cli
+        old = self.binary('old/codex')
+        new = self.binary('new/codex')
+        with patch('model_gateway.runtime.shutil.which', return_value=None), \
+             patch('model_gateway.runtime._default_codex_cli_candidates', return_value=[old, new]):
+            self.assertEqual(validate_codex_cli({}), str(old))
+            old.unlink()
+            self.assertEqual(validate_codex_cli({}), str(new))
+
+    def test_explicit_path_then_environment_override_then_path(self):
+        explicit, env = self.binary('explicit'), self.binary('env')
+        from model_gateway.runtime import validate_codex_cli, ProviderConfigurationError
+        with patch.dict(os.environ, {'CODEX_CLI_PATH': str(env)}), \
+             patch('model_gateway.runtime.shutil.which', return_value='/different/codex'):
+            self.assertEqual(validate_codex_cli({'command': str(explicit)}), str(explicit))
+            self.assertEqual(validate_codex_cli({}), str(env))
+            env.unlink()
+            with self.assertRaises(ProviderConfigurationError):
+                validate_codex_cli({})
+
+    def test_missing_or_nonexecutable_cli_is_not_retried_or_called(self):
+        from model_gateway.runtime import ProviderConfigurationError
+        from services.paper_pipeline_service import is_recoverable_error
+        path = self.binary('no-permission')
+        path.chmod(0o644)
+        with patch('model_gateway.runtime.subprocess.run') as run:
+            for command in (str(path), str(self.root / 'missing')):
+                with self.assertRaises(ProviderConfigurationError) as error:
+                    _run_codex_cli({'command': command}, 'gpt-6-astra', 'test')
+                self.assertFalse(is_recoverable_error(error.exception))
+                self.assertNotIn('解析失败', str(error.exception))
+            run.assert_not_called()
+
+    def test_preflight_uses_bound_provider_only_for_cli_tasks(self):
+        from model_gateway.runtime import preflight_task_runtime, ProviderConfigurationError
+        cfg = ensure_model_gateway_config({'model_gateway': {'task_bindings': {
+            'paper_extract': {'model_id': 'codex-cli/gpt-6-astra'}}}})
+        with patch('model_gateway.runtime.validate_codex_cli',
+                   side_effect=ProviderConfigurationError('missing')) as validate:
+            with self.assertRaises(ProviderConfigurationError):
+                preflight_task_runtime(cfg, 'paper_extract')
+            validate.assert_called_once()
+            validate.reset_mock()
+            preflight_task_runtime(cfg, 'embedding')
+            validate.assert_not_called()
 
 
 if __name__ == "__main__":

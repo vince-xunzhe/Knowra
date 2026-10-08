@@ -122,6 +122,12 @@ class LocalSnapshotTests(unittest.TestCase):
                 id="edge-uuid-1",
                 source_id="paper-uuid-1", target_id="node-uuid-1",
                 relation_type="mentions", weight=0.7,
+                origin="explicit", confidence=0.8,
+                source_paper_id="paper-uuid-1",
+                source_field="techniques",
+                evidence="A bounded excerpt.",
+                edge_metadata={"provenance": [{"origin": "explicit"}]},
+                extractor_version="paper-extraction-v1",
                 created_at=datetime(2026, 5, 3, tzinfo=timezone.utc),
             )
             db.add_all([paper, node, edge])
@@ -202,6 +208,12 @@ class LocalSnapshotTests(unittest.TestCase):
         edge = body["knowledge_edges"][0]
         self.assertEqual(edge["source_id"], "paper-uuid-1")
         self.assertEqual(edge["target_id"], "node-uuid-1")
+        self.assertEqual(edge["origin"], "explicit")
+        self.assertEqual(edge["confidence"], 0.8)
+        self.assertEqual(edge["source_paper_id"], "paper-uuid-1")
+        self.assertEqual(edge["source_field"], "techniques")
+        self.assertEqual(edge["evidence"], "A bounded excerpt.")
+        self.assertEqual(edge["metadata"]["provenance"][0]["origin"], "explicit")
 
     def test_file_hash_computed_and_cached(self):
         # Write a fake PDF so resolve_paper_path can find it.

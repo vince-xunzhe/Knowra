@@ -54,6 +54,12 @@ class TaskStore:
                 CREATE TABLE IF NOT EXISTS worker (
                     id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL, heartbeat REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS worker_runtime (
+                    id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL, revision TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS worker_target (
+                    id INTEGER PRIMARY KEY CHECK(id=1), revision TEXT NOT NULL
+                );
             ''')
 
     @staticmethod
@@ -112,9 +118,12 @@ class TaskStore:
             return [self.decode(row) for row in db.execute('''SELECT id,kind,channel,status,progress,error,
                 created,updated,attempt FROM jobs ORDER BY created DESC LIMIT 20''')]
 
-    def claim(self):
+    def claim(self, revision=None):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
+            target = db.execute('SELECT revision FROM worker_target WHERE id=1').fetchone()
+            if revision is not None and target and target['revision'] != revision:
+                return None
             if db.execute("SELECT 1 FROM jobs WHERE status='running' LIMIT 1").fetchone():
                 return None
             row = db.execute("SELECT * FROM jobs WHERE status='queued' ORDER BY created LIMIT 1").fetchone()
@@ -157,13 +166,28 @@ class TaskStore:
                 state.update(running=False, error=row['error'], batch_error=row['error'], last_error=row['error'])
             return state
 
-    def heartbeat(self, pid):
+    def heartbeat(self, pid, revision=None):
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO worker VALUES (1,?,?)', (pid, time.time()))
+            if revision is not None:
+                db.execute('INSERT OR REPLACE INTO worker_runtime VALUES (1,?,?)', (pid, revision))
+
+    def target_revision(self, revision=None):
+        with self.connect() as db:
+            if revision is not None:
+                db.execute('INSERT OR REPLACE INTO worker_target VALUES (1,?)', (revision,))
+            row = db.execute('SELECT revision FROM worker_target WHERE id=1').fetchone()
+            return row['revision'] if row else None
+
+    def clear_worker(self, pid):
+        with self.connect() as db:
+            db.execute('DELETE FROM worker WHERE pid=?', (pid,))
+            db.execute('DELETE FROM worker_runtime WHERE pid=?', (pid,))
 
     def worker(self):
         with self.connect() as db:
-            row = db.execute('SELECT * FROM worker WHERE id=1').fetchone()
+            row = db.execute('''SELECT w.*,r.revision FROM worker w LEFT JOIN worker_runtime r
+                ON r.id=w.id AND r.pid=w.pid WHERE w.id=1''').fetchone()
             return dict(row) if row else None
 
     def recover(self):

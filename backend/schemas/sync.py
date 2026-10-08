@@ -84,6 +84,13 @@ class KnowledgeEdgeRow(_Row):
     target_id: str
     relation_type: Optional[str] = None
     weight: Optional[float] = None
+    origin: Optional[str] = None
+    confidence: Optional[float] = None
+    source_paper_id: Optional[str] = None
+    source_field: Optional[str] = None
+    evidence: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = None
+    extractor_version: Optional[str] = None
     legacy_id: Optional[int] = None
     created_at: Optional[datetime] = None
 
