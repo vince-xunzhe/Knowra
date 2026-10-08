@@ -552,6 +552,119 @@ def test_completion_freezes_inputs_but_rechecks_new_imports(db):
         assert [i["arxiv_id"] for i in result.items] == ["2609.00001"]
 
 
+@pytest.mark.parametrize("manual", [False, True])
+def test_unopened_selections_are_excluded_across_scheduled_and_manual_batches(
+    db, manual
+):
+    worker, _ = seed(db)
+    first = finished(db, worker)
+    original_items = list(first.items)
+    assert db.query(RecEvent).count() == 0  # No browser or exposure callback.
+    later = NOW + timedelta(days=9)
+    with patch.object(jobs, "utcnow", return_value=later):
+        jobs.enqueue(db, "alice", manual=manual, now=later)
+        job = jobs.claim(db, worker, later)
+        db.commit()
+        old_ids = {i["arxiv_id"] for i in original_items}
+        assert old_ids <= set(job["excluded"])
+        # A new arXiv version and a differently identified copy of the same title
+        # must both be filtered before spending a model call.
+        rows = candidates() + [
+            {**original_items[0], "arxiv_id": original_items[0]["arxiv_id"] + "v2"},
+            {
+                **original_items[0],
+                "arxiv_id": "2609.99999",
+                "title": original_items[0]["title"].upper() + "!",
+            },
+        ]
+        ranked = rank_candidates(
+            job["snapshot"], rows, excluded=job["excluded"], now=later
+        )
+        assert len(ranked) == 2
+        output = {
+            "items": [
+                {
+                    "arxiv_id": i["arxiv_id"],
+                    "relevance": 0.9,
+                    "reason": "相关",
+                    "evidence": "Gaussian splatting",
+                }
+                for i in ranked
+            ]
+        }
+        result = jobs.complete(db, worker, job["id"], job["lease"], rows, output)
+        db.commit()
+        assert len(result.items) == 2  # Never refill with previously selected papers.
+        assert old_ids.isdisjoint(i["arxiv_id"] for i in result.items)
+        assert db.get(RecBatch, first.id).items == original_items
+        assert db.query(RecEvent).count() == 0  # Selection isn't a fabricated view.
+
+
+@pytest.mark.parametrize(
+    "age,user,status,excluded",
+    [
+        (90, "alice", "completed", True),
+        (90 + 1 / 86400, "alice", "completed", False),
+        (1, "bob", "completed", False),
+        (1, "alice", "failed", False),
+        (1, "alice", "running", False),
+    ],
+)
+def test_selection_exclusion_window_and_scope(db, age, user, status, excluded):
+    db.add(
+        RecBatch(
+            user_id=user,
+            slot="previous",
+            status=status,
+            items=candidates(1),
+            created_at=NOW - timedelta(days=100),
+            completed_at=NOW - timedelta(days=age),
+        )
+    )
+    db.commit()
+    ids, titles = jobs.recommendation_exclusions(db, "alice", NOW)
+    assert bool(ids) == excluded
+    assert bool(titles) == excluded
+
+
+def test_publication_rechecks_other_batches_after_validating_frozen_ai_inputs(db):
+    worker, _ = seed(db)
+    with patch.object(jobs, "utcnow", return_value=NOW):
+        job = jobs.claim(db, worker, NOW)
+        db.commit()
+        assert not job["excluded"]
+        # Another result arrives after this lease was issued. Include both an ID
+        # match and a title match under another ID.
+        db.add(
+            RecBatch(
+                user_id="alice",
+                slot="other-result",
+                status="completed",
+                items=[
+                    candidates(3)[0],
+                    {**candidates(3)[1], "arxiv_id": "2609.99998"},
+                ],
+                completed_at=NOW,
+            )
+        )
+        db.commit()
+        output = {
+            "items": [
+                {
+                    "arxiv_id": i["arxiv_id"],
+                    "relevance": 0.9,
+                    "reason": "相关",
+                    "evidence": "Gaussian splatting",
+                }
+                for i in candidates(3)
+            ]
+        }
+        result = jobs.complete(
+            db, worker, job["id"], job["lease"], candidates(3), output
+        )
+        assert [i["arxiv_id"] for i in result.items] == ["2609.00002"]
+
+
 def test_local_worker_lifecycle_and_invalid_origins(monkeypatch):
     from unittest.mock import MagicMock
 
