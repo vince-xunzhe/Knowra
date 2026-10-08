@@ -12,7 +12,7 @@ import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from config import load_config, task_model_id, task_model_name, task_reasoning_effort
@@ -70,6 +70,7 @@ class AskTraceStep(BaseModel):
     args: dict
     result_summary: str
     duration_ms: int
+    hit_node_ids: List[str] = Field(default_factory=list)
 
 
 class AskCitation(BaseModel):
@@ -185,6 +186,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
                 args=t.args,
                 result_summary=t.result_summary,
                 duration_ms=t.duration_ms,
+                hit_node_ids=t.hit_node_ids,
             )
             for t in result.trace
         ],

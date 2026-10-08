@@ -1207,5 +1207,13 @@
   "向量相似度": "Similitud de vectores",
   "人工创建": "Creado manualmente",
   "历史数据": "Datos históricos",
-  "个来源": "fuentes"
+  "个来源": "fuentes",
+  "图结构健康": "Salud estructural del grafo",
+  "· 孤立节点": "· Nodos huérfanos",
+  "孤立节点": "Nodo huérfano",
+  "异常超级枢纽": "Supernodo anómalo",
+  "没有发现孤立节点或异常超级枢纽": "No se encontraron nodos huérfanos ni supernodos anómalos",
+  "结构节点": "Nodo del grafo",
+  "结构关系": "Relación del grafo",
+  "Wiki 内容": "Contenido wiki"
 }

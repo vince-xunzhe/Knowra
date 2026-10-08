@@ -40,7 +40,7 @@ ensure_project_root_on_path()
 from model_gateway import create_openai_client_for_model
 from model_gateway import call_text_model, get_model_entry, get_provider_entry
 from model_gateway import task_context, track_call
-from services import wiki_index, wiki_search
+from services import graph_query_service, wiki_index, wiki_search
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
     WIKI_DIR,
@@ -51,6 +51,7 @@ from services.vlm_service import model_uses_responses_api
 log = logging.getLogger("ask_agent")
 
 MAX_STEPS = 8
+MAX_TOOL_CALLS = 16
 SEARCH_HIT_LIMIT = 12
 READ_MAX_CHARS = 12000  # truncate huge .md files to keep context affordable
 SUMMARY_MAX_CHARS = 240   # max chars stored in trace[].result_summary
@@ -68,13 +69,19 @@ ASK_SYSTEM_PROMPT = (
     "- list_wiki_index() — 返回 index.md 全文，先调它\n"
     "- search_wiki(q: string) — FTS5 全文搜索，返回前 N 个 hit 的标题 + snippet\n"
     "- read_wiki(filename: string) — 读单个 .md 完整内容\n"
+    "- find_nodes(query) / get_graph_node(node_id) — 定位图节点\n"
+    "- get_neighbors(node_id) / find_shared_neighbors(node_ids) — 查询邻居和共享概念\n"
+    "- shortest_path(source_id, target_id) — 查询可追溯的结构路径\n"
+    "- find_papers_for_concept(concept_id) / find_concepts_for_paper(paper_id) — 论文与概念互查\n"
+    "- explain_edge(edge_id) — 读取边的 provenance 与证据\n"
     "\n"
     "策略：\n"
-    "1. 先调 list_wiki_index 看清楚库里有什么\n"
-    "2. 根据问题主题决定 search_wiki 或直接 read_wiki 拿全文\n"
-    "3. 读 2-5 个最相关的 .md 文件\n"
-    "4. 综合写答案。引用论文用 [[paper:{id}]]；引用概念用 [[concept-slug]] 或概念标题\n"
-    "5. 答案末尾列 `## 📚 引用来源`，列出真正读过的 .md 文件名\n"
+    "1. 内容定义/结论问题使用 index、search_wiki、read_wiki；结构关系问题使用 graph 工具\n"
+    "2. 综合问题先用 graph 工具缩小节点范围，再 read_wiki 获取内容证据\n"
+    "3. 图工具结果只证明节点/边/路径存在，不替代论文内容证据；不要从图标题臆测结论\n"
+    "4. explain_edge 的 provenance/evidence 是关系解释的唯一依据，不得编造边的成因\n"
+    "5. 读 2-5 个最相关的 .md 文件并综合回答；结构陈述写出节点或边 ID\n"
+    "6. 答案末尾分列 `### 结构路径` 与 `### Wiki 内容来源`；没有某类证据时明确写无\n"
     "\n"
     "重要：基于材料综合，不要编造。如果库里材料不足，明说\"知识库里没有相关材料\"。\n"
     "输出 markdown，从 ## 二级标题开始，可用列表 / 引用块 / 公式块。不要 markdown 代码围栏包裹整个答案。"
@@ -135,6 +142,27 @@ TOOLS = [
     },
 ]
 
+_GRAPH_TOOL_DEFS = [
+    ("find_nodes", "按标题或别名查找策展图节点。", {"query": {"type": "string"}, "node_type": {"type": "string"}, "limit": {"type": "integer"}}, ["query"]),
+    ("get_graph_node", "读取一个策展图节点。", {"node_id": {"type": "string"}}, ["node_id"]),
+    ("get_neighbors", "读取节点的有界邻居。", {"node_id": {"type": "string"}, "relation_type": {"type": "string"}, "depth": {"type": "integer"}, "limit": {"type": "integer"}}, ["node_id"]),
+    ("shortest_path", "查询两个节点间的最短结构路径。", {"source_id": {"type": "string"}, "target_id": {"type": "string"}, "max_depth": {"type": "integer"}}, ["source_id", "target_id"]),
+    ("find_shared_neighbors", "查询两个或更多节点的共同邻居。", {"node_ids": {"type": "array", "items": {"type": "string"}}, "relation_type": {"type": "string"}, "limit": {"type": "integer"}}, ["node_ids"]),
+    ("find_papers_for_concept", "查询与概念直接相连的论文。", {"concept_id": {"type": "string"}, "limit": {"type": "integer"}}, ["concept_id"]),
+    ("find_concepts_for_paper", "查询论文直接关联的概念。", {"paper_id": {"type": "string"}, "limit": {"type": "integer"}}, ["paper_id"]),
+    ("explain_edge", "读取边及其来源、置信度和证据。", {"edge_id": {"type": "string"}}, ["edge_id"]),
+]
+
+for _name, _description, _properties, _required in _GRAPH_TOOL_DEFS:
+    TOOLS.append({
+        "type": "function",
+        "function": {
+            "name": _name,
+            "description": _description,
+            "parameters": {"type": "object", "properties": _properties, "required": _required},
+        },
+    })
+
 
 RESPONSES_TOOLS = [
     {
@@ -180,6 +208,15 @@ RESPONSES_TOOLS = [
     },
 ]
 
+for _name, _description, _properties, _required in _GRAPH_TOOL_DEFS:
+    RESPONSES_TOOLS.append({
+        "type": "function",
+        "name": _name,
+        "description": _description,
+        "parameters": {"type": "object", "properties": _properties, "required": _required},
+        "strict": False,
+    })
+
 
 # --- error / response shapes --------------------------------------------
 
@@ -195,6 +232,8 @@ class TraceStep:
     args: dict[str, Any]
     result_summary: str
     duration_ms: int
+    hit_node_ids: list[str] = field(default_factory=list)
+    raw_result: str = field(default="", repr=False)
 
 
 @dataclass
@@ -264,14 +303,50 @@ def _tool_read_wiki(filename: str, kind: str) -> str:
     return _safe_read(path)
 
 
-def _dispatch_tool(name: str, args: dict[str, Any]) -> str:
+def _dispatch_tool(db: Session, name: str, args: dict[str, Any]) -> str:
     if name == "list_wiki_index":
         return _tool_list_wiki_index()
     if name == "search_wiki":
         return _tool_search_wiki(args.get("q", ""))
     if name == "read_wiki":
         return _tool_read_wiki(args.get("filename", ""), args.get("kind", ""))
+    graph_calls = {
+        "find_nodes": lambda: graph_query_service.find_nodes(db, args.get("query", ""), args.get("node_type"), args.get("limit", 20)),
+        "get_graph_node": lambda: graph_query_service.get_node(db, args.get("node_id", "")),
+        "get_neighbors": lambda: graph_query_service.get_neighbors(db, args.get("node_id", ""), args.get("relation_type"), args.get("depth", 1), args.get("limit", 20)),
+        "shortest_path": lambda: graph_query_service.shortest_path(db, args.get("source_id", ""), args.get("target_id", ""), args.get("max_depth", 4)),
+        "find_shared_neighbors": lambda: graph_query_service.find_shared_neighbors(db, args.get("node_ids", []), args.get("relation_type"), args.get("limit", 20)),
+        "find_papers_for_concept": lambda: graph_query_service.find_papers_for_concept(db, args.get("concept_id", ""), args.get("limit", 20)),
+        "find_concepts_for_paper": lambda: graph_query_service.find_concepts_for_paper(db, args.get("paper_id", ""), args.get("limit", 20)),
+        "explain_edge": lambda: graph_query_service.explain_edge(db, args.get("edge_id", "")),
+    }
+    if name in graph_calls:
+        try:
+            return json.dumps(graph_calls[name](), ensure_ascii=False, separators=(",", ":"))
+        except (graph_query_service.GraphQueryError, TypeError, ValueError) as exc:
+            return f"[graph query error: {exc}]"
     return f"[unknown tool: {name}]"
+
+
+def _hit_node_ids(result: str) -> list[str]:
+    try:
+        payload = json.loads(result)
+    except Exception:
+        return []
+    found: list[str] = []
+    candidates = []
+    if isinstance(payload, dict):
+        candidates.extend(payload.get("nodes") or [])
+        if isinstance(payload.get("node"), dict):
+            candidates.append(payload["node"])
+        for key in ("root", "source", "target"):
+            if isinstance(payload.get(key), dict):
+                candidates.append(payload[key])
+    for node in candidates:
+        node_id = str(node.get("id") or "") if isinstance(node, dict) else ""
+        if node_id and node_id not in found:
+            found.append(node_id)
+    return found[: graph_query_service.MAX_RESULTS]
 
 
 def _summarize_result(text: str) -> str:
@@ -401,6 +476,59 @@ def _build_citations(cited_files: list[str]) -> list[dict[str, Any]]:
     return citations
 
 
+def _graph_citations(trace: list[TraceStep]) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for step in trace:
+        if step.tool not in {name for name, *_ in _GRAPH_TOOL_DEFS}:
+            continue
+        for node_id in step.hit_node_ids:
+            ref = f"graph-node:{node_id}"
+            if ref not in seen:
+                seen.add(ref)
+                citations.append({"kind": "graph_node", "ref": ref, "path": None, "filename": None, "paper_id": None})
+        try:
+            payload = json.loads(step.raw_result or "{}")
+        except Exception:
+            payload = {}
+        for edge in payload.get("edges", []) if isinstance(payload, dict) else []:
+            edge_id = str(edge.get("id") or "") if isinstance(edge, dict) else ""
+            ref = f"graph-edge:{edge_id}"
+            if edge_id and ref not in seen:
+                seen.add(ref)
+                citations.append({"kind": "graph_edge", "ref": ref, "path": None, "filename": None, "paper_id": None})
+    return citations
+
+
+def _trace_step(step: int, tool: str, args: dict[str, Any], result: str, duration_ms: int) -> TraceStep:
+    return TraceStep(
+        step=step,
+        tool=tool,
+        args=args,
+        result_summary=_summarize_result(result),
+        duration_ms=duration_ms,
+        hit_node_ids=_hit_node_ids(result),
+        raw_result=result,
+    )
+
+
+def _execute_tool_once(
+    db: Session,
+    name: str,
+    args: dict[str, Any],
+    seen_calls: set[str],
+    call_count: int,
+) -> tuple[str, int]:
+    fingerprint = f"{name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
+    if fingerprint in seen_calls:
+        return "[duplicate tool call blocked; use the existing result]", 0
+    if call_count >= MAX_TOOL_CALLS:
+        return f"[tool call limit reached: {MAX_TOOL_CALLS}]", 0
+    seen_calls.add(fingerprint)
+    started = perf_counter()
+    return _dispatch_tool(db, name, args), int((perf_counter() - started) * 1000)
+
+
 def _provider_type_for_model(cfg: dict[str, Any], model: str) -> str:
     model_entry = get_model_entry(cfg, model)
     if model_entry is None:
@@ -425,7 +553,43 @@ def _parse_search_hits(search_result: str) -> list[dict[str, Any]]:
     return hits
 
 
+def _local_graph_context(db: Session, question: str, trace: list[TraceStep]) -> str:
+    """Deterministic graph pre-routing for providers without tool calling."""
+    chunks: list[str] = []
+    started = perf_counter()
+    found = graph_query_service.find_nodes(db, question, limit=8)
+    raw = json.dumps(found, ensure_ascii=False, separators=(",", ":"))
+    trace.append(_trace_step(len(trace), "find_nodes", {"query": question, "limit": 8}, raw, int((perf_counter() - started) * 1000)))
+    chunks.append(f"[find_nodes]\n{raw}")
+    nodes = found.get("nodes", [])
+    paper_ids = [item["id"] for item in nodes if item.get("node_type") == "paper"]
+    lower = question.casefold()
+    structural = any(token in lower for token in ("shared", "common", "connect", "path", "related", "共享", "共同", "连接", "路径", "关系"))
+    if structural and len(paper_ids) >= 2:
+        args: dict[str, Any]
+        if any(token in lower for token in ("shared", "common", "共享", "共同")):
+            tool = "find_shared_neighbors"
+            args = {"node_ids": paper_ids[:4]}
+        else:
+            tool = "shortest_path"
+            args = {"source_id": paper_ids[0], "target_id": paper_ids[1], "max_depth": 4}
+        t0 = perf_counter()
+        result = _dispatch_tool(db, tool, args)
+        trace.append(_trace_step(len(trace), tool, args, result, int((perf_counter() - t0) * 1000)))
+        chunks.append(f"[{tool}]\n{result}")
+    return "\n\n".join(chunks)
+
+
+def _question_needs_graph(question: str) -> bool:
+    lower = (question or "").casefold()
+    return any(token in lower for token in (
+        "shared", "common", "connect", "path", "related", "bridge", "neighbor",
+        "共享", "共同", "连接", "路径", "关系", "关联", "桥接", "邻居",
+    ))
+
+
 def _run_local_retrieval_agent(
+    db: Session,
     cfg: dict[str, Any],
     *,
     question: str,
@@ -436,11 +600,17 @@ def _run_local_retrieval_agent(
     started = perf_counter()
     trace: list[TraceStep] = []
 
+    graph_context = (
+        _local_graph_context(db, question, trace)
+        if _question_needs_graph(question)
+        else "[内容型问题：未调用图工具]"
+    )
+
     t0 = perf_counter()
     index_text = _tool_list_wiki_index()
     trace.append(
         TraceStep(
-            step=0,
+            step=len(trace),
             tool="list_wiki_index",
             args={},
             result_summary=_summarize_result(index_text),
@@ -452,7 +622,7 @@ def _run_local_retrieval_agent(
     search_result = _tool_search_wiki(question)
     trace.append(
         TraceStep(
-            step=1,
+            step=len(trace),
             tool="search_wiki",
             args={"q": question},
             result_summary=_summarize_result(search_result),
@@ -480,7 +650,7 @@ def _run_local_retrieval_agent(
         content = _tool_read_wiki(filename, kind)
         trace.append(
             TraceStep(
-                step=2 + index,
+                step=len(trace),
                 tool="read_wiki",
                 args={"filename": filename, "kind": kind},
                 result_summary=_summarize_result(content),
@@ -506,6 +676,7 @@ def _run_local_retrieval_agent(
     ) + (
         f"[历史对话]\n{chr(10).join(history_lines) or '[无历史对话]'}\n\n"
         f"[当前问题]\n{question}\n\n"
+        f"[图结构检索]\n{graph_context}\n\n"
         f"[index.md]\n{index_text}\n\n"
         f"[search_wiki 结果]\n{search_result}\n\n"
         f"[read_wiki 材料]\n{chr(10).join(read_chunks) or '[没有读取到具体 wiki 文件]'}"
@@ -524,7 +695,7 @@ def _run_local_retrieval_agent(
     return AskResult(
         answer=final_answer,
         cited_files=cited_files,
-        citations=_build_citations(cited_files),
+        citations=[*_build_citations(cited_files), *_graph_citations(trace)],
         trace=trace,
         model=model,
         duration_ms=duration_ms,
@@ -571,6 +742,7 @@ def _run_ask_agent_inner(
     cfg = load_config()
     if _provider_type_for_model(cfg, model) == "codex_cli":
         return _run_local_retrieval_agent(
+            db,
             cfg,
             question=question,
             history=history,
@@ -588,6 +760,7 @@ def _run_ask_agent_inner(
     provider_id = str(provider_blob.get("id") or "openai")
     trace: list[TraceStep] = []
     final_answer: Optional[str] = None
+    seen_tool_calls: set[str] = set()
 
     if model_uses_responses_api(model):
         next_input: list[dict[str, Any]] = [
@@ -634,18 +807,8 @@ def _run_ask_agent_inner(
                         args = json.loads(tool_call.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    t0 = perf_counter()
-                    result = _dispatch_tool(fn_name, args)
-                    dt = int((perf_counter() - t0) * 1000)
-                    trace.append(
-                        TraceStep(
-                            step=step,
-                            tool=fn_name,
-                            args=args,
-                            result_summary=_summarize_result(result),
-                            duration_ms=dt,
-                        )
-                    )
+                    result, dt = _execute_tool_once(db, fn_name, args, seen_tool_calls, len(trace))
+                    trace.append(_trace_step(step, fn_name, args, result, dt))
                     next_input.append(
                         {
                             "type": "function_call_output",
@@ -736,18 +899,8 @@ def _run_ask_agent_inner(
                         args = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    t0 = perf_counter()
-                    result = _dispatch_tool(fn_name, args)
-                    dt = int((perf_counter() - t0) * 1000)
-                    trace.append(
-                        TraceStep(
-                            step=step,
-                            tool=fn_name,
-                            args=args,
-                            result_summary=_summarize_result(result),
-                            duration_ms=dt,
-                        )
-                    )
+                    result, dt = _execute_tool_once(db, fn_name, args, seen_tool_calls, len(trace))
+                    trace.append(_trace_step(step, fn_name, args, result, dt))
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -786,7 +939,7 @@ def _run_ask_agent_inner(
     return AskResult(
         answer=final_answer,
         cited_files=cited_files,
-        citations=_build_citations(cited_files),
+        citations=[*_build_citations(cited_files), *_graph_citations(trace)],
         trace=trace,
         model=model,
         duration_ms=duration_ms,

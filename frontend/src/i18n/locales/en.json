@@ -1207,5 +1207,13 @@
   "向量相似度": "Embedding similarity",
   "人工创建": "Manually created",
   "历史数据": "Legacy data",
-  "个来源": "sources"
+  "个来源": "sources",
+  "图结构健康": "Graph structure health",
+  "· 孤立节点": "· Orphan nodes",
+  "孤立节点": "Orphan node",
+  "异常超级枢纽": "Anomalous super-hub",
+  "没有发现孤立节点或异常超级枢纽": "No orphan nodes or anomalous super-hubs found",
+  "结构节点": "Graph node",
+  "结构关系": "Graph edge",
+  "Wiki 内容": "Wiki content"
 }

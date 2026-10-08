@@ -174,4 +174,46 @@
 
 ### `POST /api/graph/reset`
 
+### Graph query API (Phase 2)
+
+All graph-query endpoints are read-only, use the curated visible graph by
+default, return stable JSON, and enforce server-side depth/result/time limits.
+
+```text
+GET /api/graph/query/nodes?q=encoder&node_type=technique&limit=20
+GET /api/graph/query/nodes/{node_id}
+GET /api/graph/query/nodes/{node_id}/neighbors?depth=1&limit=20
+GET /api/graph/query/path?source_id=...&target_id=...&max_depth=4
+GET /api/graph/query/shared?node_id=...&node_id=...&limit=20
+GET /api/graph/query/edges/{edge_id}
+```
+
+`path` and `neighbors` return compact nodes and edges. Edge payloads include
+Phase-1 provenance, so callers can distinguish explicit, inferred, embedding,
+manual, and legacy relationships without asking a model to invent an
+explanation.
+
+### Reliability, mutation preview, audit, and structure API
+
+```text
+GET  /api/papers/{paper_id}/manifest
+GET  /api/graph/mutations/preview/{paper_id}
+GET  /api/graph/export?include_embeddings=false&include_hidden=true
+POST /api/graph/diff
+GET  /api/graph/analysis?refresh=false
+```
+
+- `manifest` returns the paper's source/extraction/graph/wiki/search versions
+  and latest durable checkpoint. It never returns PDF text or model secrets.
+- mutation preview is a read-only dry-run from the stored extraction. It does
+  not invoke an embedding or language model and does not write graph rows.
+- export uses schema `knowra.graph.v1`, stable ordering, an order-independent
+  signature, full edge provenance, and deterministic DOI/arXiv/file-hash paper
+  identities.
+- diff accepts `{ "before": <graph export>, "after": <optional graph export> }`.
+  When `after` is omitted, the current graph is used.
+- analysis returns connected components, degree/weighted degree, orphan and
+  super-hub findings. Results are cached by graph signature; `refresh=true`
+  forces recomputation.
+
 清空所有知识节点和边，将所有论文标记为未处理。该操作不会删除 PDF 文件或论文记录。

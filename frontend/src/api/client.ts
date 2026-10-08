@@ -476,6 +476,64 @@ export const getGraph = (includeCandidates = false) =>
   api
     .get<GraphData>('/graph', { params: { include_candidates: includeCandidates } })
     .then(r => r.data)
+export interface GraphQueryResult {
+  nodes: GraphNode[]
+  edges?: GraphEdge[]
+  count?: number
+  found?: boolean
+  hop_count?: number | null
+}
+export const findGraphNodes = (q: string, nodeType?: string, limit = 20) =>
+  api.get<GraphQueryResult>('/graph/query/nodes', {
+    params: { q, node_type: nodeType, limit },
+  }).then(r => r.data)
+export const getGraphNeighbors = (nodeId: string, depth = 1, limit = 20) =>
+  api.get<GraphQueryResult>(`/graph/query/nodes/${nodeId}/neighbors`, {
+    params: { depth, limit },
+  }).then(r => r.data)
+export const getGraphPath = (sourceId: string, targetId: string, maxDepth = 4) =>
+  api.get<GraphQueryResult>('/graph/query/path', {
+    params: { source_id: sourceId, target_id: targetId, max_depth: maxDepth },
+  }).then(r => r.data)
+export interface GraphAuditExport {
+  schema: 'knowra.graph.v1'
+  signature: string
+  generated_at: string
+  counts: { nodes: number; edges: number; paper_identities: number }
+  nodes: Record<string, unknown>[]
+  edges: Record<string, unknown>[]
+  paper_identities: Record<string, Record<string, unknown>>
+}
+export interface GraphAnalysisResult {
+  analysis_version: string
+  graph_signature: string
+  cache_hit: boolean
+  counts: {
+    nodes: number
+    edges: number
+    components: number
+    orphans: number
+    super_hubs: number
+    missing_concept_components: number
+  }
+  nodes: Record<string, unknown>[]
+  components: Record<string, unknown>[]
+  findings: Record<string, Record<string, unknown>[]>
+}
+export const exportGraphAudit = (includeEmbeddings = false, includeHidden = true) =>
+  api.get<GraphAuditExport>('/graph/export', {
+    params: { include_embeddings: includeEmbeddings, include_hidden: includeHidden },
+  }).then(r => r.data)
+export const diffGraphAudit = (before: GraphAuditExport, after?: GraphAuditExport) =>
+  api.post<Record<string, unknown>>('/graph/diff', { before, after }).then(r => r.data)
+export const getGraphAnalysis = (refresh = false) =>
+  api.get<GraphAnalysisResult>('/graph/analysis', { params: { refresh } }).then(r => r.data)
+export const previewGraphMutation = (paperId: string | number) =>
+  api.get<{ dry_run: true; summary: Record<string, unknown>; plan: Record<string, unknown> }>(
+    `/graph/mutations/preview/${paperId}`,
+  ).then(r => r.data)
+export const getPaperManifest = (paperId: string | number) =>
+  api.get<Record<string, unknown>>(`/papers/${paperId}/manifest`).then(r => r.data)
 export const listHiddenGraphNodes = () =>
   api.get<{ nodes: GraphNode[] }>('/graph/hidden_nodes').then(r => r.data.nodes)
 export const getNode = (id: string | number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
@@ -720,6 +778,7 @@ export interface AskTraceStep {
   args: Record<string, unknown>
   result_summary: string
   duration_ms: number
+  hit_node_ids?: string[]
 }
 
 export interface AskCitation {
@@ -899,10 +958,14 @@ export interface LintResult {
     merges: number
     missing_crosscut: number
     followups: number
+    components: number
+    orphans: number
+    super_hubs: number
   }
   stubs: LintStub[]
   merges: LintMerge[]
   missing_crosscut: LintCrosscut[]
+  structure: GraphAnalysisResult
   judgment: LintJudgment
   report_path: string
   report_rel_path: string
