@@ -100,6 +100,18 @@ test('overview drills into real topics, preserves dragged positions, and returns
   expect(writes.filter(p => p !== '/scan')).toEqual([])
 })
 
+test('topic connections have a keyboard-accessible list and honest missing-evidence state', async ({ page }) => {
+  await setup(page)
+  await explorer(page).locator('.ge-topic-connections summary').click()
+  await explorer(page).locator('.ge-topic-connections button').first().focus()
+  await page.keyboard.press('Enter')
+  await explorer(page).locator('.ge-bridge').getByRole('button', { name: /Research A.*评测于.*Research Dataset/ }).click()
+  const proof = explorer(page).getByRole('complementary', { name: '关系证据' })
+  await expect(proof).toContainText('未记录证据片段。')
+  await expect(proof).toContainText('来源未记录')
+  await expect(proof).not.toContainText('置信度')
+})
+
 test('local exploration respects depth and shows isolated-node feedback', async ({ page }) => {
   await setup(page)
   await explorer(page).getByRole('button', { name: '局部探索', exact: true }).click()

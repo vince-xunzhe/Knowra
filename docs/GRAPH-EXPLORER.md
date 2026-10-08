@@ -14,7 +14,7 @@ All projections are derived from the current frontend graph scope. No backend ro
 
 ## Validation
 
-- `E2E_PORT=4181 npm run test:e2e --prefix frontend -- --workers=2` — 25 Playwright tests passed, plus 5 polling tests.
+- `E2E_PORT=4181 npm run test:e2e --prefix frontend -- --workers=2` — 26 Playwright tests passed, plus 5 polling tests.
 - `npm run build --prefix frontend` — passed.
 - Targeted ESLint on GraphExplorer, KnowledgeGraph, graphExplorer model, the changed tests and Playwright config.
 - `git diff --check`

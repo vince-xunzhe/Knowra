@@ -103,6 +103,16 @@ export default function GraphExplorer({ data, papers, selectedNodeId, onNodeClic
               <span>{n.title}</span><small>{n.count !== undefined ? tr('{count} 个节点', { count: n.count }) : tr(typeLabels[n.type] || n.type)}{n.status === 'pending' ? ` · ${tr('待评审')}` : n.status === 'rejected' ? ` · ${tr('已淘汰')}` : ''}</small>
             </button>)}
           </div>
+          {nav.mode === 'overview' && view.edges.length > 0 && <details className="ge-topic-connections">
+            <summary>{tr('跨主题关系')} · {view.edges.length}</summary>
+            <div className="ge-relation-list">
+              {view.edges.map(e => <button type="button" key={e.id} onClick={() => pickEdge(e)}>
+                <span>{topics.find(t => t.id === e.source)?.label || tr('未分类')}</span>
+                <small>{tr('{count} 条关系', { count: e.count })}{e.relation === 'similar' ? ` · ${tr('相似')}` : ''}</small>
+                <span>{topics.find(t => t.id === e.target)?.label || tr('未分类')}</span>
+              </button>)}
+            </div>
+          </details>}
           {nav.mode !== 'overview' && <RelationList edges={displayedEdges} nodes={nodeMap} selectedId={selectedEdgeId} onPick={edge => { setSelectedEdgeId(edge.id); onClearSelection() }} />}
         </details>
         {nav.mode === 'local' && view.nodes.length === 1 && local.data.edges.length === 0 && <p className="ge-hint">{tr('这个节点在当前筛选范围内没有可见邻居；可打开相似关系或调整类型筛选。')}</p>}
