@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "mode": "offline_deterministic",
+  "structure_quality": {
+    "passed": 8,
+    "total": 8,
+    "cases": [
+      {
+        "id": "single_node_neighbors",
+        "passed": true
+      },
+      {
+        "id": "shortest_path",
+        "passed": true
+      },
+      {
+        "id": "shared_concepts",
+        "passed": true
+      },
+      {
+        "id": "papers_for_concept",
+        "passed": true
+      },
+      {
+        "id": "disconnected_nodes",
+        "passed": true
+      },
+      {
+        "id": "duplicate_title_lookup",
+        "passed": true
+      },
+      {
+        "id": "visible_alias_lookup",
+        "passed": true
+      },
+      {
+        "id": "hidden_alias_lookup",
+        "passed": true
+      }
+    ]
+  },
+  "ask_evidence_readiness": {
+    "passed": 6,
+    "total": 6,
+    "cases": [
+      {
+        "id": "content_definition",
+        "category": "content",
+        "passed": true,
+        "expected_tool_calls": 2
+      },
+      {
+        "id": "content_dataset_role",
+        "category": "content",
+        "passed": true,
+        "expected_tool_calls": 2
+      },
+      {
+        "id": "structure_shared_concepts",
+        "category": "structure",
+        "passed": true,
+        "expected_tool_calls": 1
+      },
+      {
+        "id": "structure_path",
+        "category": "structure",
+        "passed": true,
+        "expected_tool_calls": 1
+      },
+      {
+        "id": "hybrid_compare",
+        "category": "hybrid",
+        "passed": true,
+        "expected_tool_calls": 2
+      },
+      {
+        "id": "hybrid_insufficient",
+        "category": "hybrid",
+        "passed": true,
+        "expected_tool_calls": 2
+      }
+    ]
+  },
+  "latency_ms": {
+    "samples": 400,
+    "mean": 0.216,
+    "p50": 0.238,
+    "p95": 0.272,
+    "max": 0.352
+  },
+  "cost": {
+    "graph_query_model_tokens": 0,
+    "expected_tool_calls_total": 10,
+    "expected_tool_calls_mean": 1.667
+  },
+  "note": "Offline evidence/tool contract evaluation; language-model answer wording is covered by mocked tool-loop integration tests, not billed live calls."
+}

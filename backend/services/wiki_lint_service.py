@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session
 from config import load_config, task_model_id
 from models import KnowledgeNode, Paper
 from services.db_snapshot import finish_read_snapshot
+from services.graph_analysis_service import analyze_graph
 from services.vlm_service import cosine_similarity
 from services.wiki_compiler import (
     WIKI_DIR,
@@ -349,6 +350,31 @@ def _render_report(result: dict[str, Any]) -> str:
 
     j = result.get("judgment", {})
 
+    lines.append("## 图结构健康")
+    structure = result.get("structure") or {}
+    findings = structure.get("findings") or {}
+    structural_items = [
+        ("孤立节点", findings.get("orphans") or []),
+        ("异常超级枢纽", findings.get("super_hubs") or []),
+        (
+            "缺少晋升概念的多论文连通分量",
+            findings.get("components_without_promoted_concepts") or [],
+        ),
+    ]
+    if not any(items for _, items in structural_items):
+        lines.append("- 未发现基础结构异常")
+    for label, items in structural_items:
+        for item in items[:20]:
+            node_id = item.get("node_id")
+            evidence = item.get("evidence_node_ids") or ([node_id] if node_id else [])
+            title = item.get("title") or item.get("component_id") or "?"
+            degree = f"，degree={item['degree']}" if "degree" in item else ""
+            lines.append(
+                f"- **{label}**：{title}{degree}；结构证据节点："
+                + ", ".join(f"`{value}`" for value in evidence[:12])
+            )
+    lines.append("")
+
     lines.append("## 待充实条目")
     verdict_by_id = {s["concept_id"]: s for s in j.get("stubs", []) if isinstance(s, dict)}
     if result["stubs"]:
@@ -421,6 +447,7 @@ def run_lint(db: Session, *, use_llm: bool = True, on_progress=None) -> dict[str
     progress("检查概念内容与来源")
     concept_nodes = list_publishable_concept_nodes(db)
     titles = dict(db.query(Paper.id, Paper.title).all())
+    structure = analyze_graph(db)
     finish_read_snapshot(db)
 
     stubs = _scan_stubs(concept_nodes)
@@ -447,10 +474,14 @@ def run_lint(db: Session, *, use_llm: bool = True, on_progress=None) -> dict[str
             "followups": len(
                 [q for q in judgment.get("followups", []) if isinstance(q, str)]
             ),
+            "components": structure["counts"]["components"],
+            "orphans": structure["counts"]["orphans"],
+            "super_hubs": structure["counts"]["super_hubs"],
         },
         "stubs": stubs,
         "merges": merges,
         "missing_crosscut": crosscut,
+        "structure": structure,
         "judgment": judgment,
     }
 

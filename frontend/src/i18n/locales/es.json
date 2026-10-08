@@ -1,4 +1,9 @@
 {
+  "图结构健康": "Salud estructural del grafo",
+  "· 孤立节点": "· Nodos huérfanos",
+  "孤立节点": "Nodo huérfano",
+  "异常超级枢纽": "Supernodo anómalo",
+  "没有发现孤立节点或异常超级枢纽": "No se encontraron nodos huérfanos ni supernodos anómalos",
   "知识": "Conocimiento",
   "回顾": "Lectura",
   "推荐": "Descubrir",
@@ -1153,5 +1158,8 @@
   "本地流程已完成；云端同步可在同步栏执行": "Proceso local completado; puedes sincronizar con la nube desde la sección Sincronizar",
   "请查看后台任务状态": "Consulta el estado de la tarea en segundo plano",
   "处理任务已停止": "La tarea de procesamiento se ha detenido",
-  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "No se pudo confirmar la finalización. Revisa los artículos pendientes; reiniciar el servidor no reanuda las tareas automáticamente."
+  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "No se pudo confirmar la finalización. Revisa los artículos pendientes; reiniciar el servidor no reanuda las tareas automáticamente.",
+  "结构节点": "Nodo del grafo",
+  "结构关系": "Relación del grafo",
+  "Wiki 内容": "Contenido wiki"
 }
