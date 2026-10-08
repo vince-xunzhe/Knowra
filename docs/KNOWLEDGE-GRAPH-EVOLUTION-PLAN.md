@@ -342,6 +342,7 @@ explain_edge(edge_id)
 
 ### 3A 完成记录（2026-10-08）
 
+- 关联 PR：[#15](https://github.com/vince-xunzhe/Knowra/pull/15)；未提供 Linear issue。
 - 采用零新增依赖的 connected-components 基线，`community_id` 暂等同 `component_id`；Louvain/Leiden、bridge score、社区着色和 Dashboard 留到 3B。
 - 分析快照包含 degree、weighted degree、orphan、super-hub、组件规模和密度，并按 topology signature 自动失效。
 - Wiki lint 和现有前端报告增加结构证据；结构计算不调用 LLM。
@@ -418,6 +419,7 @@ explain_edge(edge_id)
 
 ### 4A 完成记录（2026-10-08）
 
+- 关联 PR：[#15](https://github.com/vince-xunzhe/Knowra/pull/15)；未提供 Linear issue。
 - migration preflight 在 worker 模型调用前验证运行时 schema，避免迟发的 `no such column`。
 - extraction 记录 source SHA、Prompt hash、schema、model 和 output hash；图失败恢复可复用成功抽取。
 - 显式 reprocess 会失效 extraction 及下游层；普通 retry 保留可复用抽取和旧图。
@@ -471,6 +473,7 @@ GraphMutationPlan(
 
 ### 5A 完成记录（2026-10-08）
 
+- 关联 PR：[#15](https://github.com/vince-xunzhe/Knowra/pull/15)；未提供 Linear issue。
 - 论文旧图不再在抽取前删除；plan 成功应用时才原子替换该论文拥有的 provenance 和节点来源。
 - resolver、writer、dry-run、失败回滚和重复应用幂等均有合成测试。
 - writer 不进行网络/模型调用，每篇处理只读取一次 embedding 向量表。
@@ -522,6 +525,7 @@ GraphMutationPlan(
 
 ### 6A 完成记录（2026-10-08）
 
+- 关联 PR：[#15](https://github.com/vince-xunzhe/Knowra/pull/15)；未提供 Linear issue。
 - 已实现稳定 `knowra.graph.v1` JSON、顺序无关 signature、节点/边/provenance diff 和变化来源分类。
 - 已实现 DOI/arXiv/file-SHA 确定性身份及 provenance，不联网、不调用模型。
 - GraphML、Mermaid、Cypher、MCP、覆盖式导入和 BibTeX/LaTeX 解析保留到 6B/6C。

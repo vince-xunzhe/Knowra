@@ -5,6 +5,8 @@
 实施顺序：4A → 5A → 6A → 3A
 分支：`agent/NOISSUE-graph-reliability-audit`
 
+关联 PR：[#15](https://github.com/vince-xunzhe/Knowra/pull/15)（堆叠于阶段 2 的 PR #13）
+
 ## 1. Problem
 
 阶段 2 已经让 Ask 能进行图原生检索，但论文处理和图谱演进仍有四类风险：
