@@ -37,6 +37,8 @@ data/*.db-wal
 data/*.db-shm
 data/wiki-lint-job.json
 data/.wiki-lint-*
+data/graph-analysis.json
+data/manifests/
 data/*.db
 data/*.db-wal
 data/*.db-shm

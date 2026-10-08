@@ -321,15 +321,15 @@ explain_edge(edge_id)
 
 ### 工作项
 
-- [ ] 实现从策展图生成分析快照，不直接修改原始边。
-- [ ] 将分析结果缓存为派生数据，并记录 graph signature。
+- [x] 实现从策展图生成 3A 基础分析快照，不直接修改原始边。
+- [x] 将分析结果缓存为派生数据，并记录 graph signature。
 - [ ] 图谱页面支持按社区着色和筛选。
 - [ ] Dashboard 增加社区、桥接节点和孤儿统计。
 - [ ] Wiki lint 增加以下规则：
-  - 高密度论文社区没有 promoted 概念；
+  - [x] 多论文连通分量没有 promoted 概念；
   - 高 bridge score 节点缺少概念页；
-  - promoted 概念长期孤立；
-  - 异常 super-hub 可能由过度合并造成。
+  - [x] promoted 概念孤立；
+  - [x] 异常 super-hub 可能由过度合并造成。
 - [ ] LLM 只对规则层候选做判定，不直接决定社区结构。
 
 ### 验收标准
@@ -339,6 +339,13 @@ explain_edge(edge_id)
 - lint 提议包含结构证据，而不是只给自然语言判断。
 - 不修改 validation split；记录规则层 precision 抽样和新旧 lint 指标。
 - 中小规模知识库分析时间满足交互或后台任务预算。
+
+### 3A 完成记录（2026-10-08）
+
+- 采用零新增依赖的 connected-components 基线，`community_id` 暂等同 `component_id`；Louvain/Leiden、bridge score、社区着色和 Dashboard 留到 3B。
+- 分析快照包含 degree、weighted degree、orphan、super-hub、组件规模和密度，并按 topology signature 自动失效。
+- Wiki lint 和现有前端报告增加结构证据；结构计算不调用 LLM。
+- 实现与指标见 `docs/KNOWLEDGE-GRAPH-RELIABILITY-AUDIT.md`。
 
 ---
 
@@ -394,12 +401,12 @@ explain_edge(edge_id)
 
 ### 工作项
 
-- [ ] 决定 manifest 使用数据库表还是版本化 JSON；优先保证事务一致性。
-- [ ] 定义各层 signature 和版本字段。
+- [x] 4A 选择原子写入的版本化 JSON manifest；数据库保持用户内容主存储。
+- [x] 4A 定义 source/extraction/graph/wiki/search 的 hash 与版本字段。
 - [ ] 将现有 Wiki `source_signature` 纳入统一状态。
 - [ ] 后台任务根据失效矩阵提交最小工作集。
 - [ ] 增加 reconcile 命令，检测文件、数据库和索引不一致。
-- [ ] 增加 dry-run，显示将重建的对象和原因。
+- [x] 4A/5A 增加 mutation dry-run，显示将创建、更新、detach、删除和替换的对象。
 
 ### 验收标准
 
@@ -408,6 +415,13 @@ explain_edge(edge_id)
 - 单篇笔记变化不会触发无关论文编译。
 - manifest 丢失或损坏时可以安全重建，不丢用户内容。
 - worker 中断后可通过 checkpoint 和 manifest 继续执行。
+
+### 4A 完成记录（2026-10-08）
+
+- migration preflight 在 worker 模型调用前验证运行时 schema，避免迟发的 `no such column`。
+- extraction 记录 source SHA、Prompt hash、schema、model 和 output hash；图失败恢复可复用成功抽取。
+- 显式 reprocess 会失效 extraction 及下游层；普通 retry 保留可复用抽取和旧图。
+- 4B 仍需完成 Wiki source signature 统一、完整失效矩阵最小任务集和 reconcile 命令。
 
 ---
 
@@ -439,13 +453,13 @@ GraphMutationPlan(
 
 ### 工作项
 
-- [ ] 定义 Pydantic schema 和版本策略。
-- [ ] 现有论文 extraction 适配为 fragment，不立刻改变 Prompt 输出格式。
-- [ ] 将别名匹配、去重和 paper-node 规则移入 resolver。
-- [ ] resolver 生成 mutation plan，不直接提交数据库。
-- [ ] writer 在单事务中应用 plan，并产出变更摘要。
-- [ ] 提供 dry-run 和调试序列化格式。
-- [ ] 保证 manual 节点/边和自动节点/边的所有权边界清晰。
+- [x] 定义 Pydantic schema 和版本策略。
+- [x] 现有论文 extraction 适配为 fragment，不改变 Prompt 输出格式。
+- [x] 将别名匹配、去重和 paper-node 规则移入 resolver。
+- [x] resolver 生成 mutation plan，不直接提交数据库。
+- [x] writer 在调用方事务中应用 plan，并产出变更摘要；失败完整 rollback。
+- [x] 提供 dry-run 和调试序列化格式。
+- [x] 保证 manual 节点/边和自动节点/边的所有权边界清晰。
 
 ### 验收标准
 
@@ -454,6 +468,12 @@ GraphMutationPlan(
 - 应用失败时事务完整回滚。
 - 现有 PDF 处理结果与 baseline 在允许差异范围内一致。
 - 新 extractor 不需要直接调用 ORM 写图。
+
+### 5A 完成记录（2026-10-08）
+
+- 论文旧图不再在抽取前删除；plan 成功应用时才原子替换该论文拥有的 provenance 和节点来源。
+- resolver、writer、dry-run、失败回滚和重复应用幂等均有合成测试。
+- writer 不进行网络/模型调用，每篇处理只读取一次 embedding 向量表。
 
 ---
 
@@ -499,6 +519,12 @@ GraphMutationPlan(
 - JSON/GraphML 导出可重新读取并保持节点、边及 provenance。
 - 确定性解析器有 fixture，离线测试不调用网络或模型。
 - 外部来源失败不影响现有 PDF 主流程。
+
+### 6A 完成记录（2026-10-08）
+
+- 已实现稳定 `knowra.graph.v1` JSON、顺序无关 signature、节点/边/provenance diff 和变化来源分类。
+- 已实现 DOI/arXiv/file-SHA 确定性身份及 provenance，不联网、不调用模型。
+- GraphML、Mermaid、Cypher、MCP、覆盖式导入和 BibTeX/LaTeX 解析保留到 6B/6C。
 
 ## 13. 评估与观测指标
 
@@ -591,8 +617,12 @@ python evals/summarize_metrics.py artifacts/latest_eval
 - [x] 阶段 1：边级溯源与可信度（2026-10-08）
 - [x] 阶段 2：图原生查询与 Hybrid Ask（2026-10-08）
 - [ ] 阶段 3：结构聚类与 Wiki lint
+  - [x] 阶段 3A：孤儿、连通分量、super-hub、基础 Wiki lint（2026-10-08）
 - [ ] 阶段 4：统一 Manifest 与精确失效
+  - [x] 阶段 4A：migration preflight、manifest、hash、幂等、checkpoint（2026-10-08）
 - [ ] 阶段 5：ExtractionFragment 与 GraphMutationPlan
+  - [x] 阶段 5A：fragment、resolver、mutation plan、dry-run、事务回滚（2026-10-08）
 - [ ] 阶段 6：Diff、导出与确定性来源
+  - [x] 阶段 6A：图谱 diff、稳定 JSON、DOI/arXiv 身份（2026-10-08）
 
 每完成一个阶段，在本节勾选，并在对应章节追加：完成日期、关联 issue/PR、实际指标、偏离计划的决策和下一阶段前置条件。

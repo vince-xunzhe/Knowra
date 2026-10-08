@@ -1,4 +1,9 @@
 {
+  "图结构健康": "Salud estructural del grafo",
+  "· 孤立节点": "· Nodos huérfanos",
+  "孤立节点": "Nodo huérfano",
+  "异常超级枢纽": "Supernodo anómalo",
+  "没有发现孤立节点或异常超级枢纽": "No se encontraron nodos huérfanos ni supernodos anómalos",
   "知识": "Conocimiento",
   "回顾": "Lectura",
   "推荐": "Descubrir",

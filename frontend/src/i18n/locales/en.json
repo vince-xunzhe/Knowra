@@ -1,4 +1,9 @@
 {
+  "图结构健康": "Graph structure health",
+  "· 孤立节点": "· Orphan nodes",
+  "孤立节点": "Orphan node",
+  "异常超级枢纽": "Anomalous super-hub",
+  "没有发现孤立节点或异常超级枢纽": "No orphan nodes or anomalous super-hubs found",
   "知识": "Knowledge",
   "回顾": "Review",
   "推荐": "Discover",

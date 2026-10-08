@@ -230,7 +230,7 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
             <span className="text-[10.5px] text-slate-500">
               {tr("扫描")}{' '}{result.counts.concepts_scanned} {tr("概念 · 待充实")}{' '}{' '}
               {result.counts.stubs} {tr("· 可合并")}{' '}{result.counts.merges} {tr("· 待建概念")}{' '}{' '}
-              {result.counts.missing_crosscut}
+              {result.counts.missing_crosscut} {tr("· 孤立节点")}{' '}{result.counts.orphans || 0}
             </span>
           )}
           <button
@@ -290,6 +290,36 @@ export default function WikiLintModal({ open, onClose, onMutated, onAdoptConcept
 
           {result && (
             <>
+              <Section
+                title={tr("图结构健康")}
+                count={(result.structure?.findings?.orphans?.length || 0) + (result.structure?.findings?.super_hubs?.length || 0)}
+                empty={tr("没有发现孤立节点或异常超级枢纽")}
+              >
+                {[
+                  ...(result.structure?.findings?.orphans || []).map(item => ({ ...item, finding_kind: tr("孤立节点") })),
+                  ...(result.structure?.findings?.super_hubs || []).map(item => ({ ...item, finding_kind: tr("异常超级枢纽") })),
+                ].map((raw, index) => {
+                  const item = raw as Record<string, unknown>
+                  return (
+                    <li
+                      key={`structure:${String(item.node_id || index)}`}
+                      className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-amber-300">{String(item.finding_kind)}</span>
+                        <span className="text-slate-200">{String(item.title || item.node_id || '')}</span>
+                        {typeof item.degree === 'number' && (
+                          <span className="text-[10.5px] text-slate-500">degree={item.degree}</span>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[10.5px] text-slate-600 font-mono break-all">
+                        {String(item.node_id || '')}
+                      </p>
+                    </li>
+                  )
+                })}
+              </Section>
+
               {/* Merge candidates — most actionable, show first */}
               <Section
                 title={tr("可合并概念对")}

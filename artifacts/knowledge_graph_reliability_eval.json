@@ -1,0 +1,49 @@
+{
+  "checks": {
+    "analysis_cache_hit": true,
+    "analysis_signature_stable": true,
+    "diff_detects_change": true,
+    "dry_run_read_only": true,
+    "export_signatures_differ": true,
+    "manifest_reusable": true,
+    "mutation_applied": true,
+    "no_model_calls": true,
+    "plan_deterministic": true,
+    "second_apply_has_no_new_nodes": true
+  },
+  "metrics": {
+    "analysis_counts": {
+      "components": 1,
+      "edges": 0,
+      "missing_concept_components": 0,
+      "nodes": 1,
+      "orphans": 1,
+      "super_hubs": 0
+    },
+    "analysis_ms": {
+      "max": 1.056,
+      "mean": 0.682,
+      "p50": 0.668,
+      "p95": 0.794
+    },
+    "diff_counts": {
+      "added_edges": 21,
+      "added_nodes": 5,
+      "changed_edges": 0,
+      "changed_nodes": 1,
+      "removed_edges": 0,
+      "removed_nodes": 0
+    },
+    "model_calls": 0,
+    "plan_ms": {
+      "max": 2.083,
+      "mean": 0.417,
+      "p50": 0.401,
+      "p95": 0.434
+    }
+  },
+  "passed": 10,
+  "samples": 200,
+  "schema": "knowra.graph-reliability-eval.v1",
+  "total": 10
+}
