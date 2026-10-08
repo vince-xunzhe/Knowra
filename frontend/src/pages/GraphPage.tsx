@@ -10,7 +10,7 @@ import {
   ArrowRight,
   Tags, Users2,
 } from 'lucide-react'
-import KnowledgeGraph from '../components/KnowledgeGraph'
+import GraphExplorer from '../components/GraphExplorer'
 import NodeDetail from '../components/NodeDetail'
 import RejectedRescueModal from '../components/RejectedRescueModal'
 import PipelineConsole from '../components/PipelineConsole'
@@ -956,8 +956,10 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               </div>
             </div>
           ) : (
-            <KnowledgeGraph
+            <GraphExplorer
               data={filteredData}
+              papers={paperCatalog}
+              onClearSelection={() => setSelectedNode(null)}
               onNodeClick={setSelectedNode}
               selectedNodeId={selectedNode?.id || null}
             />
