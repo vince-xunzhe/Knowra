@@ -9,7 +9,6 @@ from logging_utils import get_logger
 from services.paper_category_service import PAPER_CATEGORY_OTHER, effective_paper_category
 from services.vlm_service import get_embedding, cosine_similarity, parse_extraction_response
 from services.edge_provenance import (
-    EXTRACTION_SCHEMA_VERSION,
     EdgeSpec,
     EdgeWriteResult,
     add_edge,
@@ -827,196 +826,35 @@ def add_nodes_from_paper_extraction(
     db: Session,
     *,
     embeddings: dict,
-) -> list:
+    source_sha256: str = "",
+    dry_run: bool = False,
+    return_details: bool = False,
+):
+    """Resolve and atomically apply the versioned graph mutation contract.
+
+    The positional/API surface remains compatible with older callers.  New
+    pipeline code opts into ``return_details`` to persist a manifest summary;
+    tests and legacy repair paths still receive the touched node-id list.
     """
-    Convert paper extraction into knowledge nodes + edges.
-    Node types: paper, technique, dataset, problem_area, keyword
-    """
-    name_to_node: dict = {}
-    keywords = extraction.get("keywords", []) or []
-    tag_base = list(keywords)
 
-    def add_extracted_edge(
-        source_id,
-        target_id,
-        relation_type: str,
-        source_field: str,
-        evidence: Optional[str] = None,
-    ) -> EdgeWriteResult:
-        return _add_edge(db, EdgeSpec(
-            source_id=source_id,
-            target_id=target_id,
-            relation_type=relation_type,
-            origin="explicit",
-            weight=1.0,
-            source_paper_id=paper_id,
-            source_field=source_field,
-            evidence=evidence,
-            metadata={"evidence_kind": "structured_extraction"},
-            extractor_version=EXTRACTION_SCHEMA_VERSION,
-        ))
+    from services.graph_mutation_service import build_and_apply_extraction
 
-    def register(node: KnowledgeNode, names: list):
-        for n in names:
-            key = _normalize_name(n)
-            if key:
-                name_to_node[key] = node
-
-    # --- Paper node (the root for this paper) ---
-    paper_title = (extraction.get("title") or "").strip()
-    abstract = (extraction.get("abstract_summary") or "").strip()
-    venue = (extraction.get("venue") or "").strip()
-    year = extraction.get("year")
-    paper_content = abstract
-    if venue or year:
-        paper_content = f"[{venue} {year}] {abstract}" if abstract else f"{venue} {year}"
-
-    paper_node = None
-    if paper_title:
-        paper_node = _upsert_node(
-            db, paper_title, paper_content or paper_title, "paper",
-            aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
-        )
-        register(paper_node, [paper_title])
-
-    # --- Problem area ---
-    area = (extraction.get("problem_area") or "").strip()
-    if area:
-        area_node = _upsert_node(
-            db, area, f"研究领域: {area}", "problem_area",
-            aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
-        )
-        register(area_node, [area])
-        if paper_node:
-            add_extracted_edge(
-                paper_node.id,
-                area_node.id,
-                "belongs_to",
-                "problem_area",
-                area,
-            )
-
-    # --- Techniques ---
-    tech_nodes: dict = {}  # name -> node
-    for t in extraction.get("techniques", []):
-        if not isinstance(t, dict):
-            continue
-        name = (t.get("name") or "").strip()
-        if not name:
-            continue
-        aliases = [a.strip() for a in (t.get("aliases") or []) if a and a.strip()]
-        role = (t.get("role") or "").strip()
-        desc = f"{name}" + (f"（{role}）" if role else "")
-        node = _upsert_node(
-            db, name, desc, "technique",
-            aliases=aliases, tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
-        )
-        tech_nodes[_normalize_name(name)] = node
-        register(node, [name, *aliases])
-        if paper_node:
-            add_extracted_edge(
-                paper_node.id,
-                node.id,
-                "uses",
-                "techniques",
-                role or name,
-            )
-
-    # --- builds_on edges between techniques (technical path!) ---
-    for t in extraction.get("techniques", []):
-        if not isinstance(t, dict):
-            continue
-        name = _normalize_name(t.get("name"))
-        if not name or name not in tech_nodes:
-            continue
-        src = tech_nodes[name]
-        for dep in t.get("builds_on") or []:
-            dep_key = _normalize_name(dep)
-            target = tech_nodes.get(dep_key) or name_to_node.get(dep_key)
-            if target:
-                add_extracted_edge(
-                    src.id,
-                    target.id,
-                    "builds_on",
-                    "techniques[].builds_on",
-                    f"{t.get('name') or src.title} builds on {dep}",
-                )
-
-    # --- Datasets ---
-    for d in extraction.get("datasets", []):
-        if not isinstance(d, dict):
-            continue
-        name = (d.get("name") or "").strip()
-        if not name:
-            continue
-        purpose = (d.get("purpose") or "").strip()
-        node = _upsert_node(
-            db, name, f"数据集: {name}" + (f"（{purpose}）" if purpose else ""),
-            "dataset",
-            aliases=[], tags=tag_base,
-            paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
-        )
-        register(node, [name])
-        if paper_node:
-            rel = "trained_on" if "train" in purpose.lower() or "训练" in purpose else "evaluated_on"
-            add_extracted_edge(
-                paper_node.id,
-                node.id,
-                rel,
-                "datasets",
-                purpose or name,
-            )
-
-    # --- Baselines (link as compared_to) ---
-    for b in extraction.get("baselines", []) or []:
-        if not isinstance(b, str) or not b.strip():
-            continue
-        name = b.strip()
-        # If it matches an existing technique, link to that; otherwise create technique node
-        existing = name_to_node.get(_normalize_name(name))
-        if not existing:
-            existing = _upsert_node(
-                db, name, f"Baseline: {name}", "technique",
-                aliases=[], tags=tag_base,
-                paper_id=paper_id, api_key=api_key, embedding_model=embedding_model, embeddings=embeddings,
-            )
-            register(existing, [name])
-        if paper_node:
-            add_extracted_edge(
-                paper_node.id,
-                existing.id,
-                "compared_to",
-                "baselines",
-                name,
-            )
-
-    # `finding` nodes were dropped — they bloated the graph with one
-    # node per per-paper bullet, no cross-paper merging, and added little
-    # signal that wasn't already in the paper page itself. The
-    # `key_findings` field in the extraction JSON is still used by the
-    # paper-page LLM compile to build the "关键发现" section.
-
-    # --- Similarity edges for newly-touched nodes ---
-    touched = list({n.id: n for n in name_to_node.values()}.values())
-    # Decode the vector table once per paper, not once per extracted node.
-    candidates = db.query(KnowledgeNode).filter(KnowledgeNode.embedding.isnot(None)).all()
-    norms = {n.id: math.sqrt(sum(x * x for x in n.embedding))
-             for n in candidates if isinstance(n.embedding, list) and n.embedding}
-    for node in touched:
-        _add_similarity_edges(
-            db,
-            node,
-            similarity_threshold,
-            candidates=candidates,
-            norms=norms,
-            embedding_model=embedding_model,
-        )
-    db.flush()
-    # Caller owns commit/rollback, including the paper's completion state.
-    return [n.id for n in touched]
+    plan, summary = build_and_apply_extraction(
+        db,
+        extraction,
+        paper_id=str(paper_id),
+        source_sha256=source_sha256,
+        embeddings=embeddings,
+        similarity_threshold=similarity_threshold,
+        dry_run=dry_run,
+    )
+    node_ids = [
+        item.node_id
+        for item in [*plan.create_nodes, *plan.update_nodes, *plan.unchanged_nodes]
+    ]
+    if return_details:
+        return {"node_ids": node_ids, "summary": summary, "plan": plan}
+    return node_ids
 
 
 def _processed_paper_ids(db: Session) -> set[int]:

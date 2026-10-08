@@ -38,7 +38,18 @@ from services.vlm_service import (
     run_chat_turn,
     PaperExtractionError,
 )
-from services.graph_service import add_nodes_from_paper_extraction, remove_nodes_for_paper, prepare_graph_embeddings
+from services.graph_service import add_nodes_from_paper_extraction, prepare_graph_embeddings
+from services.pipeline_manifest import (
+    GRAPH_BUILDER_VERSION,
+    SEARCH_INDEX_VERSION,
+    WIKI_COMPILER_VERSION,
+    extraction_is_reusable,
+    invalidate_from,
+    manifest_status,
+    record_checkpoint,
+    record_extraction,
+    record_layer,
+)
 from services.note_images_gc import gc_on_notes_update
 from services.paper_category_service import (
     PAPER_CATEGORY_OPTIONS,
@@ -645,6 +656,13 @@ def get_paper(paper_id: str, db: Session = Depends(get_db)):
     return result
 
 
+@router.get("/papers/{paper_id}/manifest")
+def get_paper_manifest(paper_id: str, db: Session = Depends(get_db)):
+    if db.query(Paper.id).filter(Paper.id == paper_id).first() is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    return manifest_status(paper_id)
+
+
 @router.put("/papers/{paper_id}/learning-status")
 def update_paper_learning_status(
     paper_id: str,
@@ -718,6 +736,14 @@ def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
             p.id, db, cfg["openai_api_key"], compile_model
         )
         reconcile_concept_pages_dir(db, prune_orphans=True)
+        record_layer(
+            str(p.id),
+            "wiki",
+            {
+                "compiler_version": WIKI_COMPILER_VERSION,
+                "model": compile_model,
+            },
+        )
         try:
             from services import wiki_index
 
@@ -729,9 +755,30 @@ def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
             from services.wiki_search import rebuild_index
 
             rebuild_index()
+            record_layer(
+                str(p.id),
+                "search",
+                {"index_version": SEARCH_INDEX_VERSION},
+            )
         except Exception as ix_err:
+            try:
+                record_checkpoint(
+                    str(p.id),
+                    "search_failed",
+                    details={"error_class": type(ix_err).__name__},
+                )
+            except Exception:
+                pass
             print(f"[wiki_search] reindex after paper {p.id} failed: {ix_err}")
     except Exception as compile_err:
+        try:
+            record_checkpoint(
+                str(p.id),
+                "wiki_failed",
+                details={"error_class": type(compile_err).__name__},
+            )
+        except Exception:
+            pass
         print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
 
 
@@ -756,15 +803,23 @@ def _process_single(paper_id: str):
         prepared_embeddings = None
         while attempt <= max_retries:
             stage = PIPELINE_STATUS_SCANNING
+            error_class = "UnknownError"
             try:
                 from model_gateway.runtime import preflight_task_runtime
-                preflight_task_runtime(cfg, 'paper_extract')
+                extraction_model = task_model_name(cfg, "paper_extract")
+                if not extraction_is_reusable(p, cfg, extraction_model):
+                    preflight_task_runtime(cfg, 'paper_extract')
                 _set_pipeline_state(
                     db,
                     p,
                     status=PIPELINE_STATUS_SCANNING,
                     retry_count=attempt - 1,
                     clear_error=(attempt == 1),
+                )
+                record_checkpoint(
+                    str(p.id),
+                    "scanning",
+                    details={"attempt": attempt},
                 )
 
                 pdf_path = resolve_paper_path(p.filepath)
@@ -780,12 +835,8 @@ def _process_single(paper_id: str):
                     p.filepath = portable_filepath
                     db.commit()
 
-                # Remove leftovers from any prior failed attempt so this run
-                # starts from a clean graph slice for the current paper.
-                remove_nodes_for_paper(db, p.id)
-                p.processed = False
-                p.processed_at = None
-                db.commit()
+                # Keep the last known-good graph until a complete mutation plan
+                # can replace this paper's owned slice in one transaction.
 
                 # Local preprocessing — no longer fed to the LLM, but still
                 # useful for debug and fallback context.
@@ -821,10 +872,21 @@ def _process_single(paper_id: str):
                 # Tag every LLM call (extraction + category + any nested
                 # fallback) with the logical task so dashboard cost
                 # breakdowns attribute correctly.
-                if extraction_result is None:
+                if extraction_result is None and extraction_is_reusable(
+                    p, cfg, extraction_model
+                ):
+                    current_result = (
+                        parse_extraction_response(p.raw_llm_response),
+                        p.raw_llm_response,
+                        p.openai_file_id,
+                        cfg.get("openai_assistant_id") or None,
+                        p.openai_thread_id,
+                        p.openai_vector_store_id,
+                    )
+                elif extraction_result is None:
                     inputs = dict(
                         pdf_filepath=str(pdf_path), prompt=cfg["extraction_prompt"],
-                        api_key=cfg["openai_api_key"], model=task_model_name(cfg, "paper_extract"),
+                        api_key=cfg["openai_api_key"], model=extraction_model,
                         reasoning_effort=task_reasoning_effort(cfg, "paper_extract"),
                         cached_file_id=cached_file_id, cached_assistant_id=cached_assistant_id,
                         cached_vector_store_id=cached_vector_store_id,
@@ -894,20 +956,27 @@ def _process_single(paper_id: str):
                     p.chat_history = []
 
                 p.raw_llm_response = raw
-                p.extraction_model = task_model_name(cfg, "paper_extract")
+                p.extraction_model = extraction_model
                 p.title = (extraction.get("title") or p.filename)[:200]
                 p.authors = extraction.get("authors") or []
                 p.paper_category_model = derive_model_paper_category(p, extraction)
                 p.paper_team_model = derive_model_paper_team(p, extraction)
                 # Keep successful extraction even if a later graph write fails.
                 db.commit()
+                record_extraction(
+                    p,
+                    cfg,
+                    extraction_model,
+                    extraction,
+                    raw,
+                )
 
                 if prepared_embeddings is None:
                     prepared_embeddings = prepare_graph_embeddings(
                         extraction, paper_id, db, cfg["openai_api_key"], task_model_id(cfg, "embedding"),
                     )
 
-                add_nodes_from_paper_extraction(
+                graph_result = add_nodes_from_paper_extraction(
                     extraction,
                     p.id,
                     cfg["openai_api_key"],
@@ -915,6 +984,8 @@ def _process_single(paper_id: str):
                     cfg["similarity_threshold"],
                     db,
                     embeddings=prepared_embeddings,
+                    source_sha256=p.file_hash or "",
+                    return_details=True,
                 )
 
                 p.processed = True
@@ -926,12 +997,22 @@ def _process_single(paper_id: str):
                 p.last_error_reason = None
                 p.last_error_recoverable = None
                 db.commit()
+                record_layer(
+                    str(p.id),
+                    "graph",
+                    {
+                        "builder_version": GRAPH_BUILDER_VERSION,
+                        **graph_result["summary"],
+                    },
+                )
+                record_checkpoint(str(p.id), "done")
                 processing_state["done"] += 1
                 processing_state["succeeded"] += 1
                 _sync_processing_record(p, event="process")
                 _run_wiki_compile_phase(p, db, cfg)
                 return
             except PaperExtractionError as e:
+                error_class = type(e).__name__
                 db.rollback()
                 if e.raw:
                     p.raw_llm_response = e.raw
@@ -953,6 +1034,7 @@ def _process_single(paper_id: str):
                     max_retries,
                 )
             except Exception as e:
+                error_class = type(e).__name__
                 # SQLAlchemy requires an explicit rollback after a flush or
                 # encoding failure before we can persist retry/failure state.
                 db.rollback()
@@ -966,6 +1048,20 @@ def _process_single(paper_id: str):
                     attempt,
                     max_retries,
                 )
+
+            try:
+                record_checkpoint(
+                    str(p.id),
+                    "failed",
+                    details={
+                        "stage": stage,
+                        "attempt": attempt,
+                        "recoverable": bool(recoverable),
+                        "error_class": error_class,
+                    },
+                )
+            except Exception:
+                pass
 
             p.processed = False
             p.processed_at = None
@@ -1150,15 +1246,35 @@ def _serialize_processing_submission(handler):
     return wrapped
 
 
-def _start_processing_worker(paper_ids: list[str], force: bool = False) -> None:
+def _start_processing_worker(
+    paper_ids: list[str],
+    force: bool = False,
+    *,
+    reset_extraction: bool = False,
+) -> None:
     if not paper_ids:
         return
     from routers.jobs import submit_job
-    submit_job('papers', 'papers', {'paper_ids': list(paper_ids), 'force': force})
+    submit_job(
+        'papers',
+        'papers',
+        {
+            'paper_ids': list(paper_ids),
+            'force': force,
+            'reset_extraction': reset_extraction,
+        },
+    )
 
 
-def _prepare_reprocess(db: Session, p: Paper):
-    remove_nodes_for_paper(db, p.id)
+def _prepare_reprocess(
+    db: Session,
+    p: Paper,
+    *,
+    reset_extraction: bool = True,
+):
+    # Do not delete the visible graph before the replacement extraction has
+    # succeeded. The transactional mutation writer will expire this paper's
+    # old contributions only when it can apply the complete new plan.
     p.processed = False
     p.processed_at = None
     p.processing_status = PIPELINE_STATUS_SCANNING
@@ -1166,19 +1282,23 @@ def _prepare_reprocess(db: Session, p: Paper):
     p.last_error_stage = None
     p.last_error_reason = None
     p.last_error_recoverable = None
-    p.raw_llm_response = None
-    p.extraction_model = None
-    p.paper_category_model = None
-    p.paper_team_model = None
+    if reset_extraction:
+        p.raw_llm_response = None
+        p.extraction_model = None
+        p.paper_category_model = None
+        p.paper_team_model = None
     p.error = None
     # Drop cached OpenAI handles so reprocess re-uploads the PDF and opens a
     # fresh thread. Reusing a stale file_id against a new per-thread vector
     # store often returns zero file_search hits → model answers with "{}".
-    p.openai_file_id = None
-    p.openai_vector_store_id = None
-    p.openai_thread_id = None
-    p.thread_created_at = None
+    if reset_extraction:
+        p.openai_file_id = None
+        p.openai_vector_store_id = None
+        p.openai_thread_id = None
+        p.thread_created_at = None
     db.commit()
+    if reset_extraction:
+        invalidate_from(str(p.id), "extraction")
     sync_record_from_paper(p, event="reprocess_prepare")
 
 
@@ -1302,7 +1422,7 @@ def reprocess_paper(paper_id: str, db: Session = Depends(get_db)):
         return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
     db.close()
-    _start_processing_worker([paper_id], force=True)
+    _start_processing_worker([paper_id], force=True, reset_extraction=True)
     return {"message": f"Reprocessing started for {filename}"}
 
 
@@ -1339,10 +1459,22 @@ def update_paper_response(
         embeddings = prepare_graph_embeddings(
             extraction, paper_id, db, cfg.get("openai_api_key", ""), task_model_id(cfg, "embedding"),
         )
-    # A light edit (e.g. fixing a formula) leaves the graph structure
-    # untouched, so skip the expensive node rebuild + re-embedding.
+    graph_result = None
+    # Resolve/apply the replacement graph while the ORM session is still
+    # clean. The writer owns expiry of old paper contributions inside the
+    # same savepoint, so the old graph survives any planning/write failure.
     if body.rebuild_graph:
-        remove_nodes_for_paper(db, p.id)
+        graph_result = add_nodes_from_paper_extraction(
+            extraction,
+            p.id,
+            cfg.get("openai_api_key", ""),
+            task_model_id(cfg, "embedding"),
+            cfg.get("similarity_threshold", 0.6),
+            db,
+            embeddings=embeddings,
+            source_sha256=p.file_hash or "",
+            return_details=True,
+        )
     p.raw_llm_response = body.raw_llm_response
     p.title = (extraction.get("title") or p.filename)[:200]
     p.authors = extraction.get("authors") or []
@@ -1360,17 +1492,23 @@ def update_paper_response(
         p.last_error_recoverable = None
     db.flush()
 
-    if body.rebuild_graph:
-        add_nodes_from_paper_extraction(
-            extraction,
-            p.id,
-            cfg.get("openai_api_key", ""),
-            task_model_id(cfg, "embedding"),
-            cfg.get("similarity_threshold", 0.6),
-            db,
-            embeddings=embeddings,
-        )
     db.commit()
+    record_extraction(
+        p,
+        cfg,
+        p.extraction_model or "manual-response-edit",
+        extraction,
+        body.raw_llm_response,
+    )
+    if graph_result is not None:
+        record_layer(
+            str(p.id),
+            "graph",
+            {
+                "builder_version": GRAPH_BUILDER_VERSION,
+                **graph_result["summary"],
+            },
+        )
     sync_record_from_paper(p, event="manual_response_edit")
     db.refresh(p)
     return _serialize_paper_detail(p, db)

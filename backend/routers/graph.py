@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -10,6 +10,13 @@ from services import wiki_search as wiki_search_service
 from services import wiki_index
 from services import promotion_service
 from services import graph_query_service
+from services.graph_analysis_service import analyze_graph
+from services.graph_audit_service import diff_graphs, export_graph
+from services.graph_mutation_service import (
+    fragment_from_extraction,
+    plan_summary,
+    resolve_mutation_plan,
+)
 from services.graph_service import (
     AUTO_NODE_ORIGIN,
     MANUAL_NODE_ORIGIN,
@@ -32,6 +39,11 @@ from services.paper_record_service import sync_record_from_paper
 from services.wiki_compiler import reconcile_concept_pages_dir
 
 router = APIRouter(prefix="/api", tags=["graph"])
+
+
+class GraphDiffInput(BaseModel):
+    before: dict[str, Any]
+    after: Optional[dict[str, Any]] = None
 
 
 def _graph_query(call):
@@ -69,6 +81,66 @@ def query_graph_shared(node_id: List[str], relation_type: Optional[str] = None, 
 @router.get("/graph/query/edges/{edge_id}")
 def query_graph_edge(edge_id: str, db: Session = Depends(get_db)):
     return _graph_query(lambda: graph_query_service.explain_edge(db, edge_id))
+
+
+@router.get("/graph/export")
+def export_graph_json(
+    include_embeddings: bool = False,
+    include_hidden: bool = True,
+    db: Session = Depends(get_db),
+):
+    return export_graph(
+        db,
+        include_embeddings=include_embeddings,
+        include_hidden=include_hidden,
+    )
+
+
+@router.post("/graph/diff")
+def diff_graph_json(body: GraphDiffInput, db: Session = Depends(get_db)):
+    try:
+        after = body.after or export_graph(db)
+        return diff_graphs(body.before, after)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/graph/analysis")
+def graph_analysis(refresh: bool = False, db: Session = Depends(get_db)):
+    return analyze_graph(db, use_cache=not refresh)
+
+
+@router.get("/graph/mutations/preview/{paper_id}")
+def preview_graph_mutation(paper_id: str, db: Session = Depends(get_db)):
+    """Return an exact structural dry-run without calling a model or writing."""
+    from services.vlm_service import parse_extraction_response
+
+    paper = db.query(Paper).filter(Paper.id == paper_id).first()
+    if paper is None:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if not paper.raw_llm_response:
+        raise HTTPException(status_code=409, detail="Paper has no reusable extraction")
+    try:
+        extraction = parse_extraction_response(paper.raw_llm_response)
+        fragment = fragment_from_extraction(
+            extraction,
+            paper_id=str(paper.id),
+            source_sha256=paper.file_hash or "",
+        )
+        plan = resolve_mutation_plan(
+            db,
+            fragment,
+            embeddings={},
+            similarity_threshold=float(load_config().get("similarity_threshold", 0.6)),
+        )
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    dump = getattr(plan, "model_dump", None)
+    return {
+        "dry_run": True,
+        "summary": plan_summary(plan),
+        "plan": dump(mode="json") if dump else plan.dict(),
+    }
 
 
 class ManualConceptInput(BaseModel):

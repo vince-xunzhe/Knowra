@@ -43,16 +43,30 @@ class Context:
 
 
 def process_papers(ctx, payload):
-    from database import SessionLocal
+    from database import SessionLocal, assert_processing_schema
     from models import Paper
     from routers import papers
     ids = payload['paper_ids']
+    # Fail before model calls or graph mutations when an older local database
+    # is missing a column required by the currently-running code.
+    assert_processing_schema()
     papers._mark_processing_started(ids)
     ctx.watch('papers', papers.processing_state)
     if any('paper:' + str(pid) not in ctx.checkpoints for pid in ids):
-        from config import load_config
+        from config import load_config, task_model_name
         from model_gateway.runtime import preflight_task_runtime
-        preflight_task_runtime(load_config(), 'paper_extract')
+        from services.pipeline_manifest import extraction_is_reusable
+        cfg = load_config()
+        model = task_model_name(cfg, 'paper_extract')
+        with SessionLocal() as db:
+            remaining = db.query(Paper).filter(Paper.id.in_(ids)).all()
+            requires_model = any(
+                not extraction_is_reusable(paper, cfg, model)
+                for paper in remaining
+                if 'paper:' + str(paper.id) not in ctx.checkpoints
+            )
+        if requires_model:
+            preflight_task_runtime(cfg, 'paper_extract')
     for pid in ids:
         key = 'paper:' + str(pid)
         if key in ctx.checkpoints:
@@ -65,7 +79,11 @@ def process_papers(ctx, payload):
                 if not paper:
                     raise ValueError('Paper no longer exists: ' + str(pid))
                 if payload.get('force') and 'prepared:' + str(pid) not in ctx.checkpoints:
-                    papers._prepare_reprocess(db, paper)
+                    papers._prepare_reprocess(
+                        db,
+                        paper,
+                        reset_extraction=payload.get('reset_extraction', False),
+                    )
                     ctx.step('prepared:' + str(pid), lambda: True)
                 elif paper.processed:
                     papers.processing_state['done'] += 1
