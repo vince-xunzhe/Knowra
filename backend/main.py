@@ -3,7 +3,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import load_config, is_cloud_mode
-from database import init_db, SessionLocal, DB_PATH
+from database import init_db, ensure_runtime_schema, SessionLocal, DB_PATH
 from services.local_instance import LocalBackendLock
 from logging_utils import configure_app_logging
 from models import Paper
@@ -20,6 +20,7 @@ from routers import (
     dashboard,
 )
 from services.graph_service import repair_merged_paper_nodes
+from services.edge_provenance import backfill_and_merge_edge_provenance
 from services.paper_category_service import sync_paper_category_fields
 from services.vlm_service import parse_extraction_response
 
@@ -109,9 +110,15 @@ def startup():
     if not is_cloud_mode():
         from services.task_runtime import store, ensure_worker
         queue = store()
+        # ORM modules are imported before this hook runs.  Always install the
+        # additive compatibility schema before returning early for a worker
+        # that survived an API restart; otherwise that worker can query new
+        # model columns against an old SQLite table.
+        ensure_runtime_schema()
         if DB_PATH.exists() and queue.active():
-            # API restarts must not run repair/migration writes alongside a
-            # surviving worker. Maintenance runs on the next idle startup.
+            # Potentially destructive repair/maintenance still waits for the
+            # next idle startup.  The compatibility preflight above contains
+            # additive DDL and conservative backfills only.
             ensure_worker()
             return
     init_db()
@@ -143,6 +150,13 @@ def startup():
     db = None
     try:
         db = SessionLocal()
+        provenance = backfill_and_merge_edge_provenance(db)
+        if provenance["backfilled_rows"] or provenance["merged_rows"]:
+            print(
+                "[edge_provenance] backfilled "
+                f"{provenance['backfilled_rows']} edge(s), merged "
+                f"{provenance['merged_rows']} duplicate(s)"
+            )
         cfg = load_config()
         repaired = repair_merged_paper_nodes(
             db,

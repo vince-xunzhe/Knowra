@@ -1138,5 +1138,20 @@
   " Marp 幻灯": " Marp slides",
   "其他": "Other",
   "保存失败，请重试。": "Could not save. Please retry.",
-  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "The backend has not loaded the language settings endpoint. Restart the local service and try again."
+  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "The backend has not loaded the language settings endpoint. Restart the local service and try again.",
+  "待审核候选": "Candidates to review",
+  "点击候选，在节点图谱中定位并打开审核详情。": "Select a candidate to locate it in the node graph and open its review details.",
+  "退出候选查看": "Exit candidate view",
+  "加载候选中…": "Loading candidates…",
+  "候选加载失败，请重试。": "Could not load candidates. Please retry.",
+  "当前没有待审核候选。": "There are no candidates awaiting review.",
+  "搜索候选名称或标签": "Search candidate names or tags",
+  "{0} 篇来源论文": "{0} source papers",
+  "没有匹配的候选，试试其他名称或标签。": "No matching candidates. Try another name or tag.",
+  "后台全流程编排": "Background full pipeline",
+  "独立 worker 执行中，可离开页面": "Running in a separate worker; you can leave this page",
+  "本地流程已完成；云端同步可在同步栏执行": "Local workflow complete; use the Sync section for cloud sync",
+  "请查看后台任务状态": "Check background task status",
+  "处理任务已停止": "Processing task stopped",
+  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "Completion could not be confirmed. Check pending papers; restarting the backend does not automatically resume tasks."
 }

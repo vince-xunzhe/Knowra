@@ -269,6 +269,13 @@ CREATE TABLE knowledge_edges (
     target_id       UUID NOT NULL REFERENCES knowledge_nodes(id) ON DELETE CASCADE,
     relation_type   TEXT DEFAULT 'related',
     weight          DOUBLE PRECISION DEFAULT 0.0,
+    origin          TEXT DEFAULT 'legacy',
+    confidence      DOUBLE PRECISION,
+    source_paper_id UUID REFERENCES papers(id) ON DELETE SET NULL,
+    source_field    TEXT,
+    evidence        TEXT,
+    metadata        JSONB,
+    extractor_version TEXT,
 
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -281,11 +288,18 @@ CREATE TABLE knowledge_edges (
 
 CREATE INDEX knowledge_edges_user_source_idx ON knowledge_edges (user_id, source_id);
 CREATE INDEX knowledge_edges_user_target_idx ON knowledge_edges (user_id, target_id);
+CREATE INDEX knowledge_edges_user_origin_idx ON knowledge_edges (user_id, origin);
+CREATE INDEX knowledge_edges_user_source_paper_idx ON knowledge_edges (user_id, source_paper_id);
 
 ALTER TABLE knowledge_edges ENABLE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON knowledge_edges
   FOR ALL USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
 ```
+
+Phase 1 的一条数据库记录表示一条逻辑边。多个论文或生成方式共同支持同一条边时，
+各来源保存在 `metadata.provenance[]`；顶层 provenance 字段是优先级最高来源的便捷投影。
+这样仍可维持 `(user_id, source_id, target_id, relation_type)` 唯一约束，同时允许按
+`source_paper_id` 精确失效单篇论文的贡献。
 
 ### 4.2 source_id / target_id 的 user_id 一致性
 
@@ -309,6 +323,9 @@ CREATE TRIGGER edge_user_consistency_check
   BEFORE INSERT OR UPDATE ON knowledge_edges
   FOR EACH ROW EXECUTE FUNCTION check_edge_user_consistency();
 ```
+
+`0010_edge_provenance.sql` 使用 `CREATE OR REPLACE FUNCTION` 扩展同一个 trigger
+函数：当 `source_paper_id` 非空时，还会验证来源论文存在且属于 `NEW.user_id`。
 
 ---
 

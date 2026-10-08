@@ -10,6 +10,7 @@ from pathlib import Path
 
 from path_utils import DATA_DIR, PROJECT_ROOT
 from services.task_store import TaskStore
+from services.worker_revision import runtime_revision
 
 _lock = threading.Lock()
 _store = None
@@ -52,6 +53,7 @@ def ensure_worker():
         return
     queue = store()
     with _lock:
+        queue.target_revision(runtime_revision())
         heartbeat = queue.worker()
         if heartbeat and time.time() - heartbeat['heartbeat'] < 10:
             return
@@ -62,7 +64,8 @@ def ensure_worker():
         _last_start = time.monotonic()
         logs = DATA_DIR / 'logs'
         logs.mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ, KNOWRA_TASK_EXECUTOR='1', KNOWRA_TASK_DB=str(queue.path))
+        env = dict(os.environ, KNOWRA_TASK_EXECUTOR='1', KNOWRA_TASK_DB=str(queue.path),
+                   KNOWRA_WORKER_MANAGED='1')
         try:
             with (logs / 'task-worker.log').open('ab') as output:
                 _child = subprocess.Popen(
@@ -79,8 +82,13 @@ def ensure_worker():
 
 def health():
     heartbeat = store().worker()
+    online = bool(heartbeat and time.time() - heartbeat['heartbeat'] < 15)
+    revision = heartbeat.get('revision') if heartbeat else None
     return {'online': bool(heartbeat and time.time() - heartbeat['heartbeat'] < 15),
-            'heartbeat': heartbeat, 'start_error': _start_error}
+            'heartbeat': heartbeat, 'start_error': _start_error,
+            'legacy_worker': bool(online and not revision),
+            'restart_pending': bool(online and revision and revision != store().target_revision()
+                                    and policy()['mode'] == 'managed')}
 
 
 def start_supervisor():

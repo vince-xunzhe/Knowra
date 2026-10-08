@@ -102,6 +102,8 @@ def _extract_status_code(exc: Exception) -> Optional[int]:
 
 
 def is_recoverable_error(exc: Exception) -> bool:
+    if getattr(exc, 'recoverable', None) is False:
+        return False
     if isinstance(exc, (OperationalError, sqlite3.OperationalError)):
         original = getattr(exc, "orig", exc)
         code = getattr(original, "sqlite_errorcode", None)

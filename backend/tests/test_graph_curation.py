@@ -89,7 +89,13 @@ class GraphCurationTests(unittest.TestCase):
         )
 
         mock_cosine.assert_called_once_with([1.0, 0.0], [1.0, 0.0])
-        mock_add_edge.assert_called_once_with(db, 1, 3, "similar", 0.9)
+        mock_add_edge.assert_called_once()
+        called_db, spec = mock_add_edge.call_args.args
+        self.assertIs(called_db, db)
+        self.assertEqual((spec.source_id, spec.target_id), (1, 3))
+        self.assertEqual(spec.relation_type, "similar")
+        self.assertEqual(spec.origin, "embedding")
+        self.assertEqual(spec.confidence, 0.9)
 
     def test_find_existing_paper_node_prefers_single_source_title_match(self):
         db = MagicMock()
@@ -225,6 +231,14 @@ class GraphCurationTests(unittest.TestCase):
             self.assertNotIn(("1", "304", "uses"), edges)
             self.assertIn(("303", "304", "uses"), edges)
             self.assertNotIn(("1", "303", "uses"), edges)
+            repaired_edge = db.query(KnowledgeEdge).filter_by(
+                source_id="303", target_id="304", relation_type="uses"
+            ).one()
+            self.assertEqual(repaired_edge.origin, "legacy")
+            self.assertEqual(
+                repaired_edge.edge_metadata["provenance"][0]["origin"],
+                "legacy",
+            )
         finally:
             db.close()
             engine.dispose()

@@ -1138,5 +1138,20 @@
   " Marp 幻灯": " Diapositivas Marp",
   "其他": "Otros",
   "保存失败，请重试。": "No se pudo guardar. Reintenta.",
-  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "El servidor aún no ha cargado la API de idiomas. Reinicia el servicio local y vuelve a intentarlo."
+  "当前后端尚未加载语言设置接口，请重启本地服务后重试。": "El servidor aún no ha cargado la API de idiomas. Reinicia el servicio local y vuelve a intentarlo.",
+  "待审核候选": "Candidatos pendientes",
+  "点击候选，在节点图谱中定位并打开审核详情。": "Selecciona un candidato para localizarlo en el grafo y abrir sus detalles de revisión.",
+  "退出候选查看": "Salir de candidatos",
+  "加载候选中…": "Cargando candidatos…",
+  "候选加载失败，请重试。": "No se pudieron cargar los candidatos. Reinténtalo.",
+  "当前没有待审核候选。": "No hay candidatos pendientes de revisión.",
+  "搜索候选名称或标签": "Buscar nombres o etiquetas",
+  "{0} 篇来源论文": "{0} artículos de origen",
+  "没有匹配的候选，试试其他名称或标签。": "No hay coincidencias. Prueba otro nombre o etiqueta.",
+  "后台全流程编排": "Flujo completo en segundo plano",
+  "独立 worker 执行中，可离开页面": "En ejecución en un proceso independiente; puedes salir de esta página",
+  "本地流程已完成；云端同步可在同步栏执行": "Proceso local completado; puedes sincronizar con la nube desde la sección Sincronizar",
+  "请查看后台任务状态": "Consulta el estado de la tarea en segundo plano",
+  "处理任务已停止": "La tarea de procesamiento se ha detenido",
+  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "No se pudo confirmar la finalización. Revisa los artículos pendientes; reiniciar el servidor no reanuda las tareas automáticamente."
 }

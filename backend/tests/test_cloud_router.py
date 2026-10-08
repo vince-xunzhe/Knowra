@@ -122,6 +122,11 @@ def _make_app_with_seed():
         db.add(CloudKnowledgeEdge(
             id="edge-1", user_id=USER_A,
             source_id="node-1", target_id="node-2",
+            relation_type="builds_on", origin="explicit", confidence=0.85,
+            source_paper_id="paper-1", source_field="techniques[].builds_on",
+            evidence="Foo builds on Bar.",
+            edge_metadata={"provenance": [{"origin": "explicit"}]},
+            extractor_version="paper-extraction-v1",
             updated_at=now - timedelta(minutes=15),
         ))
         # 2 wiki files
@@ -240,6 +245,11 @@ class CloudRouterTests(unittest.TestCase):
         self.assertEqual(statuses["paper-2"], "completed")
         self.assertEqual(len(body["knowledge_nodes"]), 3)  # incl node-paper-1
         self.assertEqual(len(body["knowledge_edges"]), 1)
+        edge = body["knowledge_edges"][0]
+        self.assertEqual(edge["origin"], "explicit")
+        self.assertEqual(edge["confidence"], 0.85)
+        self.assertEqual(edge["source_paper_id"], "paper-1")
+        self.assertEqual(edge["metadata"]["provenance"][0]["origin"], "explicit")
         self.assertEqual(len(body["wiki_files"]), 2)
 
     def test_snapshot_wiki_files_have_signed_urls(self):

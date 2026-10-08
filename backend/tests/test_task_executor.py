@@ -26,6 +26,7 @@ class TaskExecutorTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         self.sessions = sessionmaker(bind=engine)
         for mock in [patch('database.SessionLocal', self.sessions),
+                     patch('config.load_config', return_value={}),
                      patch.dict(os.environ, {'KNOWRA_TASK_EXECUTOR': '1'})]:
             mock.start()
             self.addCleanup(mock.stop)
@@ -34,6 +35,19 @@ class TaskExecutorTests(unittest.TestCase):
             db.commit()
         previous = dict(papers.processing_state)
         self.addCleanup(papers.processing_state.update, previous)
+
+    def test_configuration_failure_precedes_destructive_reprocess(self):
+        from model_gateway.runtime import ProviderConfigurationError
+        job = self.queue.submit('papers', 'papers', {'paper_ids': ['a'], 'force': True})
+        with patch('model_gateway.runtime.preflight_task_runtime',
+                   side_effect=ProviderConfigurationError('CLI missing')), \
+             patch.object(papers, '_prepare_reprocess') as prepare, \
+             patch.object(papers, '_process_single') as process:
+            executor.execute(self.queue, self.queue.claim())
+        prepare.assert_not_called()
+        process.assert_not_called()
+        self.assertEqual(self.queue.get(job['job_id'])['status'], 'failed')
+        self.assertIn('CLI missing', self.queue.snapshot('papers')['batch_error'])
 
     def test_resume_processes_only_unfinished_papers(self):
         calls = []

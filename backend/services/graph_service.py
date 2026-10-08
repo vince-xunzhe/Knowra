@@ -1,7 +1,6 @@
 from __future__ import annotations
 import json
 import math
-from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Session, defer
 from sqlalchemy import func, or_
@@ -9,6 +8,15 @@ from models import Paper, KnowledgeNode, KnowledgeEdge
 from logging_utils import get_logger
 from services.paper_category_service import PAPER_CATEGORY_OTHER, effective_paper_category
 from services.vlm_service import get_embedding, cosine_similarity, parse_extraction_response
+from services.edge_provenance import (
+    EXTRACTION_SCHEMA_VERSION,
+    EdgeSpec,
+    EdgeWriteResult,
+    add_edge,
+    remove_paper_edge_provenance,
+    serialize_edge_provenance,
+    specs_from_edge,
+)
 
 MAX_TITLE_LEN = 24
 AUTO_NODE_ORIGIN = "auto"
@@ -398,7 +406,12 @@ def repair_merged_paper_nodes(
                     src_id, tgt_id = target_node.id, other.id
                 else:
                     src_id, tgt_id = other.id, target_node.id
-                _add_edge(db, src_id, tgt_id, edge.relation_type, edge.weight or 0.0)
+                for spec in specs_from_edge(
+                    edge,
+                    source_id=src_id,
+                    target_id=tgt_id,
+                ):
+                    _add_edge(db, spec)
 
             if not keep_on_canonical:
                 db.delete(edge)
@@ -564,45 +577,10 @@ def _upsert_node(
 
 def _add_edge(
     db: Session,
-    src_id: int,
-    tgt_id: int,
-    relation: str,
-    weight: float,
-) -> Optional[KnowledgeEdge]:
-    if src_id == tgt_id:
-        return None
-    db.flush()
-    existing = (
-        db.query(KnowledgeEdge)
-        .filter(
-            KnowledgeEdge.source_id == src_id,
-            KnowledgeEdge.target_id == tgt_id,
-            KnowledgeEdge.relation_type == relation,
-        )
-        .first()
-    )
-    if existing:
-        return None
-    # For 'similar', also check reverse direction to avoid duplicates
-    if relation == "similar":
-        reverse = (
-            db.query(KnowledgeEdge)
-            .filter(
-                KnowledgeEdge.source_id == tgt_id,
-                KnowledgeEdge.target_id == src_id,
-                KnowledgeEdge.relation_type == "similar",
-            )
-            .first()
-        )
-        if reverse:
-            return None
-    edge = KnowledgeEdge(
-        source_id=src_id, target_id=tgt_id,
-        relation_type=relation, weight=weight,
-        created_at=datetime.now(timezone.utc),
-    )
-    db.add(edge)
-    return edge
+    spec: EdgeSpec,
+) -> EdgeWriteResult:
+    """Write one complete edge spec; origin can no longer be omitted."""
+    return add_edge(db, spec)
 
 
 def _add_similarity_edges(
@@ -611,6 +589,7 @@ def _add_similarity_edges(
     threshold: float,
     *,
     context: str = "incremental_build",
+    embedding_model: Optional[str] = None,
     candidates=None,
     norms=None,
 ) -> dict[str, int]:
@@ -635,8 +614,22 @@ def _add_similarity_edges(
                    if denominator else 0.0)
         if sim >= threshold:
             rounded = round(sim, 4)
-            edge = _add_edge(db, node.id, other.id, "similar", rounded)
-            if edge is None:
+            result = _add_edge(db, EdgeSpec(
+                source_id=node.id,
+                target_id=other.id,
+                relation_type="similar",
+                origin="embedding",
+                weight=rounded,
+                confidence=rounded,
+                source_field="embedding",
+                metadata={
+                    "context": context,
+                    "threshold": threshold,
+                    "embedding_model": embedding_model,
+                },
+                extractor_version=embedding_model,
+            ))
+            if not result.created:
                 continue
             summary["final_edges"] += 1
             logger.info(
@@ -682,8 +675,17 @@ def rebuild_similarity_edges(db: Session, threshold: float) -> dict:
             if sim < threshold:
                 continue
             rounded = round(sim, 4)
-            edge = _add_edge(db, source.id, target.id, "similar", rounded)
-            if edge is None:
+            result = _add_edge(db, EdgeSpec(
+                source_id=source.id,
+                target_id=target.id,
+                relation_type="similar",
+                origin="embedding",
+                weight=rounded,
+                confidence=rounded,
+                source_field="embedding",
+                metadata={"context": "rebuild", "threshold": threshold},
+            ))
+            if not result.created:
                 continue
             final_edges += 1
             logger.info(
@@ -727,6 +729,11 @@ def remove_nodes_for_paper(db: Session, paper_id: str) -> int:
     source list. Paper-only nodes are deleted with their connected edges so a
     reprocess or manual repair does not duplicate them.
     """
+    # First expire only the structured extraction contributions owned by this
+    # paper. Shared, manual, inferred, embedding and unknown legacy support is
+    # retained. Node deletion below then removes edges whose endpoint vanishes.
+    remove_paper_edge_provenance(db, paper_id)
+
     nodes_to_delete: list[KnowledgeNode] = []
     removed = 0
 
@@ -829,6 +836,26 @@ def add_nodes_from_paper_extraction(
     keywords = extraction.get("keywords", []) or []
     tag_base = list(keywords)
 
+    def add_extracted_edge(
+        source_id,
+        target_id,
+        relation_type: str,
+        source_field: str,
+        evidence: Optional[str] = None,
+    ) -> EdgeWriteResult:
+        return _add_edge(db, EdgeSpec(
+            source_id=source_id,
+            target_id=target_id,
+            relation_type=relation_type,
+            origin="explicit",
+            weight=1.0,
+            source_paper_id=paper_id,
+            source_field=source_field,
+            evidence=evidence,
+            metadata={"evidence_kind": "structured_extraction"},
+            extractor_version=EXTRACTION_SCHEMA_VERSION,
+        ))
+
     def register(node: KnowledgeNode, names: list):
         for n in names:
             key = _normalize_name(n)
@@ -863,7 +890,13 @@ def add_nodes_from_paper_extraction(
         )
         register(area_node, [area])
         if paper_node:
-            _add_edge(db, paper_node.id, area_node.id, "belongs_to", 1.0)
+            add_extracted_edge(
+                paper_node.id,
+                area_node.id,
+                "belongs_to",
+                "problem_area",
+                area,
+            )
 
     # --- Techniques ---
     tech_nodes: dict = {}  # name -> node
@@ -884,7 +917,13 @@ def add_nodes_from_paper_extraction(
         tech_nodes[_normalize_name(name)] = node
         register(node, [name, *aliases])
         if paper_node:
-            _add_edge(db, paper_node.id, node.id, "uses", 1.0)
+            add_extracted_edge(
+                paper_node.id,
+                node.id,
+                "uses",
+                "techniques",
+                role or name,
+            )
 
     # --- builds_on edges between techniques (technical path!) ---
     for t in extraction.get("techniques", []):
@@ -898,7 +937,13 @@ def add_nodes_from_paper_extraction(
             dep_key = _normalize_name(dep)
             target = tech_nodes.get(dep_key) or name_to_node.get(dep_key)
             if target:
-                _add_edge(db, src.id, target.id, "builds_on", 1.0)
+                add_extracted_edge(
+                    src.id,
+                    target.id,
+                    "builds_on",
+                    "techniques[].builds_on",
+                    f"{t.get('name') or src.title} builds on {dep}",
+                )
 
     # --- Datasets ---
     for d in extraction.get("datasets", []):
@@ -917,7 +962,13 @@ def add_nodes_from_paper_extraction(
         register(node, [name])
         if paper_node:
             rel = "trained_on" if "train" in purpose.lower() or "训练" in purpose else "evaluated_on"
-            _add_edge(db, paper_node.id, node.id, rel, 1.0)
+            add_extracted_edge(
+                paper_node.id,
+                node.id,
+                rel,
+                "datasets",
+                purpose or name,
+            )
 
     # --- Baselines (link as compared_to) ---
     for b in extraction.get("baselines", []) or []:
@@ -934,7 +985,13 @@ def add_nodes_from_paper_extraction(
             )
             register(existing, [name])
         if paper_node:
-            _add_edge(db, paper_node.id, existing.id, "compared_to", 1.0)
+            add_extracted_edge(
+                paper_node.id,
+                existing.id,
+                "compared_to",
+                "baselines",
+                name,
+            )
 
     # `finding` nodes were dropped — they bloated the graph with one
     # node per per-paper bullet, no cross-paper merging, and added little
@@ -949,7 +1006,14 @@ def add_nodes_from_paper_extraction(
     norms = {n.id: math.sqrt(sum(x * x for x in n.embedding))
              for n in candidates if isinstance(n.embedding, list) and n.embedding}
     for node in touched:
-        _add_similarity_edges(db, node, similarity_threshold, candidates=candidates, norms=norms)
+        _add_similarity_edges(
+            db,
+            node,
+            similarity_threshold,
+            candidates=candidates,
+            norms=norms,
+            embedding_model=embedding_model,
+        )
     db.flush()
     # Caller owns commit/rollback, including the paper's completion state.
     return [n.id for n in touched]
@@ -1051,6 +1115,22 @@ def _manual_synthetic_edges(nodes: list[KnowledgeNode]) -> list[dict]:
                 "target": str(paper_node.id),
                 "relation_type": MANUAL_LINK_RELATION,
                 "weight": 1.0,
+                "origin": "manual",
+                "confidence": 1.0,
+                "source_paper_id": str(pid),
+                "source_field": "manual_concept.paper_ids",
+                "evidence": None,
+                "metadata": {
+                    "provenance": [{
+                        "origin": "manual",
+                        "confidence": 1.0,
+                        "source_paper_id": str(pid),
+                        "source_field": "manual_concept.paper_ids",
+                        "metadata": {"created_by": "user"},
+                    }],
+                    "synthetic": True,
+                },
+                "extractor_version": None,
                 "created_at": None,
             })
     return out
@@ -1102,6 +1182,7 @@ def get_graph_data(db: Session, *, include_candidates: bool = False) -> dict:
                 "relation_type": e.relation_type,
                 "weight": e.weight,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
+                **serialize_edge_provenance(e),
             }
             for e in edges
         ] + synthetic_edges,
@@ -1198,6 +1279,7 @@ def get_node_detail_data(db: Session, node_id: str) -> Optional[dict]:
                 "relation_type": e.relation_type,
                 "weight": e.weight,
                 "created_at": e.created_at.isoformat() if e.created_at else None,
+                **serialize_edge_provenance(e),
             }
             for e in stored_edges
         ] + [
@@ -1212,6 +1294,13 @@ def get_node_detail_data(db: Session, node_id: str) -> Optional[dict]:
                 "relation_type": e["relation_type"],
                 "weight": e["weight"],
                 "created_at": e.get("created_at"),
+                "origin": e.get("origin", "manual"),
+                "confidence": e.get("confidence"),
+                "source_paper_id": e.get("source_paper_id"),
+                "source_field": e.get("source_field"),
+                "evidence": e.get("evidence"),
+                "metadata": e.get("metadata") or {},
+                "extractor_version": e.get("extractor_version"),
             }
             for e in synthetic_edges
         ],

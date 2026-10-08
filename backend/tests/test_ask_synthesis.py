@@ -59,6 +59,9 @@ class _FakeQuery:
     def all(self):
         return list(self.rows)
 
+    def first(self):
+        return self.rows[0] if self.rows else None
+
 
 class _FakeDB:
     def __init__(self, nodes=None, papers=None, edges=None):
@@ -90,6 +93,9 @@ class _FakeDB:
         self.added.append(item)
 
     def commit(self):
+        return None
+
+    def flush(self):
         return None
 
     def refresh(self, item):
@@ -288,6 +294,10 @@ class AskSynthesisConceptTests(unittest.TestCase):
         self.assertEqual(db.edges[0].source_id, db.added[0].id)
         self.assertEqual(db.edges[0].target_id, 7)
         self.assertEqual(db.edges[0].relation_type, "builds_on")
+        self.assertEqual(db.edges[0].origin, "inferred")
+        self.assertEqual(db.edges[0].source_paper_id, "1")
+        self.assertEqual(db.edges[0].source_field, "ask_synthesis.related_links")
+        self.assertEqual(db.edges[0].evidence, "什么是因果注意力？")
 
     def test_tag_overlap_does_not_trigger_duplicate_conflict(self):
         existing = _concept(

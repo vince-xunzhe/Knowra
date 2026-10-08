@@ -23,6 +23,11 @@ class ModelGatewayError(RuntimeError):
     pass
 
 
+class ProviderConfigurationError(ModelGatewayError):
+    """Local setup failure; retrying the same model request cannot fix it."""
+    recoverable = False
+
+
 class ProviderCapabilityError(ModelGatewayError):
     pass
 
@@ -41,11 +46,16 @@ def _default_codex_cli_candidates() -> list[Path]:
         home / "bin/codex",
         Path("/opt/homebrew/bin/codex"),
         Path("/usr/local/bin/codex"),
-        Path("/Applications/Codex.app/Contents/Resources/codex"),
-        Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
-        home / "Applications/Codex.app/Contents/Resources/codex",
-        home / "Applications/ChatGPT.app/Contents/Resources/codex",
     ]
+    # Desktop bundles have shipped both a flat binary and an embedded CLI app.
+    # Resolve on every request: an app update can replace/remove either layout.
+    for root in (Path('/Applications'), home / 'Applications'):
+        for app in ('Codex.app', 'ChatGPT.app'):
+            resources = root / app / 'Contents/Resources'
+            candidates.extend([
+                resources / 'codex-cli/CodexCLI.app/Contents/MacOS/codex',
+                resources / 'codex',
+            ])
     nvm_root = home / ".nvm/versions/node"
     if nvm_root.is_dir():
         candidates.extend(sorted(nvm_root.glob("*/bin/codex"), reverse=True))
@@ -64,20 +74,40 @@ def _resolve_codex_cli_command(command: str) -> str:
             return str(expanded)
         return raw
 
+    env_path = str(os.environ.get("CODEX_CLI_PATH") or "").strip()
+    if raw == 'codex' and env_path:
+        # An explicit override must not silently select a different executable.
+        return str(Path(env_path).expanduser())
     resolved = shutil.which(raw)
     if resolved:
         return resolved
     if raw != "codex":
         return raw
 
-    env_path = str(os.environ.get("CODEX_CLI_PATH") or "").strip()
-    candidates = (
-        [Path(env_path).expanduser()] if env_path else []
-    ) + _default_codex_cli_candidates()
-    for candidate in candidates:
+    for candidate in _default_codex_cli_candidates():
         if _is_executable_file(candidate):
             return str(candidate)
     return raw
+
+
+def validate_codex_cli(provider: dict[str, Any]) -> str:
+    configured = str(provider.get('command') or 'codex').strip() or 'codex'
+    command = _resolve_codex_cli_command(configured)
+    if not _is_executable_file(Path(command)):
+        raise ProviderConfigurationError(
+            f'Codex CLI 配置错误：找不到可执行文件或无执行权限（{command}）。'
+            '请安装 CLI，或在 Provider 中配置绝对路径 / 设置 CODEX_CLI_PATH；'
+            '修正配置后再重试，本次未调用模型。'
+        )
+    return command
+
+
+def preflight_task_runtime(cfg: dict[str, Any], task_id: str) -> None:
+    from .config import get_bound_model_id
+    model = get_model_entry(cfg, get_bound_model_id(cfg, task_id)) or {}
+    provider = get_provider_entry(cfg, model.get('provider_id', '')) or {}
+    if provider.get('provider_type') == 'codex_cli':
+        validate_codex_cli(provider)
 
 
 def _provider_api_key(cfg: dict[str, Any], provider: dict[str, Any], api_key_override: str | None = None) -> str:
@@ -166,8 +196,8 @@ def _run_codex_cli(
     import time
 
     configured_command = str(provider.get("command") or "codex").strip() or "codex"
-    command = _resolve_codex_cli_command(configured_command)
     _validate_codex_cli_model(upstream_model)
+    command = validate_codex_cli(provider)
     with tempfile.NamedTemporaryFile(prefix="codex-last-message-", suffix=".txt", delete=False) as handle:
         output_path = Path(handle.name)
     args = [
@@ -203,16 +233,16 @@ def _run_codex_cli(
                 timeout=timeout_s,
                 check=False,
             )
-        except FileNotFoundError as exc:
+        except (FileNotFoundError, PermissionError) as exc:
             log_codex_cli_call(
                 provider="codex_cli",
                 model=upstream_model or command,
                 started_at=started,
                 success=False,
-                error_class="FileNotFoundError",
+                error_class=type(exc).__name__,
             )
-            raise ModelGatewayError(
-                f"Codex CLI not found: {configured_command}. "
+            raise ProviderConfigurationError(
+                f"Codex CLI 启动失败：{configured_command}（解析路径：{command}）。 "
                 "请在 Provider 中配置可执行文件的绝对路径，或设置 CODEX_CLI_PATH。"
             ) from exc
         except subprocess.TimeoutExpired as exc:

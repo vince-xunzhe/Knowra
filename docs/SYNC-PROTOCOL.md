@@ -83,7 +83,23 @@ Content-Type: application/json
   "tables": {
     "papers":           [ {...metadata...}, ... ],
     "knowledge_nodes":  [ {...}, ... ],
-    "knowledge_edges":  [ {...}, ... ],
+    "knowledge_edges":  [
+      {
+        "id": "...",
+        "user_id": "...",
+        "source_id": "...",
+        "target_id": "...",
+        "relation_type": "builds_on",
+        "weight": 1.0,
+        "origin": "explicit",
+        "confidence": null,
+        "source_paper_id": "...",
+        "source_field": "techniques[].builds_on",
+        "evidence": "A builds on B",
+        "metadata": {"provenance": [{"origin": "explicit"}]},
+        "extractor_version": "paper-extraction-v1"
+      }
+    ],
     "wiki_files":       [
       {
         "id": "...",

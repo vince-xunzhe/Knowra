@@ -18,6 +18,7 @@ import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import CategoryComposer from '../components/CategoryComposer'
 import TeamComposer from '../components/TeamComposer'
 import ConceptListView from '../components/ConceptListView'
+import CandidateReviewPanel from '../components/CandidateReviewPanel'
 import AskDrawer from '../components/AskDrawer'
 import WikiLintModal from '../components/WikiLintModal'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
@@ -111,6 +112,9 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
   const [wikiGraph, setWikiGraph] = useState<WikiGraphData | null>(null)
   const [wikiGraphLoading, setWikiGraphLoading] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [graphLoading, setGraphLoading] = useState(true)
+  const [graphError, setGraphError] = useState(false)
+  const graphRequestRef = useRef(0)
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [paperCatalog, setPaperCatalog] = useState<PaperRecord[]>([])
   const [editorOpen, setEditorOpen] = useState(false)
@@ -123,42 +127,44 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
   const graphDataRef = useRef<GraphData | null>(null)
 
   const loadGraph = useCallback(async () => {
+    const request = ++graphRequestRef.current
     try {
       const data = await getGraph(candidateMode !== 'off')
+      if (request !== graphRequestRef.current) return
+      setGraphError(false)
       setGraphData(data)
       graphDataRef.current = data
-      setSelectedNode(prev => {
-        if (!prev) return prev
-        return data.nodes.find(n => n.id === prev.id) || null
-      })
+      setSelectedNode(prev => prev ? data.nodes.find(n => n.id === prev.id) || null : null)
     } catch (error) {
+      if (request !== graphRequestRef.current) return
       console.error('Failed to load graph', error)
+      setGraphError(true)
+    } finally {
+      if (request === graphRequestRef.current) {
+        setLoading(false)
+        setGraphLoading(false)
+      }
     }
-    setLoading(false)
   }, [candidateMode])
 
   useEffect(() => {
     let cancelled = false
-    const loadInitial = async () => {
-      try {
-        const [data, papers] = await Promise.all([
-          getGraph(candidateMode !== 'off'),
-          listPapers(),
-        ])
-        if (cancelled) return
-        setGraphData(data)
-        graphDataRef.current = data
-        setPaperCatalog(papers)
-      } catch (error) {
-        console.error('Failed to load graph', error)
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+    void Promise.resolve().then(() => {
+      if (!cancelled) return loadGraph()
+    })
+    return () => {
+      cancelled = true
+      graphRequestRef.current += 1
     }
+  }, [loadGraph])
 
-    void loadInitial()
+  useEffect(() => {
+    let cancelled = false
+    void listPapers().then(papers => {
+      if (!cancelled) setPaperCatalog(papers)
+    }).catch(error => console.error('Failed to load papers', error))
     return () => { cancelled = true }
-  }, [candidateMode])
+  }, [])
 
   // Pipeline state — single owner for the four lifecycle polls. Replaces
   // the per-component pollers that the old PipelineStatusBar +
@@ -284,6 +290,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
     // mode just enough to make it visible — otherwise the user clicks
     // the search hit and nothing happens on screen.
     if (candidateMode === 'off' && freshest.promotion_status && freshest.promotion_status !== 'promoted') {
+      setGraphLoading(true)
       setCandidateMode(freshest.promotion_status === 'rejected' ? 'all' : 'pending')
     } else if (candidateMode === 'pending' && freshest.promotion_status === 'rejected') {
       setCandidateMode('all')
@@ -842,12 +849,37 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
         <PipelineConsole
           state={pipeline}
           candidateMode={candidateMode}
-          onCandidateModeChange={setCandidateMode}
+          onCandidateModeChange={mode => {
+            if (mode !== candidateMode) {
+              setGraphLoading(true)
+              setGraphError(false)
+              setCandidateMode(mode)
+            }
+          }}
           onOpenLint={() => setLintOpen(true)}
           onOpenRescue={() => setRescueOpen(true)}
           onOpenAsk={() => setAskOpen(true)}
         />
-        <div className="flex-1 min-w-0 relative bg-[var(--surface-0b0d12)]">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col bg-[var(--surface-0b0d12)]">
+          {candidateMode === 'pending' && (
+            <CandidateReviewPanel
+              nodes={graphData.nodes.filter(node => node.promotion_status === 'pending')}
+              selectedId={selectedNode?.id ?? null}
+              loading={graphLoading}
+              error={graphError}
+              onRetry={() => {
+                setGraphLoading(true)
+                setGraphError(false)
+                void loadGraph()
+              }}
+              onClose={() => setCandidateMode('off')}
+              onPick={node => {
+                setDrawerInitialTab('detail')
+                focusNode(node)
+              }}
+            />
+          )}
+          <div className="flex-1 min-h-0 relative">
           {loading ? (
             <div className="flex items-center justify-center h-full text-slate-500 text-sm">
               {tr("加载中…")}</div>
@@ -930,6 +962,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               selectedNodeId={selectedNode?.id || null}
             />
           )}
+          </div>
         </div>
 
         <NodeDetail

@@ -15,6 +15,17 @@ from services.vlm_service import (
 
 
 class ExtractionValidationTests(unittest.TestCase):
+    def test_codex_configuration_error_stops_chunk_processing_without_parse_wrapper(self):
+        from model_gateway.runtime import ProviderConfigurationError
+        with patch('services.vlm_service._resolve_model_gateway_context', return_value=({}, 'codex_cli')), \
+             patch('services.vlm_service.extract_text_pages', return_value=(
+                 [{'page_number': 1, 'text': 'Example paper text'}], 1)), \
+             patch('services.vlm_service.call_text_model',
+                   side_effect=ProviderConfigurationError('missing CLI')) as call:
+            with self.assertRaises(ProviderConfigurationError):
+                extract_knowledge_from_paper('dummy.pdf', 'PROMPT', '', 'codex-cli/gpt-6-astra')
+        call.assert_called_once()
+
     def test_empty_shell_is_reported_as_critical(self):
         extraction = {
             "title": "",

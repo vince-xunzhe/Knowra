@@ -376,6 +376,13 @@ export interface KnowledgeEdgeRow {
   target_id: string
   relation_type?: string | null
   weight?: number | null
+  origin?: 'explicit' | 'inferred' | 'embedding' | 'manual' | 'legacy' | null
+  confidence?: number | null
+  source_paper_id?: string | null
+  source_field?: string | null
+  evidence?: string | null
+  metadata?: Record<string, unknown> | null
+  extractor_version?: string | null
   legacy_id?: number | null
   created_at?: string | null
 }

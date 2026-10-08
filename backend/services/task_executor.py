@@ -49,6 +49,10 @@ def process_papers(ctx, payload):
     ids = payload['paper_ids']
     papers._mark_processing_started(ids)
     ctx.watch('papers', papers.processing_state)
+    if any('paper:' + str(pid) not in ctx.checkpoints for pid in ids):
+        from config import load_config
+        from model_gateway.runtime import preflight_task_runtime
+        preflight_task_runtime(load_config(), 'paper_extract')
     for pid in ids:
         key = 'paper:' + str(pid)
         if key in ctx.checkpoints:

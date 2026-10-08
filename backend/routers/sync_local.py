@@ -43,6 +43,7 @@ from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
 from path_utils import resolve_paper_path
 from services.paper_learning_service import normalize_learning_status
+from services.edge_provenance import serialize_edge_provenance
 from services.wiki_compiler import WIKI_CONCEPTS_DIR, WIKI_DIR, WIKI_PAPERS_DIR
 
 
@@ -187,6 +188,7 @@ def _edge_row(edge: KnowledgeEdge) -> dict[str, Any]:
         "target_id": str(edge.target_id),
         "relation_type": edge.relation_type,
         "weight": edge.weight,
+        **serialize_edge_provenance(edge),
         "legacy_id": edge.legacy_id,
         "created_at": _isoformat(edge.created_at),
     }

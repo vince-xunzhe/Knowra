@@ -96,6 +96,14 @@ export interface GraphEdge {
   target: string
   relation_type: string
   weight: number
+  created_at?: string | null
+  origin?: 'explicit' | 'inferred' | 'embedding' | 'manual' | 'legacy' | null
+  confidence?: number | null
+  source_paper_id?: string | null
+  source_field?: string | null
+  evidence?: string | null
+  metadata?: Record<string, unknown> | null
+  extractor_version?: string | null
 }
 
 export interface GraphData {
@@ -104,9 +112,9 @@ export interface GraphData {
 }
 
 export interface NodeDetail extends GraphNode {
-  connected_nodes: { id: number; title: string; node_type: string; origin: 'auto' | 'manual' }[]
-  edges: { id: string | number; source: number; target: number; relation_type: string; weight: number }[]
-  linked_papers: { id: number; title: string; filename: string; processed: boolean }[]
+  connected_nodes: { id: string; title: string; node_type: string; origin: 'auto' | 'manual' }[]
+  edges: GraphEdge[]
+  linked_papers: { id: string; title: string; filename: string; processed: boolean }[]
   can_hide: boolean
   can_edit: boolean
 }

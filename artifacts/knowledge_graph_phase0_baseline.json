@@ -1,0 +1,277 @@
+{
+  "baseline_schema_version": 1,
+  "generated_at": "2026-10-08T08:50:52.022867+00:00",
+  "source_revision": "71df1cc",
+  "source_branch": "agent/NOISSUE-recommendation-dedup",
+  "source_worktree_dirty": true,
+  "privacy": {
+    "aggregate_only": true,
+    "excluded": [
+      "paper titles and paths",
+      "node ids, titles, contents and embeddings",
+      "wiki contents",
+      "raw LLM prompts and responses",
+      "credentials"
+    ]
+  },
+  "graph": {
+    "all": {
+      "nodes": 2169,
+      "edges": 19509,
+      "orphan_nodes": 5,
+      "average_degree": 17.989,
+      "connected_components": 6,
+      "largest_component_nodes": 2164
+    },
+    "curated": {
+      "nodes": 763,
+      "edges": 3385,
+      "orphan_nodes": 4,
+      "average_degree": 8.873,
+      "connected_components": 5,
+      "largest_component_nodes": 759
+    },
+    "node_type_distribution": {
+      "concept": 5,
+      "dataset": 952,
+      "paper": 147,
+      "problem_area": 29,
+      "technique": 1036
+    },
+    "promotion_status_distribution": {
+      "promoted": 763,
+      "rejected": 1406
+    },
+    "relation_type_distribution": {
+      "belongs_to": 160,
+      "builds_on": 724,
+      "compared_to": 890,
+      "evaluated_on": 917,
+      "similar": 15652,
+      "trained_on": 608,
+      "uses": 558
+    },
+    "hidden_nodes": 3,
+    "broken_edge_references": 0,
+    "self_loops": 0,
+    "duplicate_edge_rows": 32
+  },
+  "model_call_latency": {
+    "paper_extract": {
+      "calls": 766,
+      "succeeded": 560,
+      "failed": 206,
+      "zero_latency_samples": 0,
+      "successful_latency": {
+        "samples": 560,
+        "mean_ms": 103109.204,
+        "p50_ms": 118590.5,
+        "p95_ms": 254052.45,
+        "min_ms": 1340.0,
+        "max_ms": 307408.0
+      },
+      "positive_successful_latency": {
+        "samples": 560,
+        "mean_ms": 103109.204,
+        "p50_ms": 118590.5,
+        "p95_ms": 254052.45,
+        "min_ms": 1340.0,
+        "max_ms": 307408.0
+      }
+    },
+    "wiki_compile": {
+      "calls": 1646,
+      "succeeded": 1544,
+      "failed": 102,
+      "zero_latency_samples": 0,
+      "successful_latency": {
+        "samples": 1544,
+        "mean_ms": 95026.956,
+        "p50_ms": 131006.0,
+        "p95_ms": 173791.8,
+        "min_ms": 12988.0,
+        "max_ms": 528563.0
+      },
+      "positive_successful_latency": {
+        "samples": 1544,
+        "mean_ms": 95026.956,
+        "p50_ms": 131006.0,
+        "p95_ms": 173791.8,
+        "min_ms": 12988.0,
+        "max_ms": 528563.0
+      }
+    },
+    "ask_agent": {
+      "calls": 95,
+      "succeeded": 94,
+      "failed": 1,
+      "zero_latency_samples": 92,
+      "successful_latency": {
+        "samples": 94,
+        "mean_ms": 1899.702,
+        "p50_ms": 0.0,
+        "p95_ms": 0.0,
+        "min_ms": 0.0,
+        "max_ms": 130658.0
+      },
+      "positive_successful_latency": {
+        "samples": 2,
+        "mean_ms": 89286.0,
+        "p50_ms": 89286.0,
+        "p95_ms": 126520.8,
+        "min_ms": 47914.0,
+        "max_ms": 130658.0
+      }
+    }
+  },
+  "local_schema": {
+    "knowledge_nodes": [
+      "id",
+      "user_id",
+      "legacy_id",
+      "title",
+      "content",
+      "node_type",
+      "node_origin",
+      "hidden",
+      "promotion_status",
+      "promoted_by",
+      "promotion_reason",
+      "last_promotion_eval_at",
+      "tags",
+      "embedding",
+      "source_paper_ids",
+      "created_at"
+    ],
+    "knowledge_edges": [
+      "id",
+      "user_id",
+      "legacy_id",
+      "source_id",
+      "target_id",
+      "relation_type",
+      "weight",
+      "created_at"
+    ],
+    "llm_calls": [
+      "id",
+      "user_id",
+      "legacy_id",
+      "called_at",
+      "task",
+      "provider",
+      "model",
+      "surface",
+      "prompt_tokens",
+      "completion_tokens",
+      "total_tokens",
+      "latency_ms",
+      "success",
+      "error_class"
+    ]
+  },
+  "migration_markers": [
+    {
+      "key": "multitenant_v1",
+      "set_at": "2026-06-01 16:00:57"
+    }
+  ],
+  "background_job_latency": {
+    "available": true,
+    "by_kind": {
+      "pipeline": {
+        "status_counts": {
+          "completed": 1
+        },
+        "completed_duration": {
+          "samples": 1,
+          "mean_ms": 37750711.873,
+          "p50_ms": 37750711.873,
+          "p95_ms": 37750711.873,
+          "min_ms": 37750711.873,
+          "max_ms": 37750711.873
+        }
+      },
+      "scan": {
+        "status_counts": {
+          "completed": 7
+        },
+        "completed_duration": {
+          "samples": 7,
+          "mean_ms": 523.693,
+          "p50_ms": 504.096,
+          "p95_ms": 801.304,
+          "min_ms": 258.092,
+          "max_ms": 890.867
+        }
+      }
+    }
+  },
+  "fts_rebuild": {
+    "trials": 3,
+    "indexed_documents": 772,
+    "paper_documents": 146,
+    "concept_documents": 626,
+    "duration": {
+      "samples": 3,
+      "mean_ms": 491.599,
+      "p50_ms": 474.895,
+      "p95_ms": 532.615,
+      "min_ms": 460.873,
+      "max_ms": 539.028
+    },
+    "uses_temporary_database": true
+  },
+  "api_contract": {
+    "top_level_required": [
+      "nodes",
+      "edges"
+    ],
+    "node_required": [
+      "id",
+      "title",
+      "content",
+      "node_type",
+      "origin",
+      "hidden",
+      "concept_candidate",
+      "publishable_concept",
+      "promotion_status",
+      "promoted_by",
+      "promotion_reason",
+      "last_promotion_eval_at",
+      "tags",
+      "source_paper_ids",
+      "paper_id",
+      "concept_id",
+      "created_at"
+    ],
+    "edge_required": [
+      "id",
+      "source",
+      "target",
+      "relation_type",
+      "weight",
+      "created_at"
+    ]
+  },
+  "evaluation_fixture": {
+    "path": "backend/tests/fixtures/knowledge_graph_phase0.json",
+    "sha256": "cca98610555ba4a35de5f2755eacd5439d00d255e6a639d927c772bafef88405"
+  },
+  "cloud_schema": {
+    "migrations": [
+      "0001_meta.sql",
+      "0002_papers.sql",
+      "0003_knowledge.sql",
+      "0004_wiki.sql",
+      "0005_cloud_llm.sql",
+      "0006_paper_team.sql",
+      "0007_paper_learning_status.sql",
+      "0007_recommendations.sql",
+      "0008_rec_summary_marks.sql",
+      "0009_personal_recommendations.sql"
+    ],
+    "knowledge_graph_migration": "0003_knowledge.sql"
+  }
+}

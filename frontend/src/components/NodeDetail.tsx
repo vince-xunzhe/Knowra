@@ -30,6 +30,7 @@ import {
   recompilePaper,
   recompileConcept,
   type NodeDetail as NodeDetailType,
+  type GraphEdge,
   type GraphNode,
   type PromotionStatus,
   type WikiPageDetail,
@@ -57,6 +58,39 @@ const RELATION_LABELS: Record<string, string> = {
   get contrasts_with() { return tr("对照") },
   get belongs_to() { return tr("属于") },
   get curated_link() { return tr("人工关联") },
+}
+
+const EDGE_ORIGIN_LABELS: Record<string, string> = {
+  get explicit() { return tr("论文抽取") },
+  get inferred() { return tr("模型推断") },
+  get embedding() { return tr("向量相似度") },
+  get manual() { return tr("人工创建") },
+  get legacy() { return tr("历史数据") },
+}
+
+interface EdgeContribution {
+  origin: string
+  confidence?: number
+  source_paper_id?: string
+  source_field?: string
+  evidence?: string
+}
+
+function edgeContributions(edge: GraphEdge): EdgeContribution[] {
+  const raw = edge.metadata?.provenance
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap(item => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return []
+    const value = item as Record<string, unknown>
+    if (typeof value.origin !== 'string') return []
+    return [{
+      origin: value.origin,
+      confidence: typeof value.confidence === 'number' ? value.confidence : undefined,
+      source_paper_id: typeof value.source_paper_id === 'string' ? value.source_paper_id : undefined,
+      source_field: typeof value.source_field === 'string' ? value.source_field : undefined,
+      evidence: typeof value.evidence === 'string' ? value.evidence : undefined,
+    }]
+  })
 }
 
 interface Props {
@@ -465,11 +499,10 @@ export default function NodeDetail({
               <span className="section-label">{tr("关联节点 ·")}{' '}{visibleDetail.connected_nodes.length}</span>
             </div>
             <div className="space-y-1.5">
-              {visibleDetail.connected_nodes.slice(0, 20).map(cn => {
-                const edge = visibleDetail.edges.find(
-                  e => e.source === cn.id || e.target === cn.id
+              {visibleDetail.connected_nodes.map(cn => {
+                const connectedEdges = visibleDetail.edges.filter(
+                  e => String(e.source) === String(cn.id) || String(e.target) === String(cn.id)
                 )
-                const rel = edge?.relation_type
                 const cnStyle = TYPE_STYLES[cn.node_type] || { bg: 'bg-slate-700', text: 'text-slate-400', label: cn.node_type }
                 return (
                   <button
@@ -485,11 +518,52 @@ export default function NodeDetail({
                         {cnStyle.label}
                       </span>
                     </div>
-                    {rel && rel !== 'similar' && (
-                      <p className="text-xs text-slate-500 mt-1.5">
-                        {RELATION_LABELS[rel] || rel}
-                      </p>
-                    )}
+                    {connectedEdges.map(edge => {
+                      const rel = edge.relation_type
+                      const origin = edge.origin || 'legacy'
+                      const contributions = edgeContributions(edge)
+                      const provenance = contributions.length || 1
+                      return (
+                        <div key={edge.id} className="mt-2 space-y-1.5 border-t border-slate-800/70 pt-2 first:border-t-0 first:pt-0">
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                            <span>{RELATION_LABELS[rel] || rel}</span>
+                            <span>·</span>
+                            <span>{EDGE_ORIGIN_LABELS[origin] || origin}</span>
+                            {edge.confidence != null && (
+                              <span>· {Math.round(edge.confidence * 100)}%</span>
+                            )}
+                            {provenance > 1 && <span>· {provenance} {tr("个来源")}</span>}
+                          </div>
+                          {(edge.source_paper_id || edge.source_field) && (
+                            <p className="text-[10px] text-slate-600 text-safe-wrap">
+                              {edge.source_paper_id && `${tr("论文")} ${edge.source_paper_id}`}
+                              {edge.source_paper_id && edge.source_field && ' · '}
+                              {edge.source_field}
+                            </p>
+                          )}
+                          {edge.evidence && (
+                            <p className="rounded-md border border-slate-800 bg-slate-950/70 px-2 py-1.5 text-[11px] leading-relaxed text-slate-400 text-safe-wrap">
+                              {edge.evidence}
+                            </p>
+                          )}
+                          {contributions.length > 1 && (
+                            <div className="space-y-1 rounded-lg border border-slate-800/80 bg-slate-950/40 p-2">
+                              {contributions.map((item, index) => (
+                                <div key={`${edge.id}:source:${index}`} className="text-[10px] leading-relaxed text-slate-500">
+                                  <p className="text-safe-wrap">
+                                    {EDGE_ORIGIN_LABELS[item.origin] || item.origin}
+                                    {item.confidence != null && ` · ${Math.round(item.confidence * 100)}%`}
+                                    {item.source_paper_id && ` · ${tr("论文")} ${item.source_paper_id}`}
+                                    {item.source_field && ` · ${item.source_field}`}
+                                  </p>
+                                  {item.evidence && <p className="mt-0.5 text-slate-400 text-safe-wrap">{item.evidence}</p>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
                   </button>
                 )
               })}
