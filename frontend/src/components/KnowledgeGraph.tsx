@@ -511,7 +511,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     // Give each graph instance its own host so deferred teardown cannot
     // remove the next instance's canvas during a rapid view switch.
     const graphContainer = document.createElement('div')
-    graphContainer.className = 'w-full h-full'
+    graphContainer.className = 'relative w-full h-full'
     graphContainer.dataset.testid = 'knowledge-graph-canvas'
     containerRef.current.appendChild(graphContainer)
     const cy = cytoscape({
@@ -949,7 +949,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   }, [selectedNodeId, data])
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full overflow-hidden">
       <div ref={containerRef} className="w-full h-full" />
       {/* Legend — compact horizontal strip at bottom-right; the left rail
           (PipelineConsole) handles all stage controls so this area can stay
