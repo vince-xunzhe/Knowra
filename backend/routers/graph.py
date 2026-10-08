@@ -1,4 +1,4 @@
-from typing import Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,6 +9,7 @@ from config import load_config
 from services import wiki_search as wiki_search_service
 from services import wiki_index
 from services import promotion_service
+from services import graph_query_service
 from services.graph_service import (
     AUTO_NODE_ORIGIN,
     MANUAL_NODE_ORIGIN,
@@ -31,6 +32,43 @@ from services.paper_record_service import sync_record_from_paper
 from services.wiki_compiler import reconcile_concept_pages_dir
 
 router = APIRouter(prefix="/api", tags=["graph"])
+
+
+def _graph_query(call):
+    try:
+        return call()
+    except (graph_query_service.GraphQueryError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get("/graph/query/nodes")
+def query_graph_nodes(q: str, node_type: Optional[str] = None, limit: int = 20, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.find_nodes(db, q, node_type, limit))
+
+
+@router.get("/graph/query/nodes/{node_id}")
+def query_graph_node(node_id: str, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.get_node(db, node_id))
+
+
+@router.get("/graph/query/nodes/{node_id}/neighbors")
+def query_graph_neighbors(node_id: str, relation_type: Optional[str] = None, depth: int = 1, limit: int = 20, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.get_neighbors(db, node_id, relation_type, depth, limit))
+
+
+@router.get("/graph/query/path")
+def query_graph_path(source_id: str, target_id: str, max_depth: int = 4, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.shortest_path(db, source_id, target_id, max_depth))
+
+
+@router.get("/graph/query/shared")
+def query_graph_shared(node_id: List[str], relation_type: Optional[str] = None, limit: int = 20, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.find_shared_neighbors(db, node_id, relation_type, limit))
+
+
+@router.get("/graph/query/edges/{edge_id}")
+def query_graph_edge(edge_id: str, db: Session = Depends(get_db)):
+    return _graph_query(lambda: graph_query_service.explain_edge(db, edge_id))
 
 
 class ManualConceptInput(BaseModel):

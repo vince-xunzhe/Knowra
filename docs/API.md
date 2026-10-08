@@ -174,4 +174,23 @@
 
 ### `POST /api/graph/reset`
 
+### Graph query API (Phase 2)
+
+All graph-query endpoints are read-only, use the curated visible graph by
+default, return stable JSON, and enforce server-side depth/result/time limits.
+
+```text
+GET /api/graph/query/nodes?q=encoder&node_type=technique&limit=20
+GET /api/graph/query/nodes/{node_id}
+GET /api/graph/query/nodes/{node_id}/neighbors?depth=1&limit=20
+GET /api/graph/query/path?source_id=...&target_id=...&max_depth=4
+GET /api/graph/query/shared?node_id=...&node_id=...&limit=20
+GET /api/graph/query/edges/{edge_id}
+```
+
+`path` and `neighbors` return compact nodes and edges. Edge payloads include
+Phase-1 provenance, so callers can distinguish explicit, inferred, embedding,
+manual, and legacy relationships without asking a model to invent an
+explanation.
+
 清空所有知识节点和边，将所有论文标记为未处理。该操作不会删除 PDF 文件或论文记录。

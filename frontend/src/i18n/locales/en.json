@@ -1153,5 +1153,8 @@
   "本地流程已完成；云端同步可在同步栏执行": "Local workflow complete; use the Sync section for cloud sync",
   "请查看后台任务状态": "Check background task status",
   "处理任务已停止": "Processing task stopped",
-  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "Completion could not be confirmed. Check pending papers; restarting the backend does not automatically resume tasks."
+  "未确认全部完成，请检查待处理论文；后端重启不会自动恢复任务。": "Completion could not be confirmed. Check pending papers; restarting the backend does not automatically resume tasks.",
+  "结构节点": "Graph node",
+  "结构关系": "Graph edge",
+  "Wiki 内容": "Wiki content"
 }

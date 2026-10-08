@@ -1033,16 +1033,21 @@ function summarizeArgs(args: Record<string, unknown>): string {
 }
 
 function formatCitation(citation: AskCitation): string {
+  const prefix = citation.kind === 'graph_node'
+    ? `${tr("结构节点")} · `
+    : citation.kind === 'graph_edge'
+      ? `${tr("结构关系")} · `
+      : `${tr("Wiki 内容")} · `
   if (citation.path && citation.path.trim()) {
-    return citation.path
+    return prefix + citation.path
   }
   if (citation.ref && citation.ref.trim()) {
-    return citation.ref
+    return prefix + citation.ref
   }
   if (citation.filename && citation.filename.trim()) {
-    return citation.filename
+    return prefix + citation.filename
   }
-  return 'unknown'
+  return prefix + 'unknown'
 }
 
 function SynthesisSaveModal({

@@ -476,6 +476,25 @@ export const getGraph = (includeCandidates = false) =>
   api
     .get<GraphData>('/graph', { params: { include_candidates: includeCandidates } })
     .then(r => r.data)
+export interface GraphQueryResult {
+  nodes: GraphNode[]
+  edges?: GraphEdge[]
+  count?: number
+  found?: boolean
+  hop_count?: number | null
+}
+export const findGraphNodes = (q: string, nodeType?: string, limit = 20) =>
+  api.get<GraphQueryResult>('/graph/query/nodes', {
+    params: { q, node_type: nodeType, limit },
+  }).then(r => r.data)
+export const getGraphNeighbors = (nodeId: string, depth = 1, limit = 20) =>
+  api.get<GraphQueryResult>(`/graph/query/nodes/${nodeId}/neighbors`, {
+    params: { depth, limit },
+  }).then(r => r.data)
+export const getGraphPath = (sourceId: string, targetId: string, maxDepth = 4) =>
+  api.get<GraphQueryResult>('/graph/query/path', {
+    params: { source_id: sourceId, target_id: targetId, max_depth: maxDepth },
+  }).then(r => r.data)
 export const listHiddenGraphNodes = () =>
   api.get<{ nodes: GraphNode[] }>('/graph/hidden_nodes').then(r => r.data.nodes)
 export const getNode = (id: string | number) => api.get<NodeDetail>(`/nodes/${id}`).then(r => r.data)
@@ -720,6 +739,7 @@ export interface AskTraceStep {
   args: Record<string, unknown>
   result_summary: string
   duration_ms: number
+  hit_node_ids?: string[]
 }
 
 export interface AskCitation {

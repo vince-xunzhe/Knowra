@@ -267,13 +267,13 @@ explain_edge(edge_id)
 
 ### 工作项
 
-- [ ] 实现独立查询服务和单元测试。
-- [ ] 将图工具加入 Ask 的 tool schema 和 dispatcher。
-- [ ] 更新 Ask system prompt，明确图工具与 Wiki 工具的职责。
-- [ ] trace 中记录工具、参数、结果摘要、耗时和命中节点。
-- [ ] 答案引用区分「结构路径」和「Wiki 内容来源」。
-- [ ] 为常见查询增加 API，供前端详情页复用。
-- [ ] 加入超时、结果上限和循环工具调用保护。
+- [x] 实现独立查询服务和单元测试。
+- [x] 将图工具加入 Ask 的 tool schema 和 dispatcher。
+- [x] 更新 Ask system prompt，明确图工具与 Wiki 工具的职责。
+- [x] trace 中记录工具、参数、结果摘要、耗时和命中节点。
+- [x] 答案引用区分「结构路径」和「Wiki 内容来源」。
+- [x] 为常见查询增加 API，供前端详情页复用。
+- [x] 加入超时、结果上限和循环工具调用保护。
 
 ### 验收标准
 
@@ -282,6 +282,15 @@ explain_edge(edge_id)
 - 所有结构性陈述能追溯到节点、边或 Wiki 文件。
 - 内容型问题的现有 Wiki 检索能力不退化。
 - 记录 baseline 与新版本的回答质量、延迟、token 和工具调用数。
+
+### 完成记录（2026-10-08）
+
+- 独立 `graph_query_service` 已实现 8 个确定性只读操作，默认使用策展可见图，并限制深度、结果数与时间。
+- OpenAI Responses/Chat tool loop 与 Codex CLI retrieval 均已接入图检索；重复调用、总调用次数和总步骤均有保护。
+- trace 新增命中节点，citations 区分结构节点、结构关系与 Wiki 内容。
+- 新增 6 个只读 HTTP 路由及前端 client；完整契约见 `docs/KNOWLEDGE-GRAPH-PHASE2-HYBRID-ASK.md`。
+- Phase 0 fixture：结构查询 8/8、Ask evidence contract 6/6；离线图查询 P95 0.272 ms、图检索 token 0。
+- 真实本地图谱只读冒烟三项均低于 245 ms；后端 `377 passed, 8 skipped`，前端生产构建通过。
 
 ---
 
@@ -580,7 +589,7 @@ python evals/summarize_metrics.py artifacts/latest_eval
 
 - [x] 阶段 0：基线与契约冻结（2026-10-08）
 - [x] 阶段 1：边级溯源与可信度（2026-10-08）
-- [ ] 阶段 2：图原生查询与 Hybrid Ask
+- [x] 阶段 2：图原生查询与 Hybrid Ask（2026-10-08）
 - [ ] 阶段 3：结构聚类与 Wiki lint
 - [ ] 阶段 4：统一 Manifest 与精确失效
 - [ ] 阶段 5：ExtractionFragment 与 GraphMutationPlan
