@@ -402,6 +402,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   const containerRef = useRef<HTMLDivElement>(null)
   const cyRef = useRef<cytoscape.Core | null>(null)
   const activeLayoutRef = useRef<cytoscape.Layouts | null>(null)
+  const layoutFrameRef = useRef<number | null>(null)
   const graphDataRef = useRef<GraphData>(data)
   const dataNodesRef = useRef<GraphNode[]>(data.nodes)
   const onNodeClickRef = useRef(onNodeClick)
@@ -433,11 +434,15 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   }, [onNodeClick])
 
   const stopActiveLayout = useCallback(() => {
+    if (layoutFrameRef.current !== null) {
+      cancelAnimationFrame(layoutFrameRef.current)
+      layoutFrameRef.current = null
+    }
     const layout = activeLayoutRef.current
     if (!layout) return
     try {
-      layout.stop()
       layout.removeAllListeners()
+      layout.stop()
     } catch {
       // Best-effort cleanup; Cytoscape can already be tearing down.
     }
@@ -474,7 +479,8 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     // (reading 'notify')". Waiting one RAF lets that orphan frame
     // run to completion (it's a no-op against the now-empty graph)
     // before we kick the new layout.
-    requestAnimationFrame(() => {
+    layoutFrameRef.current = requestAnimationFrame(() => {
+      layoutFrameRef.current = null
       if (cy.destroyed()) return
       const layout = cy.layout(graphLayout(visuals, options))
       activeLayoutRef.current = layout
@@ -483,7 +489,15 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           activeLayoutRef.current = null
         }
         if (options.fit && !cy.destroyed()) {
-          applyDensityViewport(cy, visuals, options.animate)
+          const selected = selectedNodeIdRef.current ? cy.getElementById(selectedNodeIdRef.current) : null
+          if (selected && !selected.empty()) {
+            // A review selection takes priority over the overview viewport,
+            // including after switching views or clearing a type filter.
+            cy.zoom(Math.max(cy.zoom(), 1.08))
+            cy.center(selected)
+          } else {
+            applyDensityViewport(cy, visuals, options.animate)
+          }
         }
       })
       layout.run()
@@ -494,8 +508,14 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     if (!containerRef.current) return
     const initialVisuals = graphVisuals(data.nodes.length, measureCanvas(containerRef.current))
 
+    // Give each graph instance its own host so deferred teardown cannot
+    // remove the next instance's canvas during a rapid view switch.
+    const graphContainer = document.createElement('div')
+    graphContainer.className = 'w-full h-full'
+    graphContainer.dataset.testid = 'knowledge-graph-canvas'
+    containerRef.current.appendChild(graphContainer)
     const cy = cytoscape({
-      container: containerRef.current,
+      container: graphContainer,
       minZoom: initialVisuals.minZoom,
       maxZoom: initialVisuals.maxZoom,
       motionBlur: true,
@@ -844,13 +864,12 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       } catch {
         // already partially torn down
       }
-      try {
-        cy.destroy()
-      } catch {
-        // Belt-and-suspenders: a queued RAF can still call into a cy
-        // mid-destroy on rapid remount; swallow rather than crash the
-        // page. The cleanup above already stopped layouts and animations.
-      }
+      // COSE.stop() still schedules a final refresh on the next frame.
+      // Detach the renderer now, drain that refresh against the null
+      // renderer, then destroy the isolated instance on the next frame.
+      cy.unmount()
+      graphContainer.remove()
+      requestAnimationFrame(() => cy.destroy())
       cyRef.current = null
     }
   }, [handleNodeClick, startLayout, stopRuntimeMotion]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -931,7 +950,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} data-testid="knowledge-graph-canvas" className="w-full h-full" />
+      <div ref={containerRef} className="w-full h-full" />
       {/* Legend — compact horizontal strip at bottom-right; the left rail
           (PipelineConsole) handles all stage controls so this area can stay
           minimal. */}
