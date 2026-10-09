@@ -56,6 +56,7 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; out
 
 async function openSettings(page: Page, label = '设置') {
   await page.getByRole('navigation').getByRole('button', { name: label, exact: true }).click()
+  await expect(page.getByRole('heading', { name: label, exact: true })).toBeVisible()
   await expect(page.locator('#appearance-language')).toBeVisible()
 }
 
