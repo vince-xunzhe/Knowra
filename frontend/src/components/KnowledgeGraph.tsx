@@ -1,8 +1,9 @@
 import { t as tr } from '../i18n/catalog'
 import { useLocale, useTheme } from '../i18n/preferences'
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import cytoscape from 'cytoscape'
-import type { GraphData, GraphNode } from '../api/client'
+import { Focus, Minus, Plus, Pin } from 'lucide-react'
+import type { GraphData, GraphNode, GraphEdge } from '../api/client'
 
 const NODE_COLORS: Record<string, string> = {
   paper: '#7A88C9',
@@ -28,6 +29,9 @@ interface Props {
   data: GraphData
   onNodeClick: (node: GraphNode) => void
   selectedNodeId: string | null
+  viewKey?: string
+  selectedEdgeId?: string | null
+  onEdgeClick?: (edge: GraphEdge) => void
 }
 
 const IDLE_AUTOPLAY_DELAY_MS = 2600
@@ -396,7 +400,7 @@ function applyDensityViewport(cy: cytoscape.Core, visuals: GraphVisuals, animate
   }
 }
 
-export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Props) {
+export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId, viewKey = 'all', selectedEdgeId, onEdgeClick }: Props) {
   useLocale()
   const theme = useTheme()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -406,6 +410,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
   const graphDataRef = useRef<GraphData>(data)
   const dataNodesRef = useRef<GraphNode[]>(data.nodes)
   const onNodeClickRef = useRef(onNodeClick)
+  const onEdgeClickRef = useRef(onEdgeClick)
+  const currentViewKeyRef = useRef(viewKey)
+  const savedViewsRef = useRef(new Map<string, { positions: Map<string, cytoscape.Position>; zoom: number; pan: cytoscape.Position }>())
+  const [pinnedIds, setPinnedIds] = useState<string[]>([])
+  const pinnedPositionsRef = useRef(new Map<string, cytoscape.Position>())
   const focusedNodeIdRef = useRef<string | null>(null)
   const selectedNodeIdRef = useRef<string | null>(selectedNodeId)
   const hoveredNodeIdRef = useRef<string | null>(null)
@@ -433,12 +442,15 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     onNodeClickRef.current = onNodeClick
   }, [onNodeClick])
 
+  useEffect(() => { onEdgeClickRef.current = onEdgeClick }, [onEdgeClick])
+
   const stopActiveLayout = useCallback(() => {
     if (layoutFrameRef.current !== null) {
       cancelAnimationFrame(layoutFrameRef.current)
       layoutFrameRef.current = null
     }
     const layout = activeLayoutRef.current
+    if (cyRef.current && !cyRef.current.destroyed()) cyRef.current.data('layoutRunning', false)
     if (!layout) return
     try {
       layout.removeAllListeners()
@@ -484,7 +496,9 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       if (cy.destroyed()) return
       const layout = cy.layout(graphLayout(visuals, options))
       activeLayoutRef.current = layout
+      cy.data('layoutRunning', true)
       layout.one('layoutstop', () => {
+        cy.data('layoutRunning', false)
         if (activeLayoutRef.current === layout) {
           activeLayoutRef.current = null
         }
@@ -666,7 +680,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
           style: { 'line-color': '#64748b', width: 1.6, 'line-opacity': 0.72 },
         },
         {
-          selector: 'edge.neighbor',
+          selector: 'edge.neighbor, edge.evidence-selected',
           style: {
             width: 2.1,
             'line-color': '#94a3b8',
@@ -779,11 +793,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
         const currentCy = cyRef.current
         if (!currentCy || currentCy.destroyed()) return
         currentCy.resize()
-        startLayout(
-          currentCy,
-          graphDataRef.current,
-          { fit: true, animate: true, numIter: 820 },
-        )
+        // Resizing a drawer should adjust the viewport, not move every node.
+        const visuals = applyResponsiveVisuals(currentCy, graphDataRef.current)
+        const selected = selectedNodeIdRef.current ? currentCy.getElementById(selectedNodeIdRef.current) : null
+        if (selected && !selected.empty()) currentCy.center(selected)
+        else applyDensityViewport(currentCy, visuals, false)
         applyGraphEmphasis(currentCy, selectedNodeIdRef.current, hoveredNodeIdRef.current)
       }, delay)
     }
@@ -794,6 +808,11 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     })
     resizeObserver.observe(containerRef.current)
 
+    cy.on('tap', 'edge', evt => {
+      pauseIdleAutoplay()
+      const edge = graphDataRef.current.edges.find(edge => edge.id === evt.target.id())
+      if (edge) onEdgeClickRef.current?.(edge)
+    })
     cy.on('tap', 'node', evt => {
       pauseIdleAutoplay()
       hoveredNodeIdRef.current = null
@@ -825,11 +844,8 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       }
       relayoutTimerRef.current = window.setTimeout(() => {
         if (!cyRef.current) return
-        startLayout(
-          cyRef.current,
-          graphDataRef.current,
-          { fit: false, animate: true, numIter: 520 },
-        )
+        // Keep the user's dragged arrangement until another scope is opened.
+        stopActiveLayout()
         applyGraphEmphasis(cyRef.current, selectedNodeIdRef.current, hoveredNodeIdRef.current)
       }, 60)
     })
@@ -872,7 +888,7 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       requestAnimationFrame(() => cy.destroy())
       cyRef.current = null
     }
-  }, [handleNodeClick, startLayout, stopRuntimeMotion]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handleNodeClick, startLayout, stopRuntimeMotion, stopActiveLayout]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const cy = cyRef.current
@@ -895,26 +911,56 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
       return
     }
 
+    const changedScope = currentViewKeyRef.current !== viewKey
+    const sameNodes = cy.nodes().length === data.nodes.length && data.nodes.every(n => !cy.getElementById(n.id).empty())
+    const sameEdges = cy.edges().length === data.edges.length && data.edges.every(e => {
+      const existing = cy.getElementById(e.id)
+      return !existing.empty() && existing.data('source') === e.source && existing.data('target') === e.target && existing.data('relation_type') === e.relation_type && existing.data('weight') === e.weight
+    })
+    if (!changedScope && sameNodes && sameEdges) {
+      applyResponsiveVisuals(cy, data)
+      return
+    }
+    const unfinishedLayout = activeLayoutRef.current !== null || layoutFrameRef.current !== null
+    if (changedScope && !unfinishedLayout) {
+      savedViewsRef.current.set(currentViewKeyRef.current, {
+        positions: new Map(cy.nodes().map(n => [n.id(), { ...n.position() }])),
+        zoom: cy.zoom(), pan: { ...cy.pan() },
+      })
+      if (savedViewsRef.current.size > 30) savedViewsRef.current.delete(savedViewsRef.current.keys().next().value!)
+    }
+    const saved = changedScope ? savedViewsRef.current.get(viewKey) : undefined
     pauseIdleAutoplayRef.current?.(true)
     hoveredNodeIdRef.current = null
     idleAutoplayNodeIdRef.current = null
     focusedNodeIdRef.current = null
     stopRuntimeMotion(cy)
-
+    const visuals = graphVisuals(data.nodes.length, measureCanvas(cy.container()))
     cy.batch(() => {
-      cy.elements().remove()
-      const visuals = graphVisuals(data.nodes.length, measureCanvas(cy.container()))
-      cy.minZoom(visuals.minZoom)
-      cy.maxZoom(visuals.maxZoom)
-      cy.add(graphElements(data, visuals))
+      if (!changedScope && sameNodes) {
+        // Relation filters keep the original force-layout coordinates.
+        cy.edges().remove()
+        cy.add(graphElements(data, visuals).filter(element => 'source' in element.data))
+        applyResponsiveVisuals(cy, data)
+      } else {
+        cy.elements().remove()
+        cy.minZoom(visuals.minZoom)
+        cy.maxZoom(visuals.maxZoom)
+        cy.add(graphElements(data, visuals))
+        cy.nodes().forEach(n => {
+          const position = pinnedPositionsRef.current.get(n.id()) || saved?.positions.get(n.id())
+          if (position) n.position(position)
+          if (pinnedPositionsRef.current.has(n.id())) n.lock()
+        })
+      }
     })
     cy.resize()
-    startLayout(cy, data, { fit: true, animate: true, numIter: 2200 })
+    if (saved && data.nodes.every(n => saved.positions.has(n.id))) cy.viewport({ zoom: saved.zoom, pan: saved.pan })
+    else if (changedScope || !sameNodes || unfinishedLayout) startLayout(cy, data, { fit: true, animate: true, numIter: 2200 })
+    currentViewKeyRef.current = viewKey
     applyGraphEmphasis(cy, selectedNodeIdRef.current, null)
-    if (!selectedNodeIdRef.current) {
-      scheduleIdleAutoplayRef.current?.()
-    }
-  }, [data, startLayout, stopRuntimeMotion])
+    if (!selectedNodeIdRef.current) scheduleIdleAutoplayRef.current?.()
+  }, [data, viewKey, startLayout, stopRuntimeMotion])
 
   // Highlight selected node
   useEffect(() => {
@@ -948,9 +994,44 @@ export default function KnowledgeGraph({ data, onNodeClick, selectedNodeId }: Pr
     }
   }, [selectedNodeId, data])
 
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
+    cy.edges().removeClass('evidence-selected')
+    if (selectedEdgeId) cy.getElementById(selectedEdgeId).addClass('evidence-selected')
+  }, [selectedEdgeId, selectedNodeId, data])
+
+  const fit = () => {
+    const cy = cyRef.current
+    if (!cy || cy.destroyed()) return
+    stopRuntimeMotion(cy)
+    cy.fit(undefined, 64)
+    if (cy.zoom() > 1.3) { cy.zoom(1.3); cy.center() }
+  }
+  const zoom = (factor: number) => {
+    const cy = cyRef.current
+    if (cy) cy.zoom({ level: cy.zoom() * factor, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } })
+  }
+  const togglePin = () => {
+    const cy = cyRef.current
+    if (!cy || !selectedNodeId) return
+    const node = cy.getElementById(selectedNodeId)
+    if (node.empty()) return
+    stopRuntimeMotion(cy)
+    if (pinnedPositionsRef.current.has(selectedNodeId)) { pinnedPositionsRef.current.delete(selectedNodeId); node.unlock() }
+    else { pinnedPositionsRef.current.set(selectedNodeId, { ...node.position() }); node.lock() }
+    setPinnedIds([...pinnedPositionsRef.current.keys()])
+  }
+
   return (
     <div className="relative w-full h-full overflow-hidden">
       <div ref={containerRef} className="w-full h-full" />
+      <div className="absolute top-3 right-3 flex rounded-lg border border-slate-800 bg-slate-900/80 text-slate-300" aria-label={tr('图谱操作')}>
+        <button type="button" className="p-2" onClick={fit} aria-label={tr('适应画布')} title={tr('适应画布')}><Focus size={15} /></button>
+        <button type="button" className="p-2" onClick={() => zoom(1.2)} aria-label={tr('放大')}><Plus size={15} /></button>
+        <button type="button" className="p-2" onClick={() => zoom(0.8)} aria-label={tr('缩小')}><Minus size={15} /></button>
+        {selectedNodeId && <button type="button" className="p-2" onClick={togglePin} aria-label={tr('固定节点')} title={tr('固定节点')} aria-pressed={pinnedIds.includes(selectedNodeId)}><Pin size={15} /></button>}
+      </div>
       {/* Legend — compact horizontal strip at bottom-right; the left rail
           (PipelineConsole) handles all stage controls so this area can stay
           minimal. */}
