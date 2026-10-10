@@ -1,7 +1,8 @@
 import { t as tr } from './i18n/catalog'
 import { useLocale } from './i18n/preferences'
 import { useState } from 'react'
-import { Network, BookOpen, FileText, Settings, BarChart3, Sparkles } from 'lucide-react'
+import { Network, BookOpen, FileText, Settings, BarChart3, Sparkles, Route, ArrowLeft } from 'lucide-react'
+import DomainPage from './pages/DomainPage'
 import GraphPage from './pages/GraphPage'
 import PapersPage from './pages/PapersPage'
 import ReviewPage from './pages/ReviewPage'
@@ -15,7 +16,7 @@ import WikiLintStatus from './components/WikiLintStatus'
 import { WikiLintProvider } from './hooks/useWikiLint'
 import knowraLogo from './assets/knowra-logo.jpeg'
 
-type Page = 'graph' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
+type Page = 'graph' | 'domain' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
 type NavItem =
   | { id: Page; icon: typeof Network; label: string }
   | { divider: true }
@@ -31,11 +32,12 @@ type NavItem =
 // drawer + rescue modal) so curation happens in visual context instead of
 // as flat lists.
 //
-// Navigation: Knowledge → Library → Review → Discover → Dashboard.
+// Navigation: Knowledge → Library → Review → Domain → Discover → Dashboard.
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, get label() { return tr("知识") } },
   { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
   { id: 'review', icon: FileText, get label() { return tr("回顾") } },
+  { id: 'domain', icon: Route, get label() { return tr("索骥") } },
   { id: 'recommend', icon: Sparkles, get label() { return tr("推荐") } },
   { id: 'dashboard', icon: BarChart3, get label() { return tr("看板") } },
   { divider: true },
@@ -51,15 +53,25 @@ function AppContent() {
   useLocale()
   const [page, setPage] = useState<Page>('graph')
   const [lintOpen, setLintOpen] = useState(false)
-  const [reviewPaperId, setReviewPaperId] = useState<number | null>(null)
+  const [reviewPaperId, setReviewPaperId] = useState<number | string | null>(null)
+  const [domainVisited, setDomainVisited] = useState(false)
+  const [reviewFromDomain, setReviewFromDomain] = useState(false)
 
   const openPage = (nextPage: Page) => {
+    if (nextPage === 'domain') setDomainVisited(true)
+    setReviewFromDomain(false)
     if (nextPage === 'review') setReviewPaperId(null)
     setPage(nextPage)
   }
 
   const openPaperReview = (paperId: number) => {
     setReviewPaperId(paperId)
+    setPage('review')
+  }
+
+  const openDomainReview = (paperId: string) => {
+    setReviewPaperId(paperId)
+    setReviewFromDomain(true)
     setPage('review')
   }
 
@@ -103,9 +115,27 @@ function AppContent() {
 
       {/* Main */}
       <main className="flex-1 min-w-0 overflow-hidden">
+        {/* Keep the canvas session mounted so selection and undo survive Review. */}
+        {domainVisited && (
+          <div className="h-full" style={{ display: page === 'domain' ? 'block' : 'none' }}>
+            <DomainPage active={page === 'domain'} onOpenReview={openDomainReview} />
+          </div>
+        )}
         {page === 'graph' && <GraphPage lintOpen={lintOpen} setLintOpen={setLintOpen} />}
         {page === 'papers' && <PapersPage onOpenReview={openPaperReview} />}
-        {page === 'review' && <ReviewPage initialPaperId={reviewPaperId} />}
+        {page === 'review' && (
+          <div className="h-full flex flex-col">
+            {reviewFromDomain && (
+              <button
+                className="flex items-center gap-2 px-6 py-2 text-xs text-indigo-300 border-b border-slate-800"
+                onClick={() => setPage('domain')}
+              >
+                <ArrowLeft size={14} />{tr('返回索骥')}
+              </button>
+            )}
+            <div className="flex-1 min-h-0"><ReviewPage initialPaperId={reviewPaperId} /></div>
+          </div>
+        )}
         {page === 'recommend' && <RecommendPage />}
         {page === 'dashboard' && <DashboardPage />}
         {page === 'settings' && <SettingsPage />}

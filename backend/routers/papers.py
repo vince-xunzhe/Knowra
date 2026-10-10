@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, defer
 from services.db_snapshot import finish_read_snapshot
+from services.domain_categories import rename_category_canvas
 from sqlalchemy.exc import SQLAlchemyError
 from database import get_db
 from services.paper_work_counts import paper_work_counts
@@ -1647,6 +1648,7 @@ def rename_paper_category(
     if new_name == name:
         return {**_category_payload(db), "migrated": 0}
 
+    rename_category_canvas(db, name, new_name)
     set_active_categories([new_name if c == name else c for c in active])
     # Migrate both manual override and model-assigned values so the rename
     # carries through regardless of how a paper got that category.

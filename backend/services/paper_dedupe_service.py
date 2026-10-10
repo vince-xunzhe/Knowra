@@ -16,7 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from models import KnowledgeEdge, KnowledgeNode, Paper
+from models import DomainWorkspace, KnowledgeEdge, KnowledgeNode, Paper
 from path_utils import DATA_DIR
 from services import wiki_index, wiki_search
 from services.paper_record_service import record_path_for_paper, sync_record_from_paper
@@ -95,6 +95,7 @@ def repair_duplicate_papers(
             _merge_paper_fields(canonical, paper)
 
     summary.updated_nodes = _rewrite_node_source_papers(db, aliases)
+    _rewrite_domain_references(db, aliases)
     summary.merged_paper_nodes, deleted_edges = _merge_duplicate_paper_nodes(db)
     summary.deleted_edges += deleted_edges
     summary.deleted_edges += _dedupe_edges(db)
@@ -135,6 +136,23 @@ def repair_duplicate_papers(
             summary.rebuilt_search_index = False
 
     return summary
+
+
+def _rewrite_domain_references(db: Session, aliases: dict[str, str]) -> None:
+    """Keep every canvas instance intact when its source paper is merged."""
+    for workspace in db.query(DomainWorkspace).all():
+        state = json.loads(json.dumps(workspace.state))
+        changed = False
+        for board in state.get("boards", []):
+            for node in board.get("nodes", []):
+                if node.get("paperId") in aliases:
+                    node["paperId"] = aliases[node["paperId"]]
+                    changed = True
+        admitted = {k: aliases.get(v, v) for k, v in (workspace.admitted or {}).items()}
+        if changed or admitted != workspace.admitted:
+            workspace.state = state
+            workspace.admitted = admitted
+            workspace.revision += 1
 
 
 def _duplicate_groups(db: Session) -> list[list[Paper]]:

@@ -102,7 +102,7 @@ interface ActionNotice {
 }
 
 interface ReviewPageProps {
-  initialPaperId?: number | null
+  initialPaperId?: number | string | null
 }
 
 export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {

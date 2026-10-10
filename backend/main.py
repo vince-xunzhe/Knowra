@@ -48,6 +48,8 @@ app.include_router(ask.router)
 app.include_router(dashboard.router)
 if not is_cloud_mode():
     app.include_router(jobs.router)
+    from routers import domains
+    app.include_router(domains.router)
 
 # Local-only: snapshot exporter that the desktop sync agent calls before
 # pushing to the cloud. The router itself short-circuits in cloud mode
