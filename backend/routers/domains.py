@@ -1,8 +1,11 @@
 """Local research canvas with validated references and optimistic saves."""
 
+# Pydantic evaluates model annotations at runtime, including on native Python 3.9.
+# ruff: noqa: UP045
+
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
@@ -38,8 +41,8 @@ class CanvasNode(StrictModel):
     y: float = Field(ge=-1000000, le=1000000)
     width: float = Field(default=280, ge=120, le=10000)
     height: float = Field(default=160, ge=60, le=10000)
-    paperId: str | None = Field(default=None, max_length=100)
-    groupId: str | None = Field(default=None, max_length=100)
+    paperId: Optional[str] = Field(default=None, max_length=100)
+    groupId: Optional[str] = Field(default=None, max_length=100)
     text: str = Field(default="", max_length=50000)
     locked: bool = False
 
@@ -63,7 +66,7 @@ class CanvasEdge(StrictModel):
 class Board(StrictModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=100)
-    category: str | None = Field(default=None, max_length=100)
+    category: Optional[str] = Field(default=None, max_length=100)
     nodes: list[CanvasNode] = Field(default_factory=list, max_length=10000)
     edges: list[CanvasEdge] = Field(default_factory=list, max_length=20000)
     viewport: Viewport = Field(default_factory=Viewport)
@@ -93,7 +96,7 @@ class Board(StrictModel):
 
 class WorkspaceState(StrictModel):
     boards: list[Board] = Field(max_length=100)
-    activeId: str | None = None
+    activeId: Optional[str] = None
 
     @model_validator(mode="after")
     def check_ids(self):
