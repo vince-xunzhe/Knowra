@@ -98,6 +98,18 @@ class Paper(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class DomainWorkspace(Base):
+    """Local-only research boards; deliberately excluded from cloud sync."""
+
+    __tablename__ = "domain_workspace"
+    id = Column(Integer, primary_key=True)
+    revision = Column(Integer, nullable=False, default=1)
+    state = Column(JSON, nullable=False)
+    # Remember admitted instances so undo can restore a reference even if its
+    # review has subsequently become unavailable. New instances must qualify.
+    admitted = Column(JSON, nullable=False, default=dict)
+
+
 class KnowledgeNode(Base):
     __tablename__ = "knowledge_nodes"
 
