@@ -1290,5 +1290,6 @@
   "领域前移": "Mover dominio antes",
   "领域名称": "Nombre del dominio",
   "领域后移": "Mover dominio después",
-  "领域设置": "Ajustes del dominio"
+  "领域设置": "Ajustes del dominio",
+  "继承系统大类，请在知识页管理分类。": "Heredado de las categorías del sistema. Gestiona las categorías en Conocimiento."
 }

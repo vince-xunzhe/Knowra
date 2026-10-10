@@ -32,12 +32,12 @@ type NavItem =
 // drawer + rescue modal) so curation happens in visual context instead of
 // as flat lists.
 //
-// Navigation: Knowledge → Domain → Library → Review → Discover → Dashboard.
+// Navigation: Knowledge → Library → Review → Domain → Discover → Dashboard.
 const NAV: NavItem[] = [
   { id: 'graph', icon: Network, get label() { return tr("知识") } },
-  { id: 'domain', icon: Route, get label() { return tr("索骥") } },
   { id: 'papers', icon: BookOpen, get label() { return tr("资料") } },
   { id: 'review', icon: FileText, get label() { return tr("回顾") } },
+  { id: 'domain', icon: Route, get label() { return tr("索骥") } },
   { id: 'recommend', icon: Sparkles, get label() { return tr("推荐") } },
   { id: 'dashboard', icon: BarChart3, get label() { return tr("看板") } },
   { divider: true },

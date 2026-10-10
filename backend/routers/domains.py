@@ -8,7 +8,11 @@ from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
 from models import DomainWorkspace, Paper
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from services.paper_category_service import effective_paper_category
+from services.domain_categories import reconcile_categories
+from services.paper_category_service import (
+    effective_paper_category,
+    get_active_categories,
+)
 from services.vlm_service import parse_extraction_response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
@@ -59,6 +63,7 @@ class CanvasEdge(StrictModel):
 class Board(StrictModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=100)
+    category: str | None = Field(default=None, max_length=100)
     nodes: list[CanvasNode] = Field(default_factory=list, max_length=10000)
     edges: list[CanvasEdge] = Field(default_factory=list, max_length=20000)
     viewport: Viewport = Field(default_factory=Viewport)
@@ -167,9 +172,10 @@ def domain_papers(db: Annotated[Session, Depends(get_db)]):
 def workspace(db: Session) -> DomainWorkspace:
     row = db.get(DomainWorkspace, 1)
     if row is None:
-        initial = WorkspaceState(
-            boards=[Board(id="llm", name="LLM"), Board(id="3d", name="三维重建")],
-            activeId="llm",
+        initial = WorkspaceState.model_validate(
+            reconcile_categories(
+                {"boards": [], "activeId": None}, get_active_categories()
+            )
         )
         row = DomainWorkspace(id=1, revision=1, state=initial.model_dump(), admitted={})
         db.add(row)
@@ -178,7 +184,31 @@ def workspace(db: Session) -> DomainWorkspace:
         except IntegrityError:
             db.rollback()
             row = db.get(DomainWorkspace, 1)
-    return row
+    for _ in range(3):
+        state = WorkspaceState.model_validate(
+            reconcile_categories(row.state, get_active_categories())
+        ).model_dump()
+        if state == row.state:
+            return row
+        updated = (
+            db.query(DomainWorkspace)
+            .filter_by(id=1, revision=row.revision)
+            .update(
+                {"state": state, "revision": row.revision + 1},
+                synchronize_session=False,
+            )
+        )
+        if updated:
+            db.commit()
+        else:
+            db.rollback()
+        db.expire_all()
+        row = db.get(DomainWorkspace, 1)
+        if updated:
+            return row
+    raise HTTPException(
+        409, "The canvas changed in another window. Reload before saving."
+    )
 
 
 @router.get("")
@@ -193,6 +223,16 @@ def save_workspace(body: SaveWorkspace, db: Annotated[Session, Depends(get_db)])
     if body.revision != row.revision:
         raise HTTPException(
             409, "The canvas changed in another window. Reload before saving."
+        )
+    inherited = {
+        b["id"]: b["category"] for b in row.state["boards"] if b.get("category")
+    }
+    submitted = {b.id: b.category for b in body.state.boards if b.category}
+    if submitted != inherited or any(
+        b.category and b.name != b.category for b in body.state.boards
+    ):
+        raise HTTPException(
+            422, "Manage inherited domains through system paper categories"
         )
     admitted = dict(row.admitted or {})
     papers = {}

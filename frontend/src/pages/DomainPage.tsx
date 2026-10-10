@@ -113,8 +113,10 @@ export default function DomainPage({
 }) {
   useLocale()
   const workspace = useDomainWorkspace()
+  const refreshWorkspace = workspace.refresh
   const { state, update, checkpoint } = workspace
-  const board = state?.boards.find((b) => b.id === state.activeId) ?? null
+  const boardIndex = state?.boards.findIndex((b) => b.id === state.activeId) ?? -1
+  const board = state?.boards[boardIndex] ?? null
   const loaded = state !== null
   const [papers, setPapers] = useState<DomainPaper[]>([])
   const [paperError, setPaperError] = useState(false)
@@ -167,16 +169,19 @@ export default function DomainPage({
   }, [])
   useEffect(() => {
     if (!active) return
-    const start = setTimeout(() => void refreshPapers(), 0)
-    const timer = setInterval(() => void refreshPapers(), 30000)
-    const focus = () => void refreshPapers()
+    const focus = () => {
+      void refreshPapers()
+      void refreshWorkspace()
+    }
+    const start = setTimeout(focus, 0)
+    const timer = setInterval(focus, 30000)
     window.addEventListener('focus', focus)
     return () => {
       clearTimeout(start)
       clearInterval(timer)
       window.removeEventListener('focus', focus)
     }
-  }, [active, refreshPapers])
+  }, [active, refreshPapers, refreshWorkspace])
   useEffect(() => {
     const element = canvas.current
     if (!element) return
@@ -580,7 +585,7 @@ export default function DomainPage({
       setSelected(new Set())
       setPopover(null)
       setSelectedEdge(null)
-    } else patchBoard((b) => ({ ...b, name }))
+    } else patchBoard((b) => (b.category ? b : { ...b, name }))
     setNameDialog(null)
   }
   const reorder = (offset: number) =>
@@ -588,6 +593,7 @@ export default function DomainPage({
       const index = s.boards.findIndex((b) => b.id === s.activeId),
         target = index + offset
       if (target < 0 || target >= s.boards.length) return s
+      if (s.boards[index].category || s.boards[target].category) return s
       const boards = [...s.boards]
       ;[boards[index], boards[target]] = [boards[target], boards[index]]
       return { ...s, boards }
@@ -595,6 +601,7 @@ export default function DomainPage({
   const deleteBoard = () => {
     if (
       !board ||
+      board.category ||
       !window.confirm(tr('删除领域「{0}」及其画布内容？论文库中的论文不会被删除。', { 0: board.name }))
     )
       return
@@ -1142,8 +1149,9 @@ export default function DomainPage({
           )}
           <div className="domain-inspector-bottom">
             <h3>{tr('领域设置')}</h3>
+            {board?.category && <p>{tr('继承系统大类，请在知识页管理分类。')}</p>}
             <button
-              disabled={!board}
+              disabled={!board || !!board.category}
               onClick={() => {
                 setNameDraft(board?.name ?? '')
                 setNameDialog('rename')
@@ -1154,7 +1162,10 @@ export default function DomainPage({
             <div className="domain-reorder">
               <button
                 aria-label={tr('领域前移')}
-                disabled={!board || state?.boards[0]?.id === board.id}
+                disabled={
+                  !board || !!board.category || boardIndex === 0 ||
+                  !!state?.boards[boardIndex - 1]?.category
+                }
                 onClick={() => reorder(-1)}
               >
                 <ArrowUp size={14} />
@@ -1162,14 +1173,14 @@ export default function DomainPage({
               </button>
               <button
                 aria-label={tr('领域后移')}
-                disabled={!board || state?.boards.at(-1)?.id === board.id}
+                disabled={!board || !!board.category || state?.boards.at(-1)?.id === board.id}
                 onClick={() => reorder(1)}
               >
                 <ArrowDown size={14} />
                 {tr('后移')}
               </button>
             </div>
-            <button className="domain-danger" disabled={!board} onClick={deleteBoard}>
+            <button className="domain-danger" disabled={!board || !!board.category} onClick={deleteBoard}>
               {tr('删除领域')}
             </button>
             <p>{tr('仅保存在本机')}</p>

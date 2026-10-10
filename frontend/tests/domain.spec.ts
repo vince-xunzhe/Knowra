@@ -37,11 +37,12 @@ const reviews: DomainPaper[] = [
     sections: { core_contribution: '', abstract_summary: '', problem: '', motivation: '' },
   },
 ]
-async function setup(page: Page) {
+async function setup(page: Page, inherited = false) {
   let state: DomainState = {
     activeId: 'llm',
-    boards: ['LLM', '三维重建'].map((name, i) => ({
-      id: i ? '3d' : 'llm',
+    boards: (inherited ? ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] : ['LLM', '三维重建']).map((name, i) => ({
+      id: i ? (inherited ? `category-${i}` : '3d') : 'llm',
+      category: inherited ? name : null,
       name,
       nodes: [],
       edges: [],
@@ -106,6 +107,10 @@ async function setup(page: Page) {
   return {
     snapshot: () => state,
     errors,
+    renameFirstCategory: () => {
+      state = { ...state, boards: state.boards.map((b, i) => i ? b : { ...b, name: 'Language models', category: 'Language models' }) }
+      revision++
+    },
     fail: (value: boolean) => {
       failSave = value
     },
@@ -331,4 +336,28 @@ test('conflict preserves unsaved content until explicit reload and modal escape 
   await page.locator('.domain-header').getByRole('button', { name: '导入论文', exact: true }).click()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: '导入论文', exact: true })).toHaveCount(0)
+})
+
+
+test('navigation order and inherited system categories preserve edits on taxonomy refresh', async ({ page }) => {
+  const context = await setup(page, true)
+  const labels = (await page.getByRole('navigation').getByRole('button').allTextContents()).map((label) => label.trim())
+  expect(labels.indexOf('索骥')).toBe(labels.indexOf('推荐') - 1)
+  expect(labels.indexOf('索骥')).toBeGreaterThan(labels.indexOf('回顾'))
+  await expect(page.getByRole('tab')).toHaveCount(7)
+  for (const category of ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他']) {
+    await expect(page.getByRole('tab', { name: category, exact: false })).toBeVisible()
+  }
+  await expect(page.getByRole('button', { name: '重命名领域', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '删除领域', exact: true })).toBeDisabled()
+  await importPaper(page)
+  await expect(page.getByRole('status')).toHaveText('已保存到本机')
+  const nodes = structuredClone(context.snapshot().boards[0].nodes)
+  context.renameFirstCategory()
+  await page.getByRole('navigation').getByRole('button', { name: '资料', exact: true }).click()
+  await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
+  await expect(page.getByRole('tab', { name: 'Language models' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('domain-canvas').getByText(reviews[0].title, { exact: true })).toBeVisible()
+  expect(context.snapshot().boards[0].nodes).toEqual(nodes)
+  expect(context.errors).toEqual([])
 })

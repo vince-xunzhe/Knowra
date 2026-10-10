@@ -22,7 +22,11 @@ from services.paper_dedupe_service import _rewrite_domain_references
 
 
 @pytest.fixture
-def context():
+def context(monkeypatch):
+    monkeypatch.setattr(
+        "services.paper_category_service._active_cache",
+        ["LLM", "VLM", "VLA", "三维重建-静态", "三维重建-动态", "世界模型", "其他"],
+    )
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -78,14 +82,22 @@ def node(key="instance-1", paper="ready", **kwargs):
     return {"id": key, "kind": "paper", "paperId": paper, "x": 100, "y": 200, **kwargs}
 
 
-def test_defaults_and_intentionally_empty_workspace_persist(context):
+def test_defaults_inherit_shared_categories_and_cannot_be_deleted_locally(context):
     client, _ = context
     snapshot = client.get("/api/domains").json()
-    assert [b["name"] for b in snapshot["state"]["boards"]] == ["LLM", "三维重建"]
+    assert [b["name"] for b in snapshot["state"]["boards"]] == [
+        "LLM",
+        "VLM",
+        "VLA",
+        "三维重建-静态",
+        "三维重建-动态",
+        "世界模型",
+        "其他",
+    ]
+    assert all(b["name"] == b["category"] for b in snapshot["state"]["boards"])
     assert client.get("/api/domains").json() == snapshot
     snapshot["state"] = {"boards": [], "activeId": None}
-    assert client.put("/api/domains", json=snapshot).status_code == 200
-    assert client.get("/api/domains").json()["state"]["boards"] == []
+    assert client.put("/api/domains", json=snapshot).status_code == 422
 
 
 def test_review_eligibility_uses_only_the_four_review_fields(context):
@@ -160,12 +172,12 @@ def test_existing_references_survive_review_loss_and_can_be_undone(context):
 def test_conflicting_save_does_not_overwrite_newer_data(context):
     client, _ = context
     snapshot = client.get("/api/domains").json()
-    snapshot["state"]["boards"][0]["name"] = "First writer"
+    snapshot["state"]["boards"][0]["nodes"] = [node(text="First writer")]
     assert client.put("/api/domains", json=snapshot).status_code == 200
-    snapshot["state"]["boards"][0]["name"] = "Stale writer"
+    snapshot["state"]["boards"][0]["nodes"][0]["text"] = "Stale writer"
     assert client.put("/api/domains", json=snapshot).status_code == 409
     assert (
-        client.get("/api/domains").json()["state"]["boards"][0]["name"]
+        client.get("/api/domains").json()["state"]["boards"][0]["nodes"][0]["text"]
         == "First writer"
     )
 
@@ -205,3 +217,80 @@ def test_dedupe_rewrites_all_instances_and_invalidates_stale_saves(context):
         "partial",
         "partial",
     ]
+
+
+@pytest.mark.parametrize("populated", [False, True])
+def test_legacy_upgrade_preserves_content_and_custom_domains(context, populated):
+    from routers.domains import Board, WorkspaceState
+
+    client, session = context
+    legacy = WorkspaceState(
+        boards=[
+            Board(id="llm", name="LLM", nodes=[node(text="Keep this note")]),
+            Board(
+                id="3d", name="三维重建", nodes=[node("3d-paper")] if populated else []
+            ),
+            Board(id="custom", name="My topic"),
+        ],
+        activeId="llm",
+    ).model_dump()
+    for board in legacy["boards"]:
+        board.pop("category")
+    with session() as db:
+        db.add(
+            DomainWorkspace(
+                id=1, revision=7, state=legacy, admitted={"instance-1": "ready"}
+            )
+        )
+        db.commit()
+    snapshot = client.get("/api/domains").json()
+    assert snapshot["revision"] == 8
+    assert snapshot["state"]["activeId"] == "llm"
+    assert snapshot["state"]["boards"][0]["nodes"] == legacy["boards"][0]["nodes"]
+    assert snapshot["state"]["boards"][-1]["id"] == "custom"
+    assert any(b["id"] == "3d" for b in snapshot["state"]["boards"]) == populated
+    assert client.get("/api/domains").json() == snapshot
+    with session() as db:
+        assert db.get(DomainWorkspace, 1).admitted == {"instance-1": "ready"}
+
+
+def test_category_add_rename_remove_keeps_canvas_identity_and_contents(
+    context, monkeypatch
+):
+    from routers import papers
+
+    client, session = context
+    snapshot = client.get("/api/domains").json()
+    board = snapshot["state"]["boards"][0]
+    board["nodes"] = [node(text="Saved note")]
+    board["viewport"] = {"x": 20, "y": -100, "zoom": 0.5}
+    assert client.put("/api/domains", json=snapshot).status_code == 200
+    categories = [b["name"] for b in snapshot["state"]["boards"]]
+
+    def set_categories(names):
+        categories[:] = names
+        monkeypatch.setattr(
+            "services.paper_category_service._active_cache", list(names)
+        )
+
+    monkeypatch.setattr(papers, "set_active_categories", set_categories)
+    monkeypatch.setattr(papers, "sync_record_from_paper", lambda *a, **kw: None)
+    with session() as db:
+        papers.rename_paper_category(
+            "LLM", papers.CategoryRenameInput(new_name="Language models"), db
+        )
+    renamed = client.get("/api/domains").json()
+    first = renamed["state"]["boards"][0]
+    assert first["id"] == board["id"]
+    assert first["category"] == first["name"] == "Language models"
+    assert first["nodes"][0]["text"] == "Saved note"
+    assert first["viewport"] == board["viewport"]
+    assert client.put("/api/domains", json=snapshot).status_code == 409
+    set_categories(categories + ["Robotics"])
+    added = client.get("/api/domains").json()
+    assert any(b["category"] == "Robotics" for b in added["state"]["boards"])
+    set_categories([c for c in categories if c not in ("Language models", "VLM")])
+    removed = client.get("/api/domains").json()["state"]
+    kept = next(b for b in removed["boards"] if b["id"] == board["id"])
+    assert kept["category"] is None and kept["nodes"] == first["nodes"]
+    assert all(b["name"] != "VLM" for b in removed["boards"])

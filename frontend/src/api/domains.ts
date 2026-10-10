@@ -38,6 +38,7 @@ export interface Viewport {
 export interface DomainBoard {
   id: string
   name: string
+  category?: string | null
   nodes: CanvasNode[]
   edges: CanvasEdge[]
   viewport: Viewport

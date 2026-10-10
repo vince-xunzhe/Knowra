@@ -16,6 +16,7 @@ export function useDomainWorkspace() {
   const future = useRef<DomainState[]>([])
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const busy = useRef(false)
+  const refreshing = useRef(false)
   const blocked = useRef(false)
 
   const refreshHistory = useCallback(
@@ -116,6 +117,33 @@ export function useDomainWorkspace() {
     void flush()
   }, [flush, reload])
 
+  const refresh = useCallback(async () => {
+    const snapshot = current.current
+    const version = revision.current
+    if (
+      !snapshot || snapshot !== saved.current || busy.current || blocked.current || refreshing.current
+    ) return
+    refreshing.current = true
+    try {
+      const result = await loadDomains()
+      // A taxonomy refresh must never replace edits made while the request ran.
+      if (
+        current.current !== snapshot || busy.current || blocked.current || revision.current !== version
+      ) return
+      if (result.revision === version) return
+      revision.current = result.revision
+      current.current = saved.current = result.state
+      past.current = []
+      future.current = []
+      setState(result.state)
+      refreshHistory()
+    } catch {
+      // Keep the current canvas usable; the next entry/focus refresh retries.
+    } finally {
+      refreshing.current = false
+    }
+  }, [refreshHistory])
+
   useEffect(() => {
     const start = setTimeout(() => void reload(), 0)
     return () => clearTimeout(start)
@@ -138,5 +166,5 @@ export function useDomainWorkspace() {
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [flush])
-  return { state, status, history, update, checkpoint, undo, redo, retry, reload, flush }
+  return { state, status, history, update, checkpoint, undo, redo, retry, reload, refresh, flush }
 }
