@@ -87,7 +87,9 @@ function CanvasItem({
         left: node.x,
         top: node.y,
         width: node.width,
-        ...(node.kind === 'group' ? { height: node.height } : { minHeight: node.height }),
+        ...(node.kind === 'group'
+          ? { height: node.height }
+          : node.kind === 'text' ? { minHeight: node.height } : {}),
       }}
       onPointerDown={(e) => onStart(e, node)}
     >
@@ -838,7 +840,6 @@ export default function DomainPage({
                               <Link2 size={14} />
                               {tr(linkSource && linkSource !== n.id ? '连接到这里' : '连线')}
                             </button>
-                            <span>{tr('论文引用')}</span>
                           </div>
                           {n.text && <div className="domain-attached-note">{n.text}</div>}
                         </>
