@@ -100,6 +100,15 @@ export interface DomainAnalysis {
   certainty: 'explicit' | 'inferred'
   reason: string
   evidence: DomainEvidence[]
+  discussion?: {
+    citingPaperId: string
+    citedPaperId: string
+    status: 'analyzed' | 'reference_only' | 'not_found' | 'unresolved'
+    contextsFound: number
+    contextsUsed: number
+    truncated: boolean
+    findings: { aspect: 'purpose' | 'assessment' | 'comparison'; text: string; evidence: DomainEvidence[] }[]
+  } | null
 }
 export interface DomainAgentRun {
   id: string

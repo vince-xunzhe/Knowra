@@ -716,3 +716,6 @@
 .domain-agent-summary summary, .domain-edge-evidence summary { cursor: pointer; }
 .domain-edge-evidence blockquote { border-left: 2px solid #6366f188; padding-left: 8px; margin: 8px 0; white-space: pre-wrap; }
 .domain-edge-evidence details { border-top: 1px solid var(--domain-border); padding-top: 8px; }
+
+.domain-citation-discussion { border-top: 1px solid var(--domain-border); margin-top: 14px; padding-top: 10px; }
+.domain-citation-discussion h4 { margin: 14px 0 4px; font-size: 12px; color: var(--color-indigo-300, #a5b4fc); }

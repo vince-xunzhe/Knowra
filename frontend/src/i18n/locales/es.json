@@ -1314,5 +1314,17 @@
   "原文": "Artículo original",
   "主模型、图谱向量、论文精选和索骥代连分别配置；更换主模型不会改变其他任务的调用方式。": "Configura por separado el modelo principal, los vectores, las recomendaciones y las conexiones de Domain. Cambiar el principal mantiene las otras rutas.",
   "论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量、论文精选与索骥代连单独配置。": "La extracción y consulta de artículos, Wiki, Ask, selección de conceptos y comprobaciones comparten este modelo. Requiere visión para las portadas. Los vectores, recomendaciones y conexiones de Domain se configuran aparte.",
-  "主模型、图谱向量、论文精选与索骥代连独立配置。Provider 区管理连接参数与联通测试。": "Configura de forma independiente el modelo principal, los vectores, las recomendaciones y las conexiones de Domain. Gestiona conexiones y pruebas en Provider."
+  "主模型、图谱向量、论文精选与索骥代连独立配置。Provider 区管理连接参数与联通测试。": "Configura de forma independiente el modelo principal, los vectores, las recomendaciones y las conexiones de Domain. Gestiona conexiones y pruebas en Provider.",
+  "引用语境深读": "Análisis del contexto de cita",
+  "来自引用论文：{0}": "Del artículo que cita: {0}",
+  "定位 {0} 处正文语境，本次分析 {1} 处": "Se localizaron {0} contextos; se analizaron {1}",
+  "正文语境较多，本次仅分析部分片段。": "Solo se analizó parte de los contextos localizados.",
+  "仅找到参考文献条目，未定位正文引用语境。": "Solo se encontró la entrada bibliográfica; no se localizó la cita en el cuerpo.",
+  "未定位到可核验的正文引用语境。": "No se localizó un contexto de cita verificable en el cuerpo.",
+  "已定位正文，但未获得有充分证据的解读。": "Se localizó el contexto, pero no se extrajo una interpretación suficientemente respaldada.",
+  "引用用途": "Propósito de la cita",
+  "作者评价": "Valoración de los autores",
+  "与本文的异同": "Similitudes y diferencias",
+  "所分析片段中未找到明确表述。": "No se encontró una afirmación explícita en los fragmentos analizados.",
+  "原文证据": "Prueba del texto original"
 }

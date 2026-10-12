@@ -129,6 +129,8 @@ async function setup(page: Page, inherited = false) {
       board.nodes[1].x = 480; board.nodes[1].y = 140
       board.edges = [{ id: 'ai-edge', source: board.nodes[0].id, target: board.nodes[1].id, label: '改进', locked: false,
         analysis: { relation: 'improves', certainty: 'explicit', reason: 'The later paper extends the attention operator.',
+          discussion: { citingPaperId: 'paper-b', citedPaperId: 'paper-a', status: 'analyzed', contextsFound: 2, contextsUsed: 2, truncated: false,
+            findings: [{ aspect: 'purpose', text: 'Uses the earlier operator as an experimental baseline.', evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 4 页', page: 4, quote: 'The earlier operator serves as our experimental baseline under equal compute budgets.' }] }] },
           evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 8 页', page: 8, quote: 'We build upon the attention operator proposed in the earlier paper.' }] } }]
       runs = [{ ...runs[0], status: 'preview', proposal: { board, added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
     },
@@ -430,6 +432,11 @@ test('agent preview survives refresh, shows evidence, applies once and undoes as
   await page.locator('.domain-edges text').filter({ hasText: '改进' }).click()
   await expect(page.getByText('The later paper extends the attention operator.')).toBeVisible()
   await expect(page.getByText('PDF 第 8 页')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '引用语境深读' })).toBeVisible()
+  await expect(page.getByText('Uses the earlier operator as an experimental baseline.')).toBeVisible()
+  await expect(page.getByText('所分析片段中未找到明确表述。')).toHaveCount(2)
+  await page.getByText('原文证据 · PDF 第 4 页').click()
+  await expect(page.getByText('The earlier operator serves as our experimental baseline under equal compute budgets.')).toBeVisible()
   await page.screenshot({ path: '/tmp/knowra-domain-agent-preview.png', fullPage: true })
   await page.getByRole('button', { name: '应用方案' }).click()
   await expect.poll(() => context.snapshot().boards[0].edges.length).toBe(1)

@@ -1314,5 +1314,17 @@
   "原文": "Original paper",
   "主模型、图谱向量、论文精选和索骥代连分别配置；更换主模型不会改变其他任务的调用方式。": "Configure the main model, graph embeddings, paper recommendations and Domain connections separately. Changing the main model leaves the other task routes intact.",
   "论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量、论文精选与索骥代连单独配置。": "Paper extraction and chat, Wiki compilation, Ask, concept curation and health checks share this model. Vision is required for paper cover images. Graph embeddings, recommendations and Domain connections are configured separately.",
-  "主模型、图谱向量、论文精选与索骥代连独立配置。Provider 区管理连接参数与联通测试。": "Configure the main model, graph embeddings, paper recommendations and Domain connections independently. Manage connections and tests under Provider."
+  "主模型、图谱向量、论文精选与索骥代连独立配置。Provider 区管理连接参数与联通测试。": "Configure the main model, graph embeddings, paper recommendations and Domain connections independently. Manage connections and tests under Provider.",
+  "引用语境深读": "Citation context analysis",
+  "来自引用论文：{0}": "From the citing paper: {0}",
+  "定位 {0} 处正文语境，本次分析 {1} 处": "Located {0} body contexts; analyzed {1}",
+  "正文语境较多，本次仅分析部分片段。": "Only a subset of the located contexts was analyzed.",
+  "仅找到参考文献条目，未定位正文引用语境。": "Only a bibliography entry was found; no body citation context was located.",
+  "未定位到可核验的正文引用语境。": "No verifiable citation context was located in the body.",
+  "已定位正文，但未获得有充分证据的解读。": "Body contexts were located, but no sufficiently supported interpretation was extracted.",
+  "引用用途": "Purpose of citation",
+  "作者评价": "Authors’ assessment",
+  "与本文的异同": "Similarities and differences",
+  "所分析片段中未找到明确表述。": "No explicit statement was found in the analyzed excerpts.",
+  "原文证据": "Original evidence"
 }
