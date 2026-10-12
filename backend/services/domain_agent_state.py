@@ -17,7 +17,11 @@ def begin_write(db):
 
 def content(board):
     # Pan/zoom, active tab and taxonomy names are browsing / system metadata.
-    return {key: board[key] for key in ("nodes", "edges")}
+    # Canonical defaults keep previews made before optional schema additions
+    # comparable to the current workspace (e.g. discussion=None on old edges).
+    from routers.domains import Board
+
+    return Board.model_validate(board).model_dump(include={"nodes", "edges"})
 
 
 def refresh_run(db, run):

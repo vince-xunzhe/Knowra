@@ -11,6 +11,7 @@ from path_utils import resolve_paper_path
 
 from services.domain_agent_layout import arrange
 from services.domain_agent_state import begin_write
+from services.domain_citation_context import document_sections, trace_citations
 
 RELATIONS = {
     "builds_on": "基于",
@@ -52,9 +53,9 @@ def materials(paper, wiki_filename, cancelled):
     from services.vlm_service import parse_extraction_response
     from services.wiki_compiler import read_paper_page
 
-    sources, warnings = [], []
+    sources, warnings, document = [], [], []
 
-    def add(kind, locator, text, page=None):
+    def add(kind, locator, text, page=None, section=None):
         for part in chunks(text):
             sources.append(
                 {
@@ -64,6 +65,7 @@ def materials(paper, wiki_filename, cancelled):
                     "locator": locator,
                     "page": page,
                     "text": part,
+                    "section": section,
                 }
             )
 
@@ -105,7 +107,7 @@ def materials(paper, wiki_filename, cancelled):
             except Exception:  # noqa: BLE001 — damaged PDF pages must not abort other sources
                 text = ""
             if text:
-                add("pdf", f"PDF 第 {number} 页", text, number)
+                document.append({"page": number, "text": text})
                 extracted = True
             else:
                 failed_pages += 1
@@ -116,8 +118,18 @@ def materials(paper, wiki_filename, cancelled):
     except Exception:  # noqa: BLE001 — PDF parser errors vary by document
         warnings.append("原 PDF 不可读，仅使用现有材料")
     if not extracted and paper.extracted_text:
-        add("text", "已保存原文（可能截断，页码未知）", paper.extracted_text)
+        document.append({"page": None, "text": paper.extracted_text})
         warnings.append("保存的原文可能不含完整参考文献")
+    document = document_sections(document)
+    for section in document:
+        page = section["page"]
+        add(
+            "pdf" if page else "text",
+            f"PDF 第 {page} 页" if page else "已保存原文（页码未知）",
+            section["text"],
+            page,
+            section["section"],
+        )
     if not sources:
         warnings.append("无可用分析材料，保持独立")
     return {
@@ -125,6 +137,7 @@ def materials(paper, wiki_filename, cancelled):
         "title": paper.title or paper.filename,
         "year": str(review.get("year") or ""),
         "sources": sources,
+        "document": document,
         "warnings": warnings,
     }
 
@@ -133,7 +146,7 @@ def tokens(text):
     return set(re.findall(r"[a-z0-9]{3,}|[\u4e00-\u9fff]{2,}", text.lower()))
 
 
-def retrieve(paper, query, limit=10):
+def retrieve(paper, query, limit=10, contexts=()):
     terms = tokens(query)
 
     def score(source):
@@ -148,7 +161,7 @@ def retrieve(paper, query, limit=10):
         )
 
     ranked = sorted(paper["sources"], key=score, reverse=True)
-    chosen = []
+    chosen = list(contexts)[:limit]
     # Reserve slots for each available source family; then retrieve relevant
     # sections across the complete document, including tail references.
     for family, quota in (
@@ -168,6 +181,7 @@ def retrieve(paper, query, limit=10):
             "source": s["source"],
             "locator": s["locator"],
             "text": s["text"],
+            "section": s.get("section", "unknown"),
         }
         for s in chosen
     ]
@@ -205,6 +219,7 @@ def grounded_edges(raw, papers, allowed_sources, focus, candidates):
             ):
                 raise ValueError("invalid relation")
             evidence = []
+            only_references = True
             for item in edge.get("evidence", [])[:8]:
                 source = allowed_sources.get(item.get("sourceId"))
                 quote = normalize(item.get("quote", ""))
@@ -217,6 +232,9 @@ def grounded_edges(raw, papers, allowed_sources, focus, candidates):
                     continue
                 if quote not in normalize(source["text"]):
                     continue
+                only_references = (
+                    only_references and source.get("section") == "references"
+                )
                 evidence.append(
                     {k: source[k] for k in ("paperId", "source", "locator", "page")}
                     | {"quote": quote}
@@ -227,6 +245,12 @@ def grounded_edges(raw, papers, allowed_sources, focus, candidates):
                 or not edge["reason"].strip()
             ):
                 raise ValueError("no verifiable evidence")
+            if only_references:
+                edge = {
+                    **edge,
+                    "relation": "cites",
+                    "reason": "参考文献中列出了该论文，尚需正文证据说明具体用途。",
+                }
             certainty = edge["certainty"]
             if not any(e["source"] in ("pdf", "text") for e in evidence):
                 certainty = "inferred"
@@ -256,7 +280,10 @@ def instantiate(board, relations):
         frozenset((node_map[e["source"]]["paperId"], node_map[e["target"]]["paperId"]))
         for e in locked
     }
-    for relation in sorted(relations, key=lambda r: r["certainty"] != "explicit"):
+    for relation in sorted(
+        relations,
+        key=lambda r: (r["relation"] == "cites", r["certainty"] != "explicit"),
+    ):
         key = frozenset((relation["source"], relation["target"]))
         if key in seen:
             continue
@@ -332,6 +359,14 @@ def generate(ctx, payload):
             )
         ordered = sorted(papers.values(), key=lambda p: (p["year"] or "9999", p["id"]))
         relations, rejected = [], 0
+        traces = {}
+
+        def trace(citing, cited):
+            key = (citing["id"], cited["id"])
+            if key not in traces:
+                traces[key] = trace_citations(citing, cited)
+            return traces[key]
+
         batches = [
             (focus, ordered[start : min(start + 8, i)])
             for i, focus in enumerate(ordered)
@@ -341,9 +376,21 @@ def generate(ctx, payload):
             check(run_id)
             ctx.phase(f"分析关系 {index + 1}/{len(batches)} · {focus['title'][:65]}")
             selected = {
-                focus["id"]: retrieve(focus, " ".join(p["title"] for p in others), 12)
+                focus["id"]: retrieve(
+                    focus,
+                    " ".join(p["title"] for p in others),
+                    12,
+                    [s for p in others for s in trace(focus, p)["sources"][:1]],
+                )
             }
-            selected.update({p["id"]: retrieve(p, focus["title"], 4) for p in others})
+            selected.update(
+                {
+                    p["id"]: retrieve(
+                        p, focus["title"], 4, trace(p, focus)["sources"][:2]
+                    )
+                    for p in others
+                }
+            )
             catalog = [
                 {
                     "id": pid,
@@ -357,6 +404,12 @@ def generate(ctx, payload):
                 s["id"]: s
                 for p in [focus] + others
                 for s in p["sources"]
+                + [
+                    s
+                    for (pid, _), t in traces.items()
+                    if pid == p["id"]
+                    for s in t["sources"]
+                ]
                 if any(x["sourceId"] == s["id"] for x in selected[p["id"]])
             }
 
@@ -382,6 +435,11 @@ def generate(ctx, payload):
             result = ctx.step(f"relations:{index}", infer)
             relations.extend(result["edges"])
             rejected += result["rejected"]
+        from services.domain_citation_analysis import deepen_relations
+
+        relations = deepen_relations(
+            ctx, run_id, model, papers, relations, traces, _call_llm, check
+        )
         check(run_id)
         ctx.phase("整理布局与锁定连线，准备预览")
         proposed = deepcopy(board)

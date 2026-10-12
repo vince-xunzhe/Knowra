@@ -63,11 +63,28 @@ class EdgeEvidence(StrictModel):
     quote: str = Field(min_length=1, max_length=2400)
 
 
+class CitationFinding(StrictModel):
+    aspect: Literal["purpose", "assessment", "comparison"]
+    text: str = Field(min_length=1, max_length=1500)
+    evidence: list[EdgeEvidence] = Field(min_length=1, max_length=4)
+
+
+class CitationDiscussion(StrictModel):
+    citingPaperId: str
+    citedPaperId: str
+    status: Literal["analyzed", "reference_only", "not_found", "unresolved"]
+    contextsFound: int = Field(ge=0)
+    contextsUsed: int = Field(ge=0)
+    truncated: bool = False
+    findings: list[CitationFinding] = Field(default_factory=list, max_length=6)
+
+
 class EdgeAnalysis(StrictModel):
     relation: Literal["builds_on", "improves", "inspired_by", "compares", "cites"]
     certainty: Literal["explicit", "inferred"]
     reason: str = Field(min_length=1, max_length=3000)
     evidence: list[EdgeEvidence] = Field(min_length=1, max_length=8)
+    discussion: Optional[CitationDiscussion] = None
 
 
 class CanvasEdge(StrictModel):

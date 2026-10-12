@@ -363,3 +363,75 @@ def test_cycle_and_wide_cards_do_not_fail_or_overlap():
     cards = sorted(result["nodes"], key=lambda n: n["y"])
     assert all(a["y"] + a["height"] < b["y"] for a, b in zip(cards, cards[1:]))  # noqa: RUF007 — Python 3.9
     Board.model_validate(result)
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_deep_reading_runs_inside_durable_preview_job(env, monkeypatch, cancel):
+    client, _session, queue, run = env
+    mock_generation(monkeypatch)
+    title = "VectorNet: Efficient Structured Representation Learning"
+
+    def material(p, *_):
+        return {
+            "id": p.id,
+            "title": title if p.id == "ready" else "The follow-up paper",
+            "year": "2020" if p.id == "ready" else "2022",
+            "sources": [],
+            "warnings": [],
+            "document": []
+            if p.id == "ready"
+            else [
+                {
+                    "page": 2,
+                    "section": "body",
+                    "text": "We use the method [29] as our main experimental baseline.",
+                },
+                {
+                    "page": 20,
+                    "section": "references",
+                    "text": f"[29] Jane Smith. {title}. 2020.",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(agent, "materials", material)
+    calls = []
+
+    def model(_, _model, _system, prompt, **kwargs):
+        payload = json.loads(prompt)
+        calls.append(payload)
+        if "focus" in payload:
+            return '{"edges":[]}'
+        body = next(s for s in payload["excerpts"] if s["section"] == "body")
+        if cancel:
+            client.post(f"/api/domains/agent/runs/{run['id']}/discard")
+        evidence = [{"sourceId": body["sourceId"], "quote": body["text"]}]
+        return json.dumps(
+            {
+                "relation": "compares",
+                "certainty": "explicit",
+                "reason": "Experimental baseline",
+                "evidence": evidence,
+                "findings": [
+                    {
+                        "aspect": "purpose",
+                        "text": "Used as the main baseline.",
+                        "evidence": evidence,
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr("services.wiki_compiler._call_llm", model)
+    before = client.get("/api/domains").json()
+    job = queue.claim()
+    result = agent.generate(Context(queue, job), job["payload"])
+    assert len(calls) == 2
+    assert client.get("/api/domains").json() == before
+    current = client.get("/api/domains/agent/runs").json()[0]
+    if cancel:
+        assert result["cancelled"] and current["status"] == "cancelled"
+    else:
+        analysis = current["proposal"]["board"]["edges"][0]["analysis"]
+        assert analysis["discussion"]["status"] == "analyzed"
+        assert analysis["discussion"]["findings"][0]["evidence"][0]["page"] == 2
