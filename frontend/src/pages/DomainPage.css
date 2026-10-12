@@ -315,6 +315,39 @@
 .domain-edges .selected-edge {
   color: var(--color-indigo-300, #a5b4fc);
 }
+/* Keep the edge control readable and clickable at every canvas zoom level. */
+.domain-edge-lock-container {
+  overflow: visible;
+  pointer-events: auto;
+}
+.domain-page .domain-edge-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: #7887a2;
+  background: var(--domain-panel);
+  border: 1px solid #7887a266;
+  border-radius: 50%;
+}
+.domain-page .domain-edge-lock[aria-pressed="true"] {
+  color: #d69a27;
+  border-color: #d69a27;
+  background: color-mix(in srgb, #d69a27 15%, var(--domain-panel));
+}
+.domain-page .domain-edge-lock:hover:not(:disabled) {
+  border-color: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 18%, transparent);
+}
+.domain-page .domain-edge-lock:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+.domain-page .domain-edge-lock:disabled {
+  opacity: .55;
+}
 .domain-tools,
 .domain-view-tools {
   position: absolute;

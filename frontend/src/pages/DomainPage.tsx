@@ -794,10 +794,38 @@ export default function DomainPage({
                         <path className="domain-edge-hit" d={d} />
                         <path className="domain-edge-line" d={d} markerEnd="url(#domain-arrow)" />
                         {e.label && (
-                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 12} textAnchor="middle">
+                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 20 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
                           </text>
                         )}
+                        <g transform={`translate(${(sx + tx) / 2} ${(sy + ty) / 2}) scale(${1 / board.viewport.zoom})`}>
+                          <foreignObject x={-14} y={-14} width={28} height={28} className="domain-edge-lock-container">
+                            <button
+                              className="domain-edge-lock"
+                              aria-label={tr(e.locked ? '解锁连线' : '锁定连线')}
+                              title={tr(e.locked ? '解锁连线' : '锁定连线')}
+                              aria-pressed={!!e.locked}
+                              disabled={readOnly}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => {
+                                if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (readOnly) return
+                                setSelectedEdge(e.id)
+                                setSelected(new Set())
+                                setPopover(null)
+                                patchBoard((b) => ({
+                                  ...b,
+                                  edges: b.edges.map((item) => item.id === e.id ? { ...item, locked: !item.locked } : item),
+                                }))
+                              }}
+                            >
+                              {e.locked ? <LockKeyhole size={14} /> : <UnlockKeyhole size={14} />}
+                            </button>
+                          </foreignObject>
+                        </g>
                       </g>
                     )
                   })}
@@ -1205,19 +1233,6 @@ export default function DomainPage({
                 {tr(one?.locked ? '解锁' : '切换锁定')}
               </button>
             </>
-          )}
-          {edge && (
-            <button
-              className="domain-inspector-action"
-              onClick={() =>
-                patchBoard((b) => ({
-                  ...b,
-                  edges: b.edges.map((e) => (e.id === edge.id ? { ...e, locked: !e.locked } : e)),
-                }))
-              }
-            >
-              {tr(edge.locked ? '解锁' : '锁定连线')}
-            </button>
           )}
           {(selected.size > 0 || edge) && (
             <button className="domain-inspector-action domain-danger" onClick={removeSelection}>
