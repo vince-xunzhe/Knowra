@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Activity, ChevronDown, RotateCcw } from 'lucide-react'
 import { listJobs, resumeJob, type BackgroundJob } from '../api/jobs'
 
-const names: Record<string, string> = { scan: '扫描目录', papers: '论文处理', compile: 'Wiki 编译', promotion: '概念筛选', lint: '健康检查', pipeline: '全流程编排' }
-const labels = { queued: '排队中', running: '执行中', completed: '已完成', failed: '失败，可恢复', interrupted: '已中断，可恢复' }
+const names: Record<string, string> = { domain: '索骥代连', scan: '扫描目录', papers: '论文处理', compile: 'Wiki 编译', promotion: '概念筛选', lint: '健康检查', pipeline: '全流程编排' }
+const labels = { cancelled: '已取消', queued: '排队中', running: '执行中', completed: '已完成', failed: '失败，可恢复', interrupted: '已中断，可恢复' }
 
 export default function BackgroundTasks() {
   const [jobs, setJobs] = useState<BackgroundJob[]>([])
@@ -43,11 +43,12 @@ export default function BackgroundTasks() {
       {error && <p role="status" className="mb-2 text-amber-300">{error}</p>}
       <div className="max-h-72 overflow-y-auto space-y-3">
         {jobs.map(job => <div key={job.job_id} className="border-t border-slate-800 pt-2">
-          <div className="flex justify-between gap-2"><span>{names[job.kind] || job.kind}</span><span className="text-slate-400">{labels[job.status]}</span></div>
+          <div className="flex justify-between gap-2"><span>{names[job.kind] || job.kind}</span><span className="text-slate-400">{job.kind === 'domain' && ['failed', 'interrupted'].includes(job.status) ? '需要重新生成' : labels[job.status]}</span></div>
           <p className="mt-1 break-words text-slate-400">{job.progress.label || job.progress.state?.current}</p>
           {job.error && <p className="mt-1 break-words text-amber-300">{job.error}</p>}
           {job.worker_online === false && <p className="mt-1 text-amber-300">等待 worker 心跳；任务已保存。外部模式请确认 worker 服务已启动。</p>}
-          {['failed', 'interrupted'].includes(job.status) && <button disabled={busy || active > 0} onClick={() => { void recover(job.job_id) }} className="mt-2 inline-flex items-center gap-1 rounded border border-slate-600 px-2 py-1 disabled:opacity-50"><RotateCcw size={12} />从检查点恢复</button>}
+          {job.kind === 'domain' && ['failed', 'interrupted'].includes(job.status) && <p>请在索骥重新生成</p>}
+          {job.kind !== 'domain' && ['failed', 'interrupted'].includes(job.status) && <button disabled={busy || active > 0} onClick={() => { void recover(job.job_id) }} className="mt-2 inline-flex items-center gap-1 rounded border border-slate-600 px-2 py-1 disabled:opacity-50"><RotateCcw size={12} />从检查点恢复</button>}
         </div>)}
       </div>
     </div>}

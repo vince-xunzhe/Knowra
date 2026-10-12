@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import type { DomainState, DomainPaper, DomainSnapshot } from '../src/api/domains'
+import type { DomainState, DomainPaper, DomainSnapshot, DomainAgentRun } from '../src/api/domains'
 const reviews: DomainPaper[] = [
   {
     id: 'paper-a',
@@ -51,6 +51,7 @@ async function setup(page: Page, inherited = false) {
   }
   let revision = 1,
     failSave = false
+  let runs: DomainAgentRun[] = []
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.route('**/api/**', async (route) => {
@@ -66,7 +67,23 @@ async function setup(page: Page, inherited = false) {
         revision++
         json = { revision }
       } else json = { state, revision }
-    } else if (path === '/api/domains/papers') json = reviews
+    } else if (path === '/api/domains/agent/runs') {
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON()
+        if (body.revision !== revision) return route.fulfill({ status: 409, json: { detail: 'Conflict' } })
+        const run: DomainAgentRun = { id: 'run-1', boardId: body.boardId, status: 'pending', jobId: 'job', error: null, proposal: null, progress: { label: '分析论文关系' } }
+        runs = [run]; json = run
+      } else json = runs
+    } else if (path.endsWith('/run-1/discard')) {
+      runs = runs.map(r => ({ ...r, status: r.status === 'pending' ? 'cancelled' : 'discarded', proposal: null })); json = runs[0]
+    } else if (path.endsWith('/run-1/apply')) {
+      const run = runs[0]
+      const before = structuredClone(state.boards.find(b => b.id === run.boardId)!)
+      state = { ...state, boards: state.boards.map(b => b.id === run.boardId ? { ...run.proposal!.board, viewport: b.viewport } : b) }
+      revision++; runs = [{ ...run, status: 'applied', proposal: null }]
+      json = { state, revision, before }
+    }
+    else if (path === '/api/domains/papers') json = reviews
     else if (path === '/api/graph') json = { nodes: [], edges: [] }
     else if (path === '/api/papers')
       json = reviews.map((p) => ({
@@ -106,6 +123,15 @@ async function setup(page: Page, inherited = false) {
   await expect(page.getByRole('tab', { name: 'LLM' })).toBeVisible()
   return {
     snapshot: () => state,
+    preview: () => {
+      const board = structuredClone(state.boards[0])
+      board.nodes[0].x = 80; board.nodes[0].y = 140
+      board.nodes[1].x = 480; board.nodes[1].y = 140
+      board.edges = [{ id: 'ai-edge', source: board.nodes[0].id, target: board.nodes[1].id, label: '改进', locked: false,
+        analysis: { relation: 'improves', certainty: 'explicit', reason: 'The later paper extends the attention operator.',
+          evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 8 页', page: 8, quote: 'We build upon the attention operator proposed in the earlier paper.' }] } }]
+      runs = [{ ...runs[0], status: 'preview', proposal: { board, added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
+    },
     errors,
     renameFirstCategory: () => {
       state = { ...state, boards: state.boards.map((b, i) => i ? b : { ...b, name: 'Language models', category: 'Language models' }) }
@@ -360,4 +386,102 @@ test('navigation order and inherited system categories preserve edits on taxonom
   await expect(page.getByTestId('domain-canvas').getByText(reviews[0].title, { exact: true })).toBeVisible()
   expect(context.snapshot().boards[0].nodes).toEqual(nodes)
   expect(context.errors).toEqual([])
+})
+
+
+test('agent generation is readonly, permits browsing and other categories, cancellation restores edits', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  await expect(page.locator('.domain-header').getByRole('button', { name: '导入论文' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeDisabled()
+  const card = page.locator('[data-kind="paper"]').first()
+  const oldStyle = await card.getAttribute('style')
+  await drag(page, card, 120, 80)
+  await expect(card).toHaveAttribute('style', oldStyle!)
+  await expect(page.getByRole('textbox', { name: '卡片备注', exact: true })).toBeDisabled()
+  await card.locator('.domain-review-plus').click()
+  await expect(page.locator('.domain-popover')).toBeVisible()
+  await page.getByRole('tab', { name: '三维重建' }).click()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
+  await page.getByRole('button', { name: '添加独立文本' }).click()
+  await page.getByRole('tab', { name: 'LLM' }).click()
+  await page.getByRole('button', { name: '取消生成' }).click()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
+  await expect.poll(() => context.snapshot().boards[1].nodes.length).toBe(1)
+  expect(context.errors).toEqual([])
+})
+
+test('agent preview survives refresh, shows evidence, applies once and undoes as one operation', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByRole('button', { name: '取消生成' })).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  context.preview()
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
+  await expect(page.getByRole('button', { name: '应用方案' })).toBeVisible()
+  expect(context.snapshot().boards[0].edges).toHaveLength(0)
+  await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeDisabled()
+  await page.locator('.domain-edges text').filter({ hasText: '改进' }).click()
+  await expect(page.getByText('The later paper extends the attention operator.')).toBeVisible()
+  await expect(page.getByText('PDF 第 8 页')).toBeVisible()
+  await page.screenshot({ path: '/tmp/knowra-domain-agent-preview.png', fullPage: true })
+  await page.getByRole('button', { name: '应用方案' }).click()
+  await expect.poll(() => context.snapshot().boards[0].edges.length).toBe(1)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect.poll(() => context.snapshot().boards[0].nodes).toEqual(before.nodes)
+  await expect.poll(() => context.snapshot().boards[0].edges).toEqual(before.edges)
+  expect(context.errors).toEqual([])
+})
+
+test('discarding an agent preview leaves original cards unchanged', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByRole('button', { name: '取消生成' })).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  context.preview()
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.getByRole('button', { name: '放弃方案' }).click()
+  await expect(page.getByRole('button', { name: 'agent代连', exact: true })).toBeEnabled()
+  expect(context.snapshot().boards[0]).toEqual(before)
+})
+
+test('Domain model can be selected independently and changing main model preserves it', async ({ page }) => {
+  await setup(page)
+  const tasks = ['paper_extract', 'paper_chat', 'domain_connect']
+  let config = {
+    scan_directory: '/test', similarity_threshold: 0.6,
+    model_gateway: {
+      providers: [{ id: 'openai', label: 'OpenAI', provider_type: 'openai', api_key: '', base_url: '', enabled: true }],
+      models: ['first', 'second'].map(id => ({ id: `openai/${id}`, label: id, provider_id: 'openai', upstream_model: id, model_kind: 'chat', supports_vision: true, supported_tasks: tasks })),
+      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
+      task_bindings: Object.fromEntries(tasks.map(id => [id, { model_id: 'openai/first', reasoning_effort: 'medium' }])),
+      available_provider_types: [],
+    },
+  }
+  await page.route('**/api/config', async route => {
+    if (route.request().method() !== 'GET') config = { ...config, ...route.request().postDataJSON() }
+    await route.fulfill({ json: config })
+  })
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: /^任务模型/ }).click()
+  const section = (name: string) => page.locator('.rounded-xl').filter({ has: page.locator('p').filter({ hasText: new RegExp(`^${name}$`) }) }).last()
+  const domain = section('索骥代连')
+  const main = section('主模型')
+  await expect(domain).toBeVisible()
+  await domain.locator('select').nth(3).selectOption('openai/second')
+  await main.locator('select').nth(3).selectOption('openai/second')
+  await main.locator('select').nth(3).selectOption('openai/first')
+  await expect(domain.locator('select').nth(3)).toHaveValue('openai/second')
+  await page.getByRole('button', { name: '保存设置' }).click()
+  await expect.poll(() => config.model_gateway.task_bindings.domain_connect.model_id).toBe('openai/second')
+  expect(config.model_gateway.task_bindings.paper_extract.model_id).toBe('openai/first')
 })

@@ -704,3 +704,15 @@
     padding: 8px 16px;
   }
 }
+
+.domain-agent-bar { position: absolute; top: 20px; left: 80px; z-index: 4; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 100px); flex-wrap: wrap; padding: 6px; border: 1px solid var(--domain-border); border-radius: 10px; background: var(--domain-panel); box-shadow: 0 4px 16px #0002; font-size: 12px; }
+.domain-agent-bar span { max-width: 340px; }
+.domain-agent-bar button { padding: 7px 10px; }
+.domain-edit-fields { display: contents; }
+.domain-page :disabled { cursor: not-allowed; opacity: .4; }
+.domain-agent-summary, .domain-edge-evidence { border: 1px solid var(--domain-border); padding: 12px; margin-bottom: 14px; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.domain-agent-summary { background: #6366f10b; }
+.domain-agent-summary p, .domain-edge-evidence p { margin: 8px 0; }
+.domain-agent-summary summary, .domain-edge-evidence summary { cursor: pointer; }
+.domain-edge-evidence blockquote { border-left: 2px solid #6366f188; padding-left: 8px; margin: 8px 0; white-space: pre-wrap; }
+.domain-edge-evidence details { border-top: 1px solid var(--domain-border); padding-top: 8px; }

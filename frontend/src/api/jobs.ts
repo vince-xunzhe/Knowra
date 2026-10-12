@@ -6,7 +6,7 @@ export interface BackgroundJob {
   job_id: string
   kind: string
   channel: string
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'interrupted' | 'cancelled'
   progress: { label?: string; channel?: string; state?: { current?: string; done?: number; total?: number } }
   error: string | null
   result: unknown
@@ -24,7 +24,7 @@ export async function waitForJob<T>(job: BackgroundJob, onProgress?: (job: Backg
   for (;;) {
     onProgress?.(job)
     if (job.status === 'completed') return job.result as T
-    if (job.status === 'failed' || job.status === 'interrupted') {
+    if (job.status === 'failed' || job.status === 'interrupted' || job.status === 'cancelled') {
       throw new Error(job.error || '后台任务未完成，可在任务面板恢复。')
     }
     await new Promise(resolve => setTimeout(resolve, 1500))

@@ -24,6 +24,7 @@ export interface CanvasNode {
   locked: boolean
 }
 export interface CanvasEdge {
+  analysis?: DomainAnalysis | null
   id: string
   source: string
   target: string
@@ -86,3 +87,40 @@ export function freePosition(board: DomainBoard, width: number, height: number, 
   }
   return { x, y }
 }
+
+export interface DomainEvidence {
+  paperId: string
+  source: 'review' | 'wiki' | 'pdf' | 'text'
+  locator: string
+  page: number | null
+  quote: string
+}
+export interface DomainAnalysis {
+  relation: 'builds_on' | 'improves' | 'inspired_by' | 'compares' | 'cites'
+  certainty: 'explicit' | 'inferred'
+  reason: string
+  evidence: DomainEvidence[]
+}
+export interface DomainAgentRun {
+  id: string
+  boardId: string
+  status: 'pending' | 'preview' | 'applied' | 'discarded' | 'cancelled' | 'failed'
+  jobId: string | null
+  error: string | null
+  progress: { label?: string }
+  proposal: null | {
+    board: DomainBoard
+    added: number
+    removed: number
+    protected: number
+    rejected: number
+    warnings: { paperId: string; message: string }[]
+    unconnected: { paperId: string; title: string }[]
+  }
+}
+export const listDomainRuns = () => api.get<DomainAgentRun[]>('/agent/runs').then(r => r.data)
+export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>) =>
+  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights }).then(r => r.data)
+export const discardDomainRun = (id: string) => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data)
+export const applyDomainRun = (id: string) =>
+  api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data)
