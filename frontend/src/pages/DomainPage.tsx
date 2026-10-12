@@ -795,12 +795,12 @@ export default function DomainPage({
                         <path className="domain-edge-hit" d={d} />
                         <path className="domain-edge-line" d={d} markerEnd="url(#domain-arrow)" />
                         {e.label && (
-                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 16 / board.viewport.zoom} textAnchor="middle">
+                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 14 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
                           </text>
                         )}
                         <g transform={`translate(${(sx + tx) / 2} ${(sy + ty) / 2}) scale(${1 / board.viewport.zoom})`}>
-                          <foreignObject x={-10} y={-10} width={20} height={20} className="domain-edge-lock-container">
+                          <foreignObject x={-8} y={-8} width={16} height={16} className="domain-edge-lock-container">
                             <button
                               className="domain-edge-lock"
                               aria-label={tr(e.locked ? '解锁连线' : '锁定连线')}
@@ -823,7 +823,7 @@ export default function DomainPage({
                                 }))
                               }}
                             >
-                              {e.locked ? <LockKeyhole size={11} /> : <UnlockKeyhole size={11} />}
+                              {e.locked ? <LockKeyhole size={9} /> : <UnlockKeyhole size={9} />}
                             </button>
                           </foreignObject>
                         </g>
