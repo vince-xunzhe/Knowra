@@ -59,6 +59,9 @@ def get_job(job_id: str):
 
 @router.post('/jobs/{job_id}/resume', status_code=202)
 def resume_job(job_id: str):
+    job = runtime.store().get(job_id)
+    if job and job["kind"] == "domain":
+        raise HTTPException(409, "请在索骥重新生成，以使用当前画布和锁定状态。")
     try:
         job = runtime.store().resume(job_id)
     except KeyError:

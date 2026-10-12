@@ -110,6 +110,19 @@ class DomainWorkspace(Base):
     admitted = Column(JSON, nullable=False, default=dict)
 
 
+class DomainAgentRun(Base):
+    """Durable preview and per-board edit lease, independent of browser sessions."""
+    __tablename__ = "domain_agent_runs"
+    id = Column(String, primary_key=True, default=_uuid)
+    board_id = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="pending")
+    snapshot = Column(JSON, nullable=False)
+    proposal = Column(JSON, nullable=True)
+    job_id = Column(String, nullable=True)
+    error = Column(Text, nullable=True)
+    created = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class KnowledgeNode(Base):
     __tablename__ = "knowledge_nodes"
 

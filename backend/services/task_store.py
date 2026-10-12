@@ -147,6 +147,13 @@ class TaskStore:
             db.execute('UPDATE jobs SET ' + ','.join(k + '=?' for k in changes) + ', updated=? WHERE id=?',
                        (*values, time.time(), job_id))
 
+    def cancel_queued(self, job_id):
+        # Running requests finish cooperatively; their Domain preview lease is
+        # already cancelled, so no late result can be applied.
+        with self.connect() as db:
+            db.execute("UPDATE jobs SET status='cancelled', updated=? WHERE id=? AND kind='domain' AND status='queued'",
+                       (time.time(), job_id))
+
     def publish(self, job_id, channel, state):
         with self.connect() as db:
             db.execute('INSERT OR REPLACE INTO channels VALUES (?,?,?)',
