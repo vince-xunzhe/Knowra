@@ -752,3 +752,12 @@
 
 .domain-citation-discussion { border-top: 1px solid var(--domain-border); margin-top: 14px; padding-top: 10px; }
 .domain-citation-discussion h4 { margin: 14px 0 4px; font-size: 12px; color: var(--color-indigo-300, #a5b4fc); }
+
+.domain-evidence-sources { margin-top: 16px; border-top: 1px solid var(--domain-border); padding-top: 10px; }
+.domain-evidence-sources h3 { margin: 0; font-size: 12px; }
+.domain-evidence-sources details { padding: 10px 0; }
+.domain-evidence-sources summary:focus-visible { outline: 2px solid var(--color-indigo-300, #a5b4fc); outline-offset: 3px; }
+.domain-evidence-references { display: flex; flex-wrap: wrap; gap: 6px; }
+.domain-page .domain-evidence-reference { padding: 2px 6px; font-size: 11px; color: var(--color-indigo-300, #a5b4fc); background: #6366f112; }
+.domain-evidence-uses { color: var(--color-indigo-300, #a5b4fc); font-size: 11px; }
+.domain-edge-evidence .domain-analysis-scope { border: 0; padding: 0; color: var(--domain-muted); font-size: 11px; }

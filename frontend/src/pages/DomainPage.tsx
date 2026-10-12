@@ -40,6 +40,7 @@ import {
 } from '../api/domains'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
+import DomainEdgeEvidence from './DomainEdgeEvidence'
 import './DomainPage.css'
 
 const FIELDS: [ReviewField, string][] = [
@@ -1067,36 +1068,7 @@ export default function DomainPage({
             {run.proposal.unconnected.length > 0 && <details><summary>{tr('未连接论文')}</summary>{run.proposal.unconnected.map(p => <p key={p.paperId}>{p.title}</p>)}</details>}
             {run.proposal.rejected > 0 && <p>{tr('已过滤 {0} 条无有效证据的建议', { 0: run.proposal.rejected })}</p>}
           </section>}
-          {edge?.analysis && <section className="domain-edge-evidence">
-            <h2>{tr('连线证据')} · {tr(edge.analysis.certainty === 'explicit' ? '原文明示' : 'AI推断')}</h2>
-            <p>{edge.analysis.reason}</p>
-            {edge.analysis.discussion && <div className="domain-citation-discussion">
-              <h3>{tr('引用语境深读')}</h3>
-              <p>{tr('来自引用论文：{0}', { 0: paperMap.get(edge.analysis.discussion.citingPaperId)?.title ?? '' })}</p>
-              <p>{tr('定位 {0} 处正文语境，本次分析 {1} 处', { 0: edge.analysis.discussion.contextsFound, 1: edge.analysis.discussion.contextsUsed })}</p>
-              {edge.analysis.discussion.truncated && <p>{tr('正文语境较多，本次仅分析部分片段。')}</p>}
-              {edge.analysis.discussion.status === 'reference_only' && <p>{tr('仅找到参考文献条目，未定位正文引用语境。')}</p>}
-              {edge.analysis.discussion.status === 'not_found' && <p>{tr('未定位到可核验的正文引用语境。')}</p>}
-              {edge.analysis.discussion.status === 'unresolved' && <p>{tr('已定位正文，但未获得有充分证据的解读。')}</p>}
-              {(['purpose', 'assessment', 'comparison'] as const).map(aspect => {
-                const findings = edge.analysis!.discussion!.findings.filter(f => f.aspect === aspect)
-                return <div key={aspect}>
-                  <h4>{tr(aspect === 'purpose' ? '引用用途' : aspect === 'assessment' ? '作者评价' : '与本文的异同')}</h4>
-                  {findings.length === 0 ? <p className="domain-help">{tr('所分析片段中未找到明确表述。')}</p> : findings.map((finding, i) => <div key={i}>
-                    <p>{finding.text}</p>
-                    {finding.evidence.map((e, j) => <details key={j}>
-                      <summary>{tr('原文证据')} · {e.locator}</summary><blockquote>{e.quote}</blockquote>
-                    </details>)}
-                  </div>)}
-                </div>
-              })}
-            </div>}
-            {edge.analysis.evidence.map((e, i) => <details key={i} open>
-              <summary>{tr(e.source === 'review' ? '论文回顾' : e.source === 'wiki' ? '论文Wiki' : '原文')} · {e.locator}</summary>
-              <p>{paperMap.get(e.paperId)?.title}</p><blockquote>{e.quote}</blockquote>
-              <button onClick={() => onOpenReview(e.paperId)}>{tr('打开完整回顾')} ↗</button>
-            </details>)}
-          </section>}
+          {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={onOpenReview} />}
           <label className="domain-search">
             <Search size={15} />
             <input

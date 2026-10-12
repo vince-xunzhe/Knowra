@@ -132,6 +132,13 @@ async function setup(page: Page, inherited = false) {
           discussion: { citingPaperId: 'paper-b', citedPaperId: 'paper-a', status: 'analyzed', contextsFound: 2, contextsUsed: 2, truncated: false,
             findings: [{ aspect: 'purpose', text: 'Uses the earlier operator as an experimental baseline.', evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 4 页', page: 4, quote: 'The earlier operator serves as our experimental baseline under equal compute budgets.' }] }] },
           evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 8 页', page: 8, quote: 'We build upon the attention operator proposed in the earlier paper.' }] } }]
+      const analysis = board.edges[0].analysis!
+      const contextEvidence = analysis.discussion!.findings[0].evidence[0]
+      // The same passage is returned for both relation and discussion; a second
+      // passage on the page and a different paper's same page must survive.
+      analysis.evidence.push({ ...contextEvidence, quote: `  ${contextEvidence.quote}  ` })
+      analysis.discussion!.findings[0].evidence.push({ ...contextEvidence, quote: 'All baselines use the same training budget.' })
+      analysis.evidence.push({ ...contextEvidence, paperId: 'paper-a', quote: 'The original paper describes its attention operator.' })
       runs = [{ ...runs[0], status: 'preview', proposal: { board, added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
     },
     errors,
@@ -459,12 +466,23 @@ test('agent preview survives refresh, shows evidence, applies once and undoes as
   await expect(page.locator('[data-edge-id]').getByRole('button', { name: '锁定连线', exact: true })).toBeDisabled()
   await page.locator('.domain-edges text').filter({ hasText: '改进' }).click()
   await expect(page.getByText('The later paper extends the attention operator.')).toBeVisible()
-  await expect(page.getByText('PDF 第 8 页')).toBeVisible()
+  await expect(page.locator('.domain-evidence-sources summary').filter({ hasText: 'PDF 第 8 页' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '引用语境深读' })).toBeVisible()
   await expect(page.getByText('Uses the earlier operator as an experimental baseline.')).toBeVisible()
   await expect(page.getByText('所分析片段中未找到明确表述。')).toHaveCount(2)
-  await page.getByText('原文证据 · PDF 第 4 页').click()
-  await expect(page.getByText('The earlier operator serves as our experimental baseline under equal compute budgets.')).toBeVisible()
+  const sources = page.locator('.domain-evidence-sources')
+  await expect(sources.locator('details')).toHaveCount(3)
+  await expect(page.locator('.domain-citation-discussion blockquote')).toHaveCount(0)
+  await page.locator('.domain-citation-discussion').getByRole('button', { name: '证据 2', exact: true }).click()
+  const sharedSource = sources.locator('details').nth(1)
+  await expect(sharedSource).toHaveAttribute('open', '')
+  await expect(sharedSource.locator('blockquote')).toHaveCount(2)
+  await expect(sharedSource).toContainText('The earlier operator serves as our experimental baseline under equal compute budgets.')
+  await expect(sharedSource).toContainText('All baselines use the same training budget.')
+  await expect(sharedSource).toContainText('支持：连线依据 · 引用用途')
+  await expect(sharedSource).toContainText(reviews[1].title)
+  await sources.locator('details').nth(2).locator('summary').click()
+  await expect(sources.locator('details').nth(2)).toContainText(reviews[0].title)
   await page.screenshot({ path: '/tmp/knowra-domain-agent-preview.png', fullPage: true })
   await page.getByRole('button', { name: '应用方案' }).click()
   await expect.poll(() => context.snapshot().boards[0].edges.length).toBe(1)

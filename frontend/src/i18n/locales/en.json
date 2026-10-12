@@ -1,4 +1,11 @@
 {
+  "连线解读": "Connection analysis",
+  "连线依据": "Connection rationale",
+  "证据 {0}": "Evidence {0}",
+  "分析范围": "Analysis scope",
+  "证据与出处": "Evidence and sources",
+  "编号对应上方解读；同一出处的摘录合并展示。": "Numbers match the analysis above; excerpts from the same source location are grouped together.",
+  "支持：{0}": "Supports: {0}",
   "图结构健康": "Graph structure health",
   "· 孤立节点": "· Orphan nodes",
   "孤立节点": "Orphan node",

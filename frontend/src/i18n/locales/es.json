@@ -1,4 +1,11 @@
 {
+  "连线解读": "Análisis de la conexión",
+  "连线依据": "Fundamento de la conexión",
+  "证据 {0}": "Evidencia {0}",
+  "分析范围": "Alcance del análisis",
+  "证据与出处": "Evidencias y fuentes",
+  "编号对应上方解读；同一出处的摘录合并展示。": "Los números corresponden al análisis anterior; los extractos de la misma ubicación se agrupan.",
+  "支持：{0}": "Respalda: {0}",
   "图结构健康": "Salud estructural del grafo",
   "· 孤立节点": "· Nodos huérfanos",
   "孤立节点": "Nodo huérfano",
