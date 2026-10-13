@@ -666,6 +666,28 @@
 .domain-import-filters input {
   flex: 1;
 }
+.domain-import-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0 10px 12px;
+  border-bottom: 1px solid var(--domain-border);
+  font-size: 12px;
+}
+.domain-import-selection label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.domain-import-selection input {
+  accent-color: var(--color-indigo-400, #818cf8);
+}
+.domain-import-selection span {
+  color: var(--domain-muted);
+  font-size: 11px;
+}
 .domain-import-list {
   overflow: auto;
   min-height: 150px;

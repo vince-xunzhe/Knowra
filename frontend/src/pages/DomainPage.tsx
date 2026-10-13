@@ -659,6 +659,9 @@ export default function DomainPage({
       (!category || p.category === category) &&
       `${p.title} ${p.year}`.toLowerCase().includes(query.toLowerCase()),
   )
+  const selectableImports = visibleImports.filter((p) => p.eligible)
+  const selectedVisibleCount = selectableImports.filter((p) => importSelected.has(p.id)).length
+  const allVisibleSelected = selectableImports.length > 0 && selectedVisibleCount === selectableImports.length
   const statuses = {
     loading: '加载中…',
     saved: '已保存到本机',
@@ -1299,6 +1302,31 @@ export default function DomainPage({
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="domain-import-selection">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  ref={(input) => {
+                    if (input) input.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected
+                  }}
+                  disabled={papersLoading || paperError || readOnly || selectableImports.length === 0}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setImportSelected((selected) => {
+                      const next = new Set(selected)
+                      selectableImports.forEach((p) => {
+                        if (checked) next.add(p.id)
+                        else next.delete(p.id)
+                      })
+                      return next
+                    })
+                  }}
+                />
+                {tr('全选')}
+              </label>
+              <span>{tr('仅选择当前筛选结果中可导入的论文')}</span>
             </div>
             <div className="domain-import-list">
               {papersLoading ? (
