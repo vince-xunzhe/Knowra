@@ -737,7 +737,7 @@ export default function DomainPage({
             {!state?.boards.length && <option value="">{state ? '—' : tr('加载中…')}</option>}
             {state?.boards.map((b) => (
               <option key={b.id} value={b.id}>
-                {b.name} · {b.nodes.filter((n) => n.kind === 'paper').length}
+                {b.name}
               </option>
             ))}
           </select>
@@ -753,6 +753,9 @@ export default function DomainPage({
         >
           <Plus size={15} />
         </button>
+        {board && <span className="domain-imported-count" data-testid="domain-imported-count" aria-live="polite">
+          {tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}
+        </span>}
       </div>
       {paperError && (
         <div className="domain-error" role="alert">

@@ -102,6 +102,7 @@
 }
 .domain-selector {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 10px 26px;
   align-items: center;
@@ -127,6 +128,17 @@
 .domain-selector .domain-new-board {
   flex-shrink: 0;
   padding: 8px;
+}
+.domain-imported-count {
+  margin-left: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--domain-border);
+  border-radius: 6px;
+  color: var(--color-slate-400, #94a3b8);
+  background: var(--domain-panel);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .domain-body {
   display: flex;
