@@ -37,7 +37,7 @@ export default function BackgroundTasks() {
       setError(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
   }
-  return <aside className="fixed bottom-3 left-1/2 -translate-x-1/2 z-40 max-w-[calc(100vw-8rem)] text-xs">
+  return <aside className="fixed bottom-3 right-3 z-40 flex max-w-[calc(100vw-8rem)] flex-col items-end text-xs">
     {open && <div className="mb-2 w-80 max-w-full rounded-xl border border-slate-700 bg-slate-950 p-3 shadow-xl">
       <p className="mb-2 font-semibold">后台任务 · 页面关闭后仍继续执行</p>
       {error && <p role="status" className="mb-2 text-amber-300">{error}</p>}

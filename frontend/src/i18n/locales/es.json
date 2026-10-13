@@ -1,4 +1,11 @@
 {
+  "打开完整回顾：{0}": "Abrir reseña completa: {0}",
+  "已导入：{0} 张卡片": "Importadas: {0} tarjetas",
+  "调整研究工作区宽度": "Ajustar el ancho del espacio de investigación",
+  "拖动调整宽度，双击恢复默认": "Arrastra para ajustar el ancho; haz doble clic para restablecerlo",
+  "确认删除当前画布的全部元素（共 {0} 个，含连线）？论文库中的论文不会被删除，删除后可通过撤销恢复。": "¿Eliminar todos los elementos de este lienzo ({0} en total, incluidas las conexiones)? Los artículos de la biblioteca se conservarán. Puedes deshacer esta eliminación.",
+  "全选": "Seleccionar todo",
+  "仅选择当前筛选结果中可导入的论文": "Selecciona los artículos importables de los resultados filtrados actuales",
   "连线解读": "Análisis de la conexión",
   "连线依据": "Fundamento de la conexión",
   "证据 {0}": "Evidencia {0}",

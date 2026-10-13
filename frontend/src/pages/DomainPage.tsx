@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Check,
   Download,
+  ExternalLink,
   Frame,
   Hand,
   Link2,
@@ -40,6 +41,7 @@ import {
 } from '../api/domains'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
+import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
 import DomainEdgeEvidence from './DomainEdgeEvidence'
 import './DomainPage.css'
 
@@ -123,6 +125,12 @@ export default function DomainPage({
   onOpenReview: (paperId: string) => void
 }) {
   useLocale()
+  const {
+    bodyRef: domainBodyRef, width: inspectorWidth, min: inspectorMin, max: inspectorMax,
+    resizing: inspectorResizing, onPointerDown: beginInspectorResize,
+    onPointerMove: moveInspectorResize, onPointerUp: finishInspectorResize,
+    endDrag: endInspectorResize, reset: resetInspectorWidth, onKeyDown: resizeInspectorWithKey,
+  } = useDomainInspectorResize()
   const workspace = useDomainWorkspace()
   const agent = useDomainAgent()
   const refreshWorkspace = workspace.refresh
@@ -257,6 +265,13 @@ export default function DomainPage({
   const removeSelection = () => {
     if (!board || readOnly) return
     const removed = new Set(board.nodes.filter((n) => selected.has(n.id) && !isLocked(n)).map((n) => n.id))
+    if (
+      removed.size > 0 &&
+      removed.size === board.nodes.length &&
+      !window.confirm(tr('确认删除当前画布的全部元素（共 {0} 个，含连线）？论文库中的论文不会被删除，删除后可通过撤销恢复。', {
+        0: board.nodes.length + board.edges.length,
+      }))
+    ) return
     patchBoard((b) => ({
       ...b,
       nodes: b.nodes
@@ -659,6 +674,9 @@ export default function DomainPage({
       (!category || p.category === category) &&
       `${p.title} ${p.year}`.toLowerCase().includes(query.toLowerCase()),
   )
+  const selectableImports = visibleImports.filter((p) => p.eligible)
+  const selectedVisibleCount = selectableImports.filter((p) => importSelected.has(p.id)).length
+  const allVisibleSelected = selectableImports.length > 0 && selectedVisibleCount === selectableImports.length
   const statuses = {
     loading: '加载中…',
     saved: '已保存到本机',
@@ -709,15 +727,24 @@ export default function DomainPage({
           {tr('导入论文')}
         </button>
       </header>
-      <div className="domain-tabs" role="tablist" aria-label={tr('领域')}>
-        {state?.boards.map((b) => (
-          <button key={b.id} role="tab" aria-selected={b.id === board?.id} onClick={() => selectBoard(b.id)}>
-            {b.name}
-            <span>{b.nodes.filter((n) => n.kind === 'paper').length}</span>
-          </button>
-        ))}
+      <div className="domain-selector">
+        <label className="domain-selector-field">
+          <span>{tr('领域')}</span>
+          <select
+            value={board?.id ?? ''}
+            disabled={!state?.boards.length}
+            onChange={(event) => selectBoard(event.target.value)}
+          >
+            {!state?.boards.length && <option value="">{state ? '—' : tr('加载中…')}</option>}
+            {state?.boards.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
-          className="domain-new-tab"
+          className="domain-new-board"
           aria-label={tr('新建领域')}
           disabled={!state || agent.busy || !agent.ready}
           onClick={() => {
@@ -727,6 +754,9 @@ export default function DomainPage({
         >
           <Plus size={15} />
         </button>
+        {board && <span className="domain-imported-count" data-testid="domain-imported-count" aria-live="polite">
+          {tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}
+        </span>}
       </div>
       {paperError && (
         <div className="domain-error" role="alert">
@@ -735,7 +765,7 @@ export default function DomainPage({
         </div>
       )}
       {agent.error && <div className="domain-error" role="alert">{agent.error}<button onClick={() => void agent.refresh()}>{tr('重试')}</button></div>}
-      <div className="domain-body">
+      <div ref={domainBodyRef} className={`domain-body${inspectorResizing ? ' is-resizing' : ''}`}>
         <div
           ref={canvas}
           data-testid="domain-canvas"
@@ -860,21 +890,42 @@ export default function DomainPage({
                         <>
                           <div className="domain-paper-head">
                             <span>{paperMap.get(n.paperId!)?.year || tr('年份未知')}</span>
-                            <button
-                              className="domain-review-plus"
-                              aria-label={tr('查看论文回顾：{0}', {
-                                0: paperMap.get(n.paperId!)?.title ?? '',
-                              })}
-                              aria-expanded={popover === n.id}
-                              onClick={() => {
-                                setPopover(popover === n.id ? null : n.id)
-                                setSelected(new Set([n.id]))
-                                setSelectedEdge(null)
-                                setTab('core_contribution')
-                              }}
-                            >
-                              <Plus size={17} />
-                            </button>
+                            <div className="domain-paper-actions">
+                              <button
+                                className="domain-review-jump"
+                                title={tr('打开完整回顾')}
+                                aria-label={tr('打开完整回顾：{0}', { 0: paperMap.get(n.paperId!)?.title ?? '' })}
+                                disabled={!n.paperId || !paperMap.has(n.paperId)}
+                                onKeyDown={(event) => {
+                                  if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
+                                }}
+                                onClick={() => {
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setLinkSource(null)
+                                  setPopover(null)
+                                  void workspace.flush()
+                                  onOpenReview(n.paperId!)
+                                }}
+                              >
+                                <ExternalLink size={14} />
+                              </button>
+                              <button
+                                className="domain-review-plus"
+                                aria-label={tr('查看论文回顾：{0}', {
+                                  0: paperMap.get(n.paperId!)?.title ?? '',
+                                })}
+                                aria-expanded={popover === n.id}
+                                onClick={() => {
+                                  setPopover(popover === n.id ? null : n.id)
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setTab('core_contribution')
+                                }}
+                              >
+                                <Plus size={17} />
+                              </button>
+                            </div>
                           </div>
                           <h3>{paperMap.get(n.paperId!)?.title ?? tr('论文不可用')}</h3>
                           {paperMap.get(n.paperId!)?.incomplete && (
@@ -1058,7 +1109,25 @@ export default function DomainPage({
             </div>
           )}
         </div>
-        <aside className="domain-inspector">
+        <div
+          className="domain-pane-divider"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={tr('调整研究工作区宽度')}
+          aria-valuemin={inspectorMin}
+          aria-valuemax={inspectorMax}
+          aria-valuenow={Math.round(inspectorWidth)}
+          tabIndex={0}
+          title={tr('拖动调整宽度，双击恢复默认')}
+          onPointerDown={beginInspectorResize}
+          onPointerMove={moveInspectorResize}
+          onPointerUp={finishInspectorResize}
+          onPointerCancel={endInspectorResize}
+          onLostPointerCapture={endInspectorResize}
+          onKeyDown={resizeInspectorWithKey}
+          onDoubleClick={resetInspectorWidth}
+        />
+        <aside className="domain-inspector" style={{ width: inspectorWidth }}>
           {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
           {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
             <h2>{tr('方案概览')}</h2>
@@ -1299,6 +1368,31 @@ export default function DomainPage({
                   </option>
                 ))}
               </select>
+            </div>
+            <div className="domain-import-selection">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  ref={(input) => {
+                    if (input) input.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected
+                  }}
+                  disabled={papersLoading || paperError || readOnly || selectableImports.length === 0}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setImportSelected((selected) => {
+                      const next = new Set(selected)
+                      selectableImports.forEach((p) => {
+                        if (checked) next.add(p.id)
+                        else next.delete(p.id)
+                      })
+                      return next
+                    })
+                  }}
+                />
+                {tr('全选')}
+              </label>
+              <span>{tr('仅选择当前筛选结果中可导入的论文')}</span>
             </div>
             <div className="domain-import-list">
               {papersLoading ? (

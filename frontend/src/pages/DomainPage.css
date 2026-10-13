@@ -100,31 +100,45 @@
   background: #7477f5;
   color: white;
 }
-.domain-tabs {
+.domain-selector {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 10px 26px;
   align-items: center;
   border-bottom: 1px solid var(--domain-border);
-  overflow: auto;
   flex-shrink: 0;
 }
-.domain-tabs button {
-  white-space: nowrap;
+.domain-selector-field {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
   color: var(--domain-muted);
-  padding: 8px 14px;
 }
-.domain-tabs button[aria-selected='true'] {
-  background: rgba(99, 102, 241, 0.14);
-  color: var(--color-indigo-300, #a5b4fc);
+.domain-selector-field > span {
+  flex-shrink: 0;
 }
-.domain-tabs button span {
-  font-size: 10px;
-  opacity: 0.65;
-  padding-left: 5px;
+.domain-selector-field select {
+  width: 260px;
+  min-width: 0;
+  color: var(--color-slate-200, #e2e8f0);
+  cursor: pointer;
 }
-.domain-tabs .domain-new-tab {
+.domain-selector .domain-new-board {
+  flex-shrink: 0;
   padding: 8px;
+}
+.domain-imported-count {
+  margin-left: 8px;
+  padding: 5px 10px;
+  border: 1px solid var(--domain-border);
+  border-radius: 6px;
+  color: var(--color-slate-400, #94a3b8);
+  background: var(--domain-panel);
+  font-size: 12px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .domain-body {
   display: flex;
@@ -189,6 +203,20 @@
   font-size: 11px;
   letter-spacing: 0.05em;
   color: var(--color-slate-400, #94a3b8);
+}
+.domain-paper-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.domain-page .domain-review-jump {
+  width: 25px;
+  height: 25px;
+  padding: 3px;
+  border: 1px solid var(--domain-border);
+  border-radius: 6px;
+  color: var(--color-indigo-300, #a5b4fc);
+  background: rgba(99, 102, 241, 0.08);
 }
 .domain-page .domain-review-plus {
   border: 1px solid #34d39955;
@@ -442,7 +470,8 @@
   font-size: 12px;
 }
 .domain-inspector {
-  width: 250px;
+  min-width: 0;
+  box-sizing: border-box;
   flex-shrink: 0;
   padding: 20px 18px;
   border-left: 1px solid var(--domain-border);
@@ -666,6 +695,28 @@
 .domain-import-filters input {
   flex: 1;
 }
+.domain-import-selection {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0 10px 12px;
+  border-bottom: 1px solid var(--domain-border);
+  font-size: 12px;
+}
+.domain-import-selection label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+}
+.domain-import-selection input {
+  accent-color: var(--color-indigo-400, #818cf8);
+}
+.domain-import-selection span {
+  color: var(--domain-muted);
+  font-size: 11px;
+}
 .domain-import-list {
   overflow: auto;
   min-height: 150px;
@@ -720,7 +771,6 @@
 }
 @media (max-width: 1000px) {
   .domain-inspector {
-    width: 205px;
     padding: 15px 12px;
   }
   .domain-header {
@@ -733,7 +783,7 @@
   .domain-save {
     font-size: 10px;
   }
-  .domain-tabs {
+  .domain-selector {
     padding: 8px 16px;
   }
 }
@@ -761,3 +811,32 @@
 .domain-page .domain-evidence-reference { padding: 2px 6px; font-size: 11px; color: var(--color-indigo-300, #a5b4fc); background: #6366f112; }
 .domain-evidence-uses { color: var(--color-indigo-300, #a5b4fc); font-size: 11px; }
 .domain-edge-evidence .domain-analysis-scope { border: 0; padding: 0; color: var(--domain-muted); font-size: 11px; }
+
+.domain-pane-divider {
+  flex: 0 0 8px;
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  background: var(--domain-panel);
+  z-index: 2;
+}
+.domain-pane-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: var(--domain-border);
+}
+.domain-pane-divider:hover::after,
+.domain-pane-divider:focus-visible::after,
+.domain-body.is-resizing .domain-pane-divider::after {
+  background: var(--color-indigo-400, #818cf8);
+}
+.domain-pane-divider:focus-visible {
+  outline: 2px solid var(--color-indigo-400, #818cf8);
+  outline-offset: -2px;
+}
+.domain-body.is-resizing, .domain-body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
