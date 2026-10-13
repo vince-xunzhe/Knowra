@@ -100,30 +100,32 @@
   background: #7477f5;
   color: white;
 }
-.domain-tabs {
+.domain-selector {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   padding: 10px 26px;
   align-items: center;
   border-bottom: 1px solid var(--domain-border);
-  overflow: auto;
   flex-shrink: 0;
 }
-.domain-tabs button {
-  white-space: nowrap;
+.domain-selector-field {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
   color: var(--domain-muted);
-  padding: 8px 14px;
 }
-.domain-tabs button[aria-selected='true'] {
-  background: rgba(99, 102, 241, 0.14);
-  color: var(--color-indigo-300, #a5b4fc);
+.domain-selector-field > span {
+  flex-shrink: 0;
 }
-.domain-tabs button span {
-  font-size: 10px;
-  opacity: 0.65;
-  padding-left: 5px;
+.domain-selector-field select {
+  width: 260px;
+  min-width: 0;
+  color: var(--color-slate-200, #e2e8f0);
+  cursor: pointer;
 }
-.domain-tabs .domain-new-tab {
+.domain-selector .domain-new-board {
+  flex-shrink: 0;
   padding: 8px;
 }
 .domain-body {
@@ -755,7 +757,7 @@
   .domain-save {
     font-size: 10px;
   }
-  .domain-tabs {
+  .domain-selector {
     padding: 8px 16px;
   }
 }

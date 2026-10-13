@@ -719,15 +719,24 @@ export default function DomainPage({
           {tr('导入论文')}
         </button>
       </header>
-      <div className="domain-tabs" role="tablist" aria-label={tr('领域')}>
-        {state?.boards.map((b) => (
-          <button key={b.id} role="tab" aria-selected={b.id === board?.id} onClick={() => selectBoard(b.id)}>
-            {b.name}
-            <span>{b.nodes.filter((n) => n.kind === 'paper').length}</span>
-          </button>
-        ))}
+      <div className="domain-selector">
+        <label className="domain-selector-field">
+          <span>{tr('领域')}</span>
+          <select
+            value={board?.id ?? ''}
+            disabled={!state?.boards.length}
+            onChange={(event) => selectBoard(event.target.value)}
+          >
+            {!state?.boards.length && <option value="">{state ? '—' : tr('加载中…')}</option>}
+            {state?.boards.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name} · {b.nodes.filter((n) => n.kind === 'paper').length}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
-          className="domain-new-tab"
+          className="domain-new-board"
           aria-label={tr('新建领域')}
           disabled={!state || agent.busy || !agent.ready}
           onClick={() => {

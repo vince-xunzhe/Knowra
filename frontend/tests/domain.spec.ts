@@ -120,7 +120,7 @@ async function setup(page: Page, inherited = false) {
   })
   await page.goto('/')
   await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
-  await expect(page.getByRole('tab', { name: 'LLM' })).toBeVisible()
+  await expect(page.getByRole('combobox', { name: '领域', exact: true })).toHaveValue('llm')
   return {
     snapshot: () => state,
     preview: () => {
@@ -390,7 +390,7 @@ test('domain management, empty sections, independent text and screenshots', asyn
   await page.screenshot({ path: 'test-results/domain-light.png', fullPage: true, animations: 'disabled' })
   page.on('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: '删除领域', exact: true }).click()
-  await expect(page.getByRole('tab', { name: 'Vision research' })).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: '领域', exact: true }).getByRole('option', { name: /Vision research/ })).toHaveCount(0)
 })
 
 test('editable connection, marquee, group resize, search and independent domains', async ({ page }) => {
@@ -432,11 +432,11 @@ test('editable connection, marquee, group resize, search and independent domains
   await page.locator('.domain-search-results').getByRole('button').click()
   await expect(cards.first()).toHaveAttribute('data-selected', 'true')
   await page.getByRole('textbox', { name: '卡片备注', exact: true }).fill('Independent domain note')
-  await page.getByRole('tab', { name: '三维重建' }).click()
+  await page.getByRole('combobox', { name: '领域', exact: true }).selectOption('3d')
   await importPaper(page)
   await expect(cards).toHaveCount(1)
   await expect(cards.first()).not.toContainText('Independent domain note')
-  await page.getByRole('tab', { name: 'LLM' }).click()
+  await page.getByRole('combobox', { name: '领域', exact: true }).selectOption('llm')
   await expect(cards).toHaveCount(2)
   await expect(cards.first()).toContainText('Independent domain note')
   await page.getByRole('button', { name: '适应画布', exact: true }).click()
@@ -471,9 +471,11 @@ test('navigation order and inherited system categories preserve edits on taxonom
   const labels = (await page.getByRole('navigation').getByRole('button').allTextContents()).map((label) => label.trim())
   expect(labels.indexOf('索骥')).toBe(labels.indexOf('推荐') - 1)
   expect(labels.indexOf('索骥')).toBeGreaterThan(labels.indexOf('回顾'))
-  await expect(page.getByRole('tab')).toHaveCount(7)
+  const selector = page.getByRole('combobox', { name: '领域', exact: true })
+  await expect(selector.getByRole('option')).toHaveCount(7)
+  await expect(page.getByRole('tablist', { name: '领域' })).toHaveCount(0)
   for (const category of ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他']) {
-    await expect(page.getByRole('tab', { name: category, exact: false })).toBeVisible()
+    await expect(selector.getByRole('option', { name: `${category} · 0`, exact: true })).toHaveCount(1)
   }
   await expect(page.getByRole('button', { name: '重命名领域', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '删除领域', exact: true })).toBeDisabled()
@@ -483,7 +485,8 @@ test('navigation order and inherited system categories preserve edits on taxonom
   context.renameFirstCategory()
   await page.getByRole('navigation').getByRole('button', { name: '资料', exact: true }).click()
   await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
-  await expect(page.getByRole('tab', { name: 'Language models' })).toHaveAttribute('aria-selected', 'true')
+  await expect(selector).toHaveValue('llm')
+  await expect(selector.locator('option:checked')).toHaveText('Language models · 1')
   await expect(page.getByTestId('domain-canvas').getByText(reviews[0].title, { exact: true })).toBeVisible()
   expect(context.snapshot().boards[0].nodes).toEqual(nodes)
   expect(context.errors).toEqual([])
@@ -509,10 +512,10 @@ test('agent generation is readonly, permits browsing and other categories, cance
   await expect(page.getByRole('textbox', { name: '卡片备注', exact: true })).toBeDisabled()
   await card.locator('.domain-review-plus').click()
   await expect(page.locator('.domain-popover')).toBeVisible()
-  await page.getByRole('tab', { name: '三维重建' }).click()
+  await page.getByRole('combobox', { name: '领域', exact: true }).selectOption('3d')
   await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
   await page.getByRole('button', { name: '添加独立文本' }).click()
-  await page.getByRole('tab', { name: 'LLM' }).click()
+  await page.getByRole('combobox', { name: '领域', exact: true }).selectOption('llm')
   await page.getByRole('button', { name: '取消生成' }).click()
   await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
   await expect.poll(() => context.snapshot().boards[1].nodes.length).toBe(1)
