@@ -364,6 +364,51 @@ test('paper card shortcut opens the correct full review during generation and re
   expect(context.errors).toEqual([])
 })
 
+test('review navigation reveals the current paper without interrupting manual list browsing', async ({ page }) => {
+  const context = await setup(page)
+  const target = reviews[1]
+  const paperList = Array.from({ length: 30 }, (_, i) => ({
+    id: `earlier-${i}`, title: `Earlier language model ${i}`, filename: `earlier-${i}.pdf`,
+    processed: true, paper_category: 'LLM', paper_team: 'A team', authors: [], year: 2020,
+  }))
+  await page.route('**/api/papers', route => route.fulfill({ json: [
+    ...paperList,
+    { ...target, processed: true, paper_category: '世界模型', paper_team: 'Z team', authors: [], filename: 'target.pdf' },
+  ] }))
+  await importPaper(page, target.title)
+  await page.getByRole('button', { name: `打开完整回顾：${target.title}`, exact: true }).click()
+  await expect(page.getByRole('heading', { name: target.title, exact: true })).toBeVisible()
+  const list = page.getByTestId('review-paper-list')
+  const current = list.locator('[aria-current="page"]')
+  const expectCurrentInView = async () => {
+    await expect(current).toContainText(target.title)
+    await expect.poll(async () => current.evaluate(el => {
+      const row = el.getBoundingClientRect()
+      const viewport = el.closest('[data-testid="review-paper-list"]')!.getBoundingClientRect()
+      return row.top >= viewport.top && row.bottom <= viewport.bottom
+    })).toBe(true)
+  }
+  await expectCurrentInView()
+  await expect.poll(() => list.evaluate(el => el.scrollTop)).toBeGreaterThan(0)
+  // An explicit collapse remains respected; reopening the navigation reveals it again.
+  await list.getByRole('button', { name: '世界模型 1', exact: true }).click()
+  await expect(current).toHaveCount(0)
+  await page.getByRole('button', { name: '收起论文导航', exact: true }).click()
+  await page.getByRole('button', { name: '展开论文导航', exact: true }).click()
+  await expectCurrentInView()
+  await page.getByRole('button', { name: '按团队分组', exact: true }).click()
+  await expectCurrentInView()
+  await expect(list.getByRole('button', { name: 'Z team 1', exact: true })).toHaveAttribute('aria-expanded', 'true')
+  await list.evaluate(el => { el.scrollTop = 0 })
+  await page.getByRole('textbox', { name: '搜索标题、作者、文件名' }).fill('Earlier language')
+  await expect(current).toHaveCount(0)
+  await expect(list.getByText('Earlier language model 0', { exact: true })).toBeVisible()
+  await page.getByRole('textbox', { name: '搜索标题、作者、文件名' }).clear()
+  await expectCurrentInView()
+  await page.screenshot({ path: '/tmp/knowra-review-current-paper.png', fullPage: true })
+  expect(context.errors).toEqual([])
+})
+
 test('connections, groups, locking, removal and undo preserve references', async ({ page }) => {
   const context = await setup(page)
   await importPaper(page)
