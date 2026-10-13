@@ -268,6 +268,50 @@ test('clearing all canvas elements requires confirmation from button and keyboar
   expect(context.errors).toEqual([])
 })
 
+test('research workspace resizes without editing the canvas and persists across reload', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  const divider = page.getByRole('separator', { name: '调整研究工作区宽度' })
+  const panel = page.locator('.domain-inspector')
+  const canvas = page.getByTestId('domain-canvas')
+  const startWidth = (await panel.boundingBox())!.width
+  const startCanvasWidth = (await canvas.boundingBox())!.width
+  const box = (await divider.boundingBox())!
+  await page.mouse.move(box.x + box.width / 2, box.y + 100)
+  await page.mouse.down()
+  await page.mouse.move(box.x + box.width / 2 - 220, box.y + 100, { steps: 6 })
+  await page.mouse.up()
+  await expect(panel).toHaveCSS('width', `${startWidth + 220}px`)
+  expect((await canvas.boundingBox())!.width).toBeCloseTo(startCanvasWidth - 220, 0)
+  expect(context.snapshot().boards[0]).toEqual(before)
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('knowra.domain.inspectorWidth'))).toBe(String(startWidth + 220))
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
+  await expect(panel).toHaveCSS('width', `${startWidth + 220}px`)
+  await divider.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(panel).toHaveCSS('width', `${startWidth + 200}px`)
+  await page.keyboard.press('Home')
+  await expect(panel).toHaveCSS('width', '200px')
+  await page.keyboard.press('End')
+  expect((await canvas.boundingBox())!.width).toBeGreaterThanOrEqual(320)
+  await page.setViewportSize({ width: 900, height: 1000 })
+  await expect.poll(async () => (await panel.boundingBox())!.width).toBeLessThan(600)
+  expect((await canvas.boundingBox())!.width).toBeGreaterThanOrEqual(320)
+  await divider.dblclick()
+  await expect(panel).toHaveCSS('width', '250px')
+  await page.setViewportSize({ width: 1440, height: 1000 })
+  await divider.focus()
+  await page.keyboard.press('ArrowLeft')
+  await page.screenshot({ path: '/tmp/knowra-domain-resizable-workspace.png', fullPage: true })
+  expect(context.snapshot().boards[0]).toEqual(before)
+  expect(context.errors).toEqual([])
+})
+
 test('review popover follows card and viewport, shows review source and restores on return', async ({
   page,
 }) => {

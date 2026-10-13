@@ -444,7 +444,8 @@
   font-size: 12px;
 }
 .domain-inspector {
-  width: 250px;
+  min-width: 0;
+  box-sizing: border-box;
   flex-shrink: 0;
   padding: 20px 18px;
   border-left: 1px solid var(--domain-border);
@@ -744,7 +745,6 @@
 }
 @media (max-width: 1000px) {
   .domain-inspector {
-    width: 205px;
     padding: 15px 12px;
   }
   .domain-header {
@@ -785,3 +785,32 @@
 .domain-page .domain-evidence-reference { padding: 2px 6px; font-size: 11px; color: var(--color-indigo-300, #a5b4fc); background: #6366f112; }
 .domain-evidence-uses { color: var(--color-indigo-300, #a5b4fc); font-size: 11px; }
 .domain-edge-evidence .domain-analysis-scope { border: 0; padding: 0; color: var(--domain-muted); font-size: 11px; }
+
+.domain-pane-divider {
+  flex: 0 0 8px;
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  background: var(--domain-panel);
+  z-index: 2;
+}
+.domain-pane-divider::after {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  background: var(--domain-border);
+}
+.domain-pane-divider:hover::after,
+.domain-pane-divider:focus-visible::after,
+.domain-body.is-resizing .domain-pane-divider::after {
+  background: var(--color-indigo-400, #818cf8);
+}
+.domain-pane-divider:focus-visible {
+  outline: 2px solid var(--color-indigo-400, #818cf8);
+  outline-offset: -2px;
+}
+.domain-body.is-resizing, .domain-body.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}

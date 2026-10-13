@@ -40,6 +40,7 @@ import {
 } from '../api/domains'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
+import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
 import DomainEdgeEvidence from './DomainEdgeEvidence'
 import './DomainPage.css'
 
@@ -123,6 +124,12 @@ export default function DomainPage({
   onOpenReview: (paperId: string) => void
 }) {
   useLocale()
+  const {
+    bodyRef: domainBodyRef, width: inspectorWidth, min: inspectorMin, max: inspectorMax,
+    resizing: inspectorResizing, onPointerDown: beginInspectorResize,
+    onPointerMove: moveInspectorResize, onPointerUp: finishInspectorResize,
+    endDrag: endInspectorResize, reset: resetInspectorWidth, onKeyDown: resizeInspectorWithKey,
+  } = useDomainInspectorResize()
   const workspace = useDomainWorkspace()
   const agent = useDomainAgent()
   const refreshWorkspace = workspace.refresh
@@ -754,7 +761,7 @@ export default function DomainPage({
         </div>
       )}
       {agent.error && <div className="domain-error" role="alert">{agent.error}<button onClick={() => void agent.refresh()}>{tr('重试')}</button></div>}
-      <div className="domain-body">
+      <div ref={domainBodyRef} className={`domain-body${inspectorResizing ? ' is-resizing' : ''}`}>
         <div
           ref={canvas}
           data-testid="domain-canvas"
@@ -1077,7 +1084,25 @@ export default function DomainPage({
             </div>
           )}
         </div>
-        <aside className="domain-inspector">
+        <div
+          className="domain-pane-divider"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={tr('调整研究工作区宽度')}
+          aria-valuemin={inspectorMin}
+          aria-valuemax={inspectorMax}
+          aria-valuenow={Math.round(inspectorWidth)}
+          tabIndex={0}
+          title={tr('拖动调整宽度，双击恢复默认')}
+          onPointerDown={beginInspectorResize}
+          onPointerMove={moveInspectorResize}
+          onPointerUp={finishInspectorResize}
+          onPointerCancel={endInspectorResize}
+          onLostPointerCapture={endInspectorResize}
+          onKeyDown={resizeInspectorWithKey}
+          onDoubleClick={resetInspectorWidth}
+        />
+        <aside className="domain-inspector" style={{ width: inspectorWidth }}>
           {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
           {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
             <h2>{tr('方案概览')}</h2>
