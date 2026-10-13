@@ -257,6 +257,13 @@ export default function DomainPage({
   const removeSelection = () => {
     if (!board || readOnly) return
     const removed = new Set(board.nodes.filter((n) => selected.has(n.id) && !isLocked(n)).map((n) => n.id))
+    if (
+      removed.size > 0 &&
+      removed.size === board.nodes.length &&
+      !window.confirm(tr('确认删除当前画布的全部元素（共 {0} 个，含连线）？论文库中的论文不会被删除，删除后可通过撤销恢复。', {
+        0: board.nodes.length + board.edges.length,
+      }))
+    ) return
     patchBoard((b) => ({
       ...b,
       nodes: b.nodes

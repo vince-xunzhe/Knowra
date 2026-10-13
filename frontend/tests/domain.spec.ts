@@ -232,6 +232,42 @@ test('bulk import selects eligible filtered papers and preserves hidden selectio
   expect(context.errors).toEqual([])
 })
 
+test('clearing all canvas elements requires confirmation from button and keyboard', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  const cards = page.locator('[data-kind="paper"]')
+  await cards.first().getByRole('button', { name: '连接论文', exact: true }).click()
+  await cards.nth(1).getByRole('button', { name: '连接论文', exact: true }).click()
+  await cards.first().getByRole('heading').click()
+  await cards.nth(1).getByRole('heading').click({ modifiers: ['Shift'] })
+  await expect.poll(() => context.snapshot().boards[0].edges.length).toBe(1)
+  const before = structuredClone(context.snapshot().boards[0])
+  page.once('dialog', async dialog => {
+    expect(dialog.type()).toBe('confirm')
+    expect(dialog.message()).toContain('全部元素（共 3 个，含连线）')
+    await dialog.dismiss()
+  })
+  await page.getByRole('button', { name: '移除选中元素', exact: true }).click()
+  await expect(cards).toHaveCount(2)
+  await expect(page.locator('[data-kind="paper"][data-selected="true"]')).toHaveCount(2)
+  expect(context.snapshot().boards[0]).toEqual(before)
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toContain('论文库中的论文不会被删除')
+    await dialog.accept()
+  })
+  await page.keyboard.press('Delete')
+  await expect(cards).toHaveCount(0)
+  await expect(page.locator('[data-edge-id]')).toHaveCount(0)
+  await expect.poll(() => context.snapshot().boards[0].nodes.length).toBe(0)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(cards).toHaveCount(2)
+  await expect(page.locator('[data-edge-id]')).toHaveCount(1)
+  await expect.poll(() => context.snapshot().boards[0].nodes).toEqual(before.nodes)
+  await expect.poll(() => context.snapshot().boards[0].edges).toEqual(before.edges)
+  expect(context.errors).toEqual([])
+})
+
 test('review popover follows card and viewport, shows review source and restores on return', async ({
   page,
 }) => {

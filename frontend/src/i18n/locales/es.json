@@ -1,4 +1,5 @@
 {
+  "确认删除当前画布的全部元素（共 {0} 个，含连线）？论文库中的论文不会被删除，删除后可通过撤销恢复。": "¿Eliminar todos los elementos de este lienzo ({0} en total, incluidas las conexiones)? Los artículos de la biblioteca se conservarán. Puedes deshacer esta eliminación.",
   "全选": "Seleccionar todo",
   "仅选择当前筛选结果中可导入的论文": "Selecciona los artículos importables de los resultados filtrados actuales",
   "连线解读": "Análisis de la conexión",
