@@ -338,6 +338,32 @@ test('review popover follows card and viewport, shows review source and restores
   expect(context.errors).toEqual([])
 })
 
+test('paper card shortcut opens the correct full review during generation and restores the canvas', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  const card = page.locator('[data-kind="paper"]').filter({ hasText: reviews[1].title })
+  await page.getByRole('button', { name: '缩小', exact: true }).click()
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  const style = await card.getAttribute('style')
+  const jump = card.getByRole('button', { name: `打开完整回顾：${reviews[1].title}`, exact: true })
+  await expect(jump).toBeEnabled()
+  const requestedPaper = page.waitForRequest(request => new URL(request.url()).pathname === '/api/papers/paper-b')
+  await jump.click()
+  await requestedPaper
+  await expect(page.getByRole('heading', { name: reviews[1].title, exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '返回索骥' }).click()
+  await expect(card).toHaveAttribute('style', style!)
+  await expect(card).toHaveAttribute('data-selected', 'true')
+  await expect(page.getByTestId('domain-review-popover')).toHaveCount(0)
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  expect(context.snapshot().boards[0]).toEqual(before)
+  await page.screenshot({ path: '/tmp/knowra-domain-review-shortcut.png', fullPage: true })
+  expect(context.errors).toEqual([])
+})
+
 test('connections, groups, locking, removal and undo preserve references', async ({ page }) => {
   const context = await setup(page)
   await importPaper(page)

@@ -204,6 +204,20 @@
   letter-spacing: 0.05em;
   color: var(--color-slate-400, #94a3b8);
 }
+.domain-paper-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.domain-page .domain-review-jump {
+  width: 25px;
+  height: 25px;
+  padding: 3px;
+  border: 1px solid var(--domain-border);
+  border-radius: 6px;
+  color: var(--color-indigo-300, #a5b4fc);
+  background: rgba(99, 102, 241, 0.08);
+}
 .domain-page .domain-review-plus {
   border: 1px solid #34d39955;
   background: #10b9811c;

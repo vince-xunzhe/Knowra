@@ -5,6 +5,7 @@ import {
   ArrowUp,
   Check,
   Download,
+  ExternalLink,
   Frame,
   Hand,
   Link2,
@@ -889,21 +890,42 @@ export default function DomainPage({
                         <>
                           <div className="domain-paper-head">
                             <span>{paperMap.get(n.paperId!)?.year || tr('年份未知')}</span>
-                            <button
-                              className="domain-review-plus"
-                              aria-label={tr('查看论文回顾：{0}', {
-                                0: paperMap.get(n.paperId!)?.title ?? '',
-                              })}
-                              aria-expanded={popover === n.id}
-                              onClick={() => {
-                                setPopover(popover === n.id ? null : n.id)
-                                setSelected(new Set([n.id]))
-                                setSelectedEdge(null)
-                                setTab('core_contribution')
-                              }}
-                            >
-                              <Plus size={17} />
-                            </button>
+                            <div className="domain-paper-actions">
+                              <button
+                                className="domain-review-jump"
+                                title={tr('打开完整回顾')}
+                                aria-label={tr('打开完整回顾：{0}', { 0: paperMap.get(n.paperId!)?.title ?? '' })}
+                                disabled={!n.paperId || !paperMap.has(n.paperId)}
+                                onKeyDown={(event) => {
+                                  if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
+                                }}
+                                onClick={() => {
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setLinkSource(null)
+                                  setPopover(null)
+                                  void workspace.flush()
+                                  onOpenReview(n.paperId!)
+                                }}
+                              >
+                                <ExternalLink size={14} />
+                              </button>
+                              <button
+                                className="domain-review-plus"
+                                aria-label={tr('查看论文回顾：{0}', {
+                                  0: paperMap.get(n.paperId!)?.title ?? '',
+                                })}
+                                aria-expanded={popover === n.id}
+                                onClick={() => {
+                                  setPopover(popover === n.id ? null : n.id)
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setTab('core_contribution')
+                                }}
+                              >
+                                <Plus size={17} />
+                              </button>
+                            </div>
                           </div>
                           <h3>{paperMap.get(n.paperId!)?.title ?? tr('论文不可用')}</h3>
                           {paperMap.get(n.paperId!)?.incomplete && (
