@@ -266,7 +266,12 @@ def scan(ctx, payload):
         return papers.scan_papers(db)
 
 
-HANDLERS = {'scan': scan, 'papers': process_papers, 'compile': compile_items, 'promotion': promote, 'lint': lint, 'pipeline': pipeline}
+def domain(ctx, payload):
+    from services.domain_agent import generate
+    return generate(ctx, payload)
+
+
+HANDLERS = {'domain': domain, 'scan': scan, 'papers': process_papers, 'compile': compile_items, 'promotion': promote, 'lint': lint, 'pipeline': pipeline}
 
 
 def execute(queue, job):
@@ -283,7 +288,7 @@ def execute(queue, job):
     monitor.start()
     try:
         result = HANDLERS[job['kind']](ctx, job['payload'])
-        queue.update(job['job_id'], status='completed', result=result, error=None)
+        queue.update(job['job_id'], status='cancelled' if job['kind'] == 'domain' and result.get('cancelled') else 'completed', result=result, error=None)
     except Exception as exc:
         import traceback
         traceback.print_exc()

@@ -73,6 +73,8 @@ def _normalize_supported_tasks(model: dict[str, Any]) -> list[str]:
         if task_id and task_id in TASK_IDS and task_id not in seen:
             tasks.append(task_id)
             seen.add(task_id)
+    if model.get("model_kind") != "embedding" and "domain_connect" not in tasks:
+        tasks.append("domain_connect")
     return tasks
 
 
@@ -186,6 +188,9 @@ def ensure_model_gateway_config(cfg: dict[str, Any]) -> dict[str, Any]:
             raw_bindings.get(task_id),
             bindings[task_id]["model_id"],
         )
+
+    if "domain_connect" not in raw_bindings:
+        bindings["domain_connect"] = deepcopy(bindings["paper_extract"])
 
     gateway = {
         "providers": providers,

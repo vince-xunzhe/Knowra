@@ -55,12 +55,45 @@ class CanvasNode(StrictModel):
         return self
 
 
+class EdgeEvidence(StrictModel):
+    paperId: str
+    source: Literal["review", "wiki", "pdf", "text"]
+    locator: str = Field(max_length=500)
+    page: Optional[int] = Field(default=None, ge=1)
+    quote: str = Field(min_length=1, max_length=2400)
+
+
+class CitationFinding(StrictModel):
+    aspect: Literal["purpose", "assessment", "comparison"]
+    text: str = Field(min_length=1, max_length=1500)
+    evidence: list[EdgeEvidence] = Field(min_length=1, max_length=4)
+
+
+class CitationDiscussion(StrictModel):
+    citingPaperId: str
+    citedPaperId: str
+    status: Literal["analyzed", "reference_only", "not_found", "unresolved"]
+    contextsFound: int = Field(ge=0)
+    contextsUsed: int = Field(ge=0)
+    truncated: bool = False
+    findings: list[CitationFinding] = Field(default_factory=list, max_length=6)
+
+
+class EdgeAnalysis(StrictModel):
+    relation: Literal["builds_on", "improves", "inspired_by", "compares", "cites"]
+    certainty: Literal["explicit", "inferred"]
+    reason: str = Field(min_length=1, max_length=3000)
+    evidence: list[EdgeEvidence] = Field(min_length=1, max_length=8)
+    discussion: Optional[CitationDiscussion] = None
+
+
 class CanvasEdge(StrictModel):
     id: str = Field(min_length=1, max_length=100)
     source: str
     target: str
     label: str = Field(default="", max_length=2000)
     locked: bool = False
+    analysis: Optional[EdgeAnalysis] = None
 
 
 class Board(StrictModel):
@@ -172,7 +205,7 @@ def domain_papers(db: Annotated[Session, Depends(get_db)]):
     return [review_paper(p) for p in papers]
 
 
-def workspace(db: Session) -> DomainWorkspace:
+def workspace(db: Session, commit: bool = True) -> DomainWorkspace:
     row = db.get(DomainWorkspace, 1)
     if row is None:
         initial = WorkspaceState.model_validate(
@@ -183,7 +216,7 @@ def workspace(db: Session) -> DomainWorkspace:
         row = DomainWorkspace(id=1, revision=1, state=initial.model_dump(), admitted={})
         db.add(row)
         try:
-            db.commit()
+            db.commit() if commit else db.flush()
         except IntegrityError:
             db.rollback()
             row = db.get(DomainWorkspace, 1)
@@ -202,7 +235,7 @@ def workspace(db: Session) -> DomainWorkspace:
             )
         )
         if updated:
-            db.commit()
+            db.commit() if commit else db.flush()
         else:
             db.rollback()
         db.expire_all()
@@ -222,7 +255,11 @@ def get_workspace(db: Annotated[Session, Depends(get_db)]):
 
 @router.put("")
 def save_workspace(body: SaveWorkspace, db: Annotated[Session, Depends(get_db)]):
-    row = workspace(db)
+    from services.domain_agent_state import begin_write, guard_readonly
+
+    begin_write(db)
+    row = workspace(db, commit=False)
+    guard_readonly(db, row.state, body.state.model_dump())
     if body.revision != row.revision:
         raise HTTPException(
             409, "The canvas changed in another window. Reload before saving."

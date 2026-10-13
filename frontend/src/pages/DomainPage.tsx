@@ -15,6 +15,7 @@ import {
   Plus,
   Redo2,
   Search,
+  Sparkles,
   Trash2,
   Type,
   Undo2,
@@ -26,6 +27,9 @@ import {
 import { t as tr } from '../i18n/catalog'
 import { useLocale } from '../i18n/preferences'
 import {
+  applyDomainRun,
+  discardDomainRun,
+  startDomainRun,
   loadDomainPapers,
   newNode,
   freePosition,
@@ -35,6 +39,8 @@ import {
   type ReviewField,
 } from '../api/domains'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
+import { useDomainAgent } from '../hooks/useDomainAgent'
+import DomainEdgeEvidence from './DomainEdgeEvidence'
 import './DomainPage.css'
 
 const FIELDS: [ReviewField, string][] = [
@@ -58,12 +64,14 @@ type Gesture = {
 function CanvasItem({
   node,
   selected,
+  readOnly,
   children,
   onStart,
   onSize,
 }: {
   node: CanvasNode
   selected: boolean
+  readOnly: boolean
   children: React.ReactNode
   onStart: (e: ReactPointerEvent, node: CanvasNode, resize?: boolean) => void
   onSize: (id: string, width: number, height: number) => void
@@ -98,6 +106,7 @@ function CanvasItem({
       {node.kind === 'group' && !node.locked && (
         <button
           className="domain-resize"
+          disabled={readOnly}
           aria-label={tr('调整分组大小')}
           onPointerDown={(e) => onStart(e, node, true)}
         />
@@ -115,10 +124,20 @@ export default function DomainPage({
 }) {
   useLocale()
   const workspace = useDomainWorkspace()
+  const agent = useDomainAgent()
   const refreshWorkspace = workspace.refresh
   const { state, update, checkpoint } = workspace
   const boardIndex = state?.boards.findIndex((b) => b.id === state.activeId) ?? -1
-  const board = state?.boards[boardIndex] ?? null
+  const liveBoard = state?.boards[boardIndex] ?? null
+  const run = agent.runs.find(r => r.boardId === liveBoard?.id)
+  const readOnly = !agent.ready || agent.busy || run?.status === 'pending' || run?.status === 'preview'
+  const board = liveBoard && run?.status === 'preview' && run.proposal
+    ? { ...run.proposal.board, name: liveBoard.name, category: liveBoard.category, viewport: liveBoard.viewport }
+    : liveBoard
+  const protect = workspace.protect
+  useEffect(() => {
+    protect(agent.ready ? agent.runs.filter(r => r.status === 'pending' || r.status === 'preview').map(r => r.boardId) : null)
+  }, [agent.ready, agent.runs, protect])
   const loaded = state !== null
   const [papers, setPapers] = useState<DomainPaper[]>([])
   const [paperError, setPaperError] = useState(false)
@@ -236,7 +255,7 @@ export default function DomainPage({
   const isLocked = (n: CanvasNode, b = board) =>
     n.locked || !!b?.nodes.find((g) => g.id === n.groupId)?.locked
   const removeSelection = () => {
-    if (!board) return
+    if (!board || readOnly) return
     const removed = new Set(board.nodes.filter((n) => selected.has(n.id) && !isLocked(n)).map((n) => n.id))
     patchBoard((b) => ({
       ...b,
@@ -270,7 +289,7 @@ export default function DomainPage({
         setSelected(new Set())
         setSelectedEdge(null)
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+      if (!readOnly && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault()
         if (event.shiftKey) workspace.redo()
         else workspace.undo()
@@ -354,7 +373,7 @@ export default function DomainPage({
       return
     }
     if (e.button !== 0) return
-    if (linkSource && node.kind === 'paper') {
+    if (!readOnly && linkSource && node.kind === 'paper') {
       connect(node.id)
       return
     }
@@ -370,7 +389,7 @@ export default function DomainPage({
       else next.add(node.id)
     }
     setSelected(next)
-    if (isLocked(node)) return
+    if (readOnly || isLocked(node)) return
     const ids = new Set(board.nodes.filter((n) => next.has(n.id) && !isLocked(n)).map((n) => n.id))
     for (const n of board.nodes) if (n.groupId && ids.has(n.groupId) && !isLocked(n)) ids.add(n.id)
     checkpoint()
@@ -379,7 +398,7 @@ export default function DomainPage({
   }
   const movePointer = (e: ReactPointerEvent) => {
     const g = gesture.current
-    if (!g) return
+    if (!g || (readOnly && (g.mode === 'move' || g.mode === 'resize'))) return
     const end = localPoint(e),
       dx = end.x - g.start.x,
       dy = end.y - g.start.y
@@ -677,7 +696,7 @@ export default function DomainPage({
         </div>
         <button
           className="domain-primary"
-          disabled={!board}
+          disabled={!board || readOnly}
           onClick={() => {
             setImportOpen(true)
             setImportSelected(new Set())
@@ -700,7 +719,7 @@ export default function DomainPage({
         <button
           className="domain-new-tab"
           aria-label={tr('新建领域')}
-          disabled={!state}
+          disabled={!state || agent.busy || !agent.ready}
           onClick={() => {
             setNameDraft('')
             setNameDialog('new')
@@ -715,6 +734,7 @@ export default function DomainPage({
           <button onClick={() => void refreshPapers()}>{tr('重试')}</button>
         </div>
       )}
+      {agent.error && <div className="domain-error" role="alert">{agent.error}<button onClick={() => void agent.refresh()}>{tr('重试')}</button></div>}
       <div className="domain-body">
         <div
           ref={canvas}
@@ -775,10 +795,38 @@ export default function DomainPage({
                         <path className="domain-edge-hit" d={d} />
                         <path className="domain-edge-line" d={d} markerEnd="url(#domain-arrow)" />
                         {e.label && (
-                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 12} textAnchor="middle">
+                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 14 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
                           </text>
                         )}
+                        <g transform={`translate(${(sx + tx) / 2} ${(sy + ty) / 2}) scale(${1 / board.viewport.zoom})`}>
+                          <foreignObject x={-8} y={-8} width={16} height={16} className="domain-edge-lock-container">
+                            <button
+                              className="domain-edge-lock"
+                              aria-label={tr(e.locked ? '解锁连线' : '锁定连线')}
+                              title={tr(e.locked ? '解锁连线' : '锁定连线')}
+                              aria-pressed={!!e.locked}
+                              disabled={readOnly}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => {
+                                if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (readOnly) return
+                                setSelectedEdge(e.id)
+                                setSelected(new Set())
+                                setPopover(null)
+                                patchBoard((b) => ({
+                                  ...b,
+                                  edges: b.edges.map((item) => item.id === e.id ? { ...item, locked: !item.locked } : item),
+                                }))
+                              }}
+                            >
+                              {e.locked ? <LockKeyhole size={9} /> : <UnlockKeyhole size={9} />}
+                            </button>
+                          </foreignObject>
+                        </g>
                       </g>
                     )
                   })}
@@ -797,6 +845,7 @@ export default function DomainPage({
                       key={n.id}
                       node={n}
                       selected={selected.has(n.id)}
+                      readOnly={readOnly}
                       onStart={beginNode}
                       onSize={onSize}
                     >
@@ -834,6 +883,7 @@ export default function DomainPage({
                           <div className="domain-card-footer">
                             <button
                               aria-label={tr('连接论文')}
+                              disabled={readOnly}
                               className={linkSource === n.id ? 'connecting' : ''}
                               onClick={() => connect(n.id)}
                             >
@@ -881,6 +931,30 @@ export default function DomainPage({
               </button>
             </div>
           )}
+          <div className="domain-agent-bar" onPointerDown={e => e.stopPropagation()}>
+            {run?.status === 'pending' ? <>
+              <Loader2 size={16} className="spin" />
+              <span>{run.progress.label || tr('代连任务已排队')} · {tr('当前类别只读')}</span>
+              <button disabled={agent.busy} onClick={() => void agent.act(() => discardDomainRun(run.id))}>{tr('取消生成')}</button>
+            </> : run?.status === 'preview' ? <>
+              <span>{tr('代连方案预览')} · {tr('当前类别只读')}</span>
+              <button className="domain-primary" disabled={agent.busy} onClick={() => void agent.act(async () => {
+                await workspace.withSaved(async () => {
+                  const result = await applyDomainRun(run.id)
+                  workspace.install(result)
+                })
+                return { ...run, status: 'applied', proposal: null }
+              })}>{tr('应用方案')}</button>
+              <button disabled={agent.busy} onClick={() => void agent.act(() => discardDomainRun(run.id))}>{tr('放弃方案')}</button>
+            </> : <button className="domain-primary"
+              disabled={!board || readOnly || new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2}
+              onClick={() => {
+                if (!board) return
+                setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
+                void agent.act(() => workspace.withSaved(snapshot => startDomainRun(board.id, snapshot.revision,
+                  Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])))))
+              }}><Sparkles size={16} />{tr('agent代连')}</button>}
+          </div>
           {rubber && (
             <div
               className="domain-selection-rect"
@@ -908,18 +982,18 @@ export default function DomainPage({
               <Hand size={18} />
             </button>
             <hr />
-            <button aria-label={tr('添加独立文本')} disabled={!board} onClick={() => addElement('text')}>
+            <button aria-label={tr('添加独立文本')} disabled={!board || readOnly} onClick={() => addElement('text')}>
               <Type size={18} />
             </button>
-            <button aria-label={tr('创建分组')} disabled={!board} onClick={() => addElement('group')}>
+            <button aria-label={tr('创建分组')} disabled={!board || readOnly} onClick={() => addElement('group')}>
               <Frame size={18} />
             </button>
           </div>
           <div className="domain-view-tools" onPointerDown={(e) => e.stopPropagation()}>
-            <button aria-label={tr('撤销')} disabled={!workspace.history.undo} onClick={workspace.undo}>
+            <button aria-label={tr('撤销')} disabled={readOnly || !workspace.history.undo} onClick={workspace.undo}>
               <Undo2 size={16} />
             </button>
-            <button aria-label={tr('重做')} disabled={!workspace.history.redo} onClick={workspace.redo}>
+            <button aria-label={tr('重做')} disabled={readOnly || !workspace.history.redo} onClick={workspace.redo}>
               <Redo2 size={16} />
             </button>
             <span className="domain-tool-divider" />
@@ -985,6 +1059,16 @@ export default function DomainPage({
           )}
         </div>
         <aside className="domain-inspector">
+          {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
+          {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
+            <h2>{tr('方案概览')}</h2>
+            <p>{tr('新增 {0} 条 · 替换 {1} 条 · 保护 {2} 条', { 0: run.proposal.added, 1: run.proposal.removed, 2: run.proposal.protected })}</p>
+            <p>{tr('选中连线查看理由与证据；应用后可整体撤销。')}</p>
+            {run.proposal.warnings.length > 0 && <details><summary>{tr('材料提示')}</summary>{run.proposal.warnings.map((w, i) => <p key={i}>{paperMap.get(w.paperId)?.title}：{w.message}</p>)}</details>}
+            {run.proposal.unconnected.length > 0 && <details><summary>{tr('未连接论文')}</summary>{run.proposal.unconnected.map(p => <p key={p.paperId}>{p.title}</p>)}</details>}
+            {run.proposal.rejected > 0 && <p>{tr('已过滤 {0} 条无有效证据的建议', { 0: run.proposal.rejected })}</p>}
+          </section>}
+          {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={onOpenReview} />}
           <label className="domain-search">
             <Search size={15} />
             <input
@@ -1012,6 +1096,7 @@ export default function DomainPage({
                 ))}
             </div>
           )}
+          <fieldset disabled={readOnly} className="domain-edit-fields">
           <h2>
             {tr(
               one?.kind === 'group'
@@ -1121,19 +1206,6 @@ export default function DomainPage({
               </button>
             </>
           )}
-          {edge && (
-            <button
-              className="domain-inspector-action"
-              onClick={() =>
-                patchBoard((b) => ({
-                  ...b,
-                  edges: b.edges.map((e) => (e.id === edge.id ? { ...e, locked: !e.locked } : e)),
-                }))
-              }
-            >
-              {tr(edge.locked ? '解锁' : '锁定连线')}
-            </button>
-          )}
           {(selected.size > 0 || edge) && (
             <button className="domain-inspector-action domain-danger" onClick={removeSelection}>
               <Trash2 size={14} />
@@ -1186,6 +1258,7 @@ export default function DomainPage({
             </button>
             <p>{tr('仅保存在本机')}</p>
           </div>
+          </fieldset>
         </aside>
       </div>
       {importOpen && (

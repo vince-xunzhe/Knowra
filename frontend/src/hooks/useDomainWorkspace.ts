@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
-import { loadDomains, saveDomains, type DomainState } from '../api/domains'
+import { loadDomains, saveDomains, type DomainState, type DomainSnapshot, type DomainBoard } from '../api/domains'
 
 /** One mounted workspace owns the session history and serial save queue. */
 export function useDomainWorkspace() {
@@ -18,6 +18,19 @@ export function useDomainWorkspace() {
   const busy = useRef(false)
   const refreshing = useRef(false)
   const blocked = useRef(false)
+  const protectedBoards = useRef<Set<string> | null>(null)
+  const remoteBusy = useRef(false)
+  const protect = useCallback((ids: string[] | null) => {
+    protectedBoards.current = ids === null ? null : new Set(ids)
+  }, [])
+  const permits = useCallback((next: DomainState) => {
+    if (remoteBusy.current) return false
+    return current.current?.boards.every((board) => {
+      if (protectedBoards.current && !protectedBoards.current.has(board.id)) return true
+      const replacement = next.boards.find(b => b.id === board.id)
+      return replacement && JSON.stringify([board.nodes, board.edges]) === JSON.stringify([replacement.nodes, replacement.edges])
+    }) ?? true
+  }, [])
 
   const refreshHistory = useCallback(
     () => setHistory({ undo: past.current.length > 0, redo: future.current.length > 0 }),
@@ -66,30 +79,32 @@ export function useDomainWorkspace() {
     (fn: (s: DomainState) => DomainState, record = true) => {
       if (!current.current) return
       const next = fn(current.current)
-      if (next === current.current) return
+      if (next === current.current || !permits(next)) return
       if (record) checkpoint()
       apply(next)
     },
-    [apply, checkpoint],
+    [apply, checkpoint, permits],
   )
 
   const undo = useCallback(() => {
-    const previous = past.current.pop()
-    if (!previous || !current.current) return
+    const previous = past.current.at(-1)
+    if (!previous || !current.current || !permits(previous)) return
+    past.current.pop()
     future.current.push(current.current)
     apply(previous)
     refreshHistory()
-  }, [apply, refreshHistory])
+  }, [apply, refreshHistory, permits])
   const redo = useCallback(() => {
-    const next = future.current.pop()
-    if (!next || !current.current) return
+    const next = future.current.at(-1)
+    if (!next || !current.current || !permits(next)) return
+    future.current.pop()
     past.current.push(current.current)
     apply(next)
     refreshHistory()
-  }, [apply, refreshHistory])
+  }, [apply, refreshHistory, permits])
 
   const reload = useCallback(async () => {
-    if (busy.current) return
+    if (busy.current || remoteBusy.current) return
     if (timer.current) clearTimeout(timer.current)
     setStatus('loading')
     try {
@@ -121,14 +136,14 @@ export function useDomainWorkspace() {
     const snapshot = current.current
     const version = revision.current
     if (
-      !snapshot || snapshot !== saved.current || busy.current || blocked.current || refreshing.current
+      !snapshot || snapshot !== saved.current || busy.current || remoteBusy.current || blocked.current || refreshing.current
     ) return
     refreshing.current = true
     try {
       const result = await loadDomains()
       // A taxonomy refresh must never replace edits made while the request ran.
       if (
-        current.current !== snapshot || busy.current || blocked.current || revision.current !== version
+        current.current !== snapshot || busy.current || remoteBusy.current || blocked.current || revision.current !== version
       ) return
       if (result.revision === version) return
       revision.current = result.revision
@@ -142,6 +157,30 @@ export function useDomainWorkspace() {
     } finally {
       refreshing.current = false
     }
+  }, [refreshHistory])
+
+  const withSaved = useCallback(async <T,>(operation: (snapshot: DomainSnapshot) => Promise<T>) => {
+    if (remoteBusy.current) throw new Error('请等待当前操作完成')
+    remoteBusy.current = true
+    try {
+      while (busy.current) await new Promise(resolve => setTimeout(resolve, 25))
+      await flush()
+      if (blocked.current || !current.current || current.current !== saved.current) {
+        throw new Error('请先保存或重新加载画布')
+      }
+      return await operation({ state: current.current, revision: revision.current })
+    } finally { remoteBusy.current = false }
+  }, [flush])
+
+  const install = useCallback((snapshot: DomainSnapshot & { before: DomainBoard }) => {
+    const beforeState = { ...snapshot.state, boards: snapshot.state.boards.map(b => b.id === snapshot.before.id ? snapshot.before : b) }
+    past.current = [...(snapshot.revision === revision.current + 1 ? past.current.slice(-99) : []), beforeState]
+    future.current = []
+    revision.current = snapshot.revision
+    current.current = saved.current = snapshot.state
+    setState(snapshot.state)
+    setStatus('saved')
+    refreshHistory()
   }, [refreshHistory])
 
   useEffect(() => {
@@ -166,5 +205,5 @@ export function useDomainWorkspace() {
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [flush])
-  return { state, status, history, update, checkpoint, undo, redo, retry, reload, refresh, flush }
+  return { state, status, history, update, checkpoint, undo, redo, retry, reload, refresh, flush, protect, withSaved, install }
 }

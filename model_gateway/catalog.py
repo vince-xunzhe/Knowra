@@ -87,7 +87,16 @@ TASK_SPECS += [
     ]
 ]
 
+TASK_SPECS.append({
+    "id": "domain_connect", "label": "索骥代连",
+    "description": "结合回顾、Wiki 和原文证据生成论文关系与画布预览",
+    "category": "索骥", "task_type": "llm", "legacy_field": "vlm_model",
+    "recommended_model_id": "openai/gpt-4o",
+})
+
+
 TASK_BINDING_DEFAULTS = {
+    "domain_connect": "openai/gpt-4o",
     "paper_extract": "openai/gpt-4o",
     "paper_chat": "openai/gpt-4o",
     "embedding": "openai/text-embedding-3-small",
@@ -183,6 +192,7 @@ DEFAULT_PROVIDER_REGISTRY = [
 
 
 _OPENAI_CHAT_TASKS = [
+    "domain_connect",
     "recommend_rank",
     "paper_extract",
     "paper_chat",
@@ -194,6 +204,7 @@ _OPENAI_CHAT_TASKS = [
 ]
 
 _OPENAI_TEXT_TASKS = [
+    "domain_connect",
     "recommend_rank",
     "wiki_compile",
     "ask_synthesis",
@@ -202,6 +213,7 @@ _OPENAI_TEXT_TASKS = [
 ]
 
 _CODEX_ALL_NON_EMBED_TASKS = [
+    "domain_connect",
     "recommend_rank",
     "paper_extract",
     "paper_chat",
@@ -213,6 +225,7 @@ _CODEX_ALL_NON_EMBED_TASKS = [
 ]
 
 _OPENAPI_LLM_TASKS = [
+    "domain_connect",
     "recommend_rank",
     "wiki_compile",
     "ask_agent",

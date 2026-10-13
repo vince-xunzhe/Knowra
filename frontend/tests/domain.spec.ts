@@ -1,5 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
-import type { DomainState, DomainPaper, DomainSnapshot } from '../src/api/domains'
+import type { DomainState, DomainPaper, DomainSnapshot, DomainAgentRun } from '../src/api/domains'
 const reviews: DomainPaper[] = [
   {
     id: 'paper-a',
@@ -51,6 +51,7 @@ async function setup(page: Page, inherited = false) {
   }
   let revision = 1,
     failSave = false
+  let runs: DomainAgentRun[] = []
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
   await page.route('**/api/**', async (route) => {
@@ -66,7 +67,23 @@ async function setup(page: Page, inherited = false) {
         revision++
         json = { revision }
       } else json = { state, revision }
-    } else if (path === '/api/domains/papers') json = reviews
+    } else if (path === '/api/domains/agent/runs') {
+      if (route.request().method() === 'POST') {
+        const body = route.request().postDataJSON()
+        if (body.revision !== revision) return route.fulfill({ status: 409, json: { detail: 'Conflict' } })
+        const run: DomainAgentRun = { id: 'run-1', boardId: body.boardId, status: 'pending', jobId: 'job', error: null, proposal: null, progress: { label: '分析论文关系' } }
+        runs = [run]; json = run
+      } else json = runs
+    } else if (path.endsWith('/run-1/discard')) {
+      runs = runs.map(r => ({ ...r, status: r.status === 'pending' ? 'cancelled' : 'discarded', proposal: null })); json = runs[0]
+    } else if (path.endsWith('/run-1/apply')) {
+      const run = runs[0]
+      const before = structuredClone(state.boards.find(b => b.id === run.boardId)!)
+      state = { ...state, boards: state.boards.map(b => b.id === run.boardId ? { ...run.proposal!.board, viewport: b.viewport } : b) }
+      revision++; runs = [{ ...run, status: 'applied', proposal: null }]
+      json = { state, revision, before }
+    }
+    else if (path === '/api/domains/papers') json = reviews
     else if (path === '/api/graph') json = { nodes: [], edges: [] }
     else if (path === '/api/papers')
       json = reviews.map((p) => ({
@@ -106,6 +123,24 @@ async function setup(page: Page, inherited = false) {
   await expect(page.getByRole('tab', { name: 'LLM' })).toBeVisible()
   return {
     snapshot: () => state,
+    preview: () => {
+      const board = structuredClone(state.boards[0])
+      board.nodes[0].x = 80; board.nodes[0].y = 140
+      board.nodes[1].x = 480; board.nodes[1].y = 140
+      board.edges = [{ id: 'ai-edge', source: board.nodes[0].id, target: board.nodes[1].id, label: '改进', locked: false,
+        analysis: { relation: 'improves', certainty: 'explicit', reason: 'The later paper extends the attention operator.',
+          discussion: { citingPaperId: 'paper-b', citedPaperId: 'paper-a', status: 'analyzed', contextsFound: 2, contextsUsed: 2, truncated: false,
+            findings: [{ aspect: 'purpose', text: 'Uses the earlier operator as an experimental baseline.', evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 4 页', page: 4, quote: 'The earlier operator serves as our experimental baseline under equal compute budgets.' }] }] },
+          evidence: [{ paperId: 'paper-b', source: 'pdf', locator: 'PDF 第 8 页', page: 8, quote: 'We build upon the attention operator proposed in the earlier paper.' }] } }]
+      const analysis = board.edges[0].analysis!
+      const contextEvidence = analysis.discussion!.findings[0].evidence[0]
+      // The same passage is returned for both relation and discussion; a second
+      // passage on the page and a different paper's same page must survive.
+      analysis.evidence.push({ ...contextEvidence, quote: `  ${contextEvidence.quote}  ` })
+      analysis.discussion!.findings[0].evidence.push({ ...contextEvidence, quote: 'All baselines use the same training budget.' })
+      analysis.evidence.push({ ...contextEvidence, paperId: 'paper-a', quote: 'The original paper describes its attention operator.' })
+      runs = [{ ...runs[0], status: 'preview', proposal: { board, added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
+    },
     errors,
     renameFirstCategory: () => {
       state = { ...state, boards: state.boards.map((b, i) => i ? b : { ...b, name: 'Language models', category: 'Language models' }) }
@@ -198,6 +233,29 @@ test('connections, groups, locking, removal and undo preserve references', async
   await cards.first().getByRole('button', { name: '连接论文', exact: true }).click()
   await cards.nth(1).getByRole('button', { name: '连接论文', exact: true }).click()
   await expect(page.locator('[data-edge-id]')).toHaveCount(1)
+  const edgeLock = page.locator('[data-edge-id]').getByRole('button')
+  await expect(edgeLock).toHaveAccessibleName('锁定连线')
+  await expect(edgeLock).toHaveAttribute('aria-pressed', 'false')
+  const unlockedColor = await edgeLock.evaluate(el => getComputedStyle(el).color)
+  const controlSize = (await edgeLock.boundingBox())!.width
+  await edgeLock.click()
+  await expect(edgeLock).toHaveAccessibleName('解锁连线')
+  await expect(edgeLock).toHaveAttribute('aria-pressed', 'true')
+  expect(await edgeLock.evaluate(el => getComputedStyle(el).color)).not.toBe(unlockedColor)
+  await expect.poll(() => context.snapshot().boards[0].edges[0]?.locked).toBe(true)
+  await expect(page.locator('.domain-inspector').getByRole('button', { name: /锁定连线|解锁连线/ })).toHaveCount(0)
+  await page.getByRole('button', { name: '移除选中元素', exact: true }).click()
+  await expect(edgeLock).toHaveCount(1)
+  await page.getByRole('button', { name: '缩小', exact: true }).click()
+  expect((await edgeLock.boundingBox())!.width).toBeCloseTo(controlSize, 1)
+  await edgeLock.focus()
+  await page.keyboard.press('Space')
+  await expect(edgeLock).toHaveAttribute('aria-pressed', 'false')
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(edgeLock).toHaveAttribute('aria-pressed', 'true')
+  await page.screenshot({ path: '/tmp/knowra-domain-edge-lock.png', fullPage: true })
+  await edgeLock.click()
+  await expect.poll(() => context.snapshot().boards[0].edges[0]?.locked).toBe(false)
   await cards.first().getByRole('heading').click()
   await cards
     .nth(1)
@@ -278,12 +336,12 @@ test('editable connection, marquee, group resize, search and independent domains
   await expect(cards.nth(1)).toContainText('2023')
   await cards.first().getByRole('button', { name: '连接论文', exact: true }).click()
   await cards.nth(1).getByRole('button', { name: '连接论文', exact: true }).click()
-  const midpoint = await page.locator('.domain-edge-hit').evaluate((element) => {
+  const selectionPoint = await page.locator('.domain-edge-hit').evaluate((element) => {
     const path = element as SVGPathElement
-    const point = path.getPointAtLength(path.getTotalLength() / 2).matrixTransform(path.getScreenCTM()!)
+    const point = path.getPointAtLength(path.getTotalLength() / 10).matrixTransform(path.getScreenCTM()!)
     return { x: point.x, y: point.y }
   })
-  await page.mouse.click(midpoint.x, midpoint.y)
+  await page.mouse.click(selectionPoint.x, selectionPoint.y)
   await page.getByRole('textbox', { name: '连线说明', exact: true }).fill('Improves the architecture')
   await expect(page.locator('.domain-edges text')).toHaveText('Improves the architecture')
   const canvas = (await page.getByTestId('domain-canvas').boundingBox())!
@@ -360,4 +418,123 @@ test('navigation order and inherited system categories preserve edits on taxonom
   await expect(page.getByTestId('domain-canvas').getByText(reviews[0].title, { exact: true })).toBeVisible()
   expect(context.snapshot().boards[0].nodes).toEqual(nodes)
   expect(context.errors).toEqual([])
+})
+
+
+test('agent generation is readonly, permits browsing and other categories, cancellation restores edits', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  const cards = page.locator('[data-kind="paper"]')
+  await cards.first().getByRole('button', { name: '连接论文', exact: true }).click()
+  await cards.nth(1).getByRole('button', { name: '连接论文', exact: true }).click()
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  await expect(page.locator('[data-edge-id]').getByRole('button')).toBeDisabled()
+  await expect(page.locator('.domain-header').getByRole('button', { name: '导入论文' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeDisabled()
+  const card = page.locator('[data-kind="paper"]').first()
+  const oldStyle = await card.getAttribute('style')
+  await drag(page, card, 120, 80)
+  await expect(card).toHaveAttribute('style', oldStyle!)
+  await expect(page.getByRole('textbox', { name: '卡片备注', exact: true })).toBeDisabled()
+  await card.locator('.domain-review-plus').click()
+  await expect(page.locator('.domain-popover')).toBeVisible()
+  await page.getByRole('tab', { name: '三维重建' }).click()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
+  await page.getByRole('button', { name: '添加独立文本' }).click()
+  await page.getByRole('tab', { name: 'LLM' }).click()
+  await page.getByRole('button', { name: '取消生成' }).click()
+  await expect(page.getByRole('button', { name: '添加独立文本' })).toBeEnabled()
+  await expect.poll(() => context.snapshot().boards[1].nodes.length).toBe(1)
+  expect(context.errors).toEqual([])
+})
+
+test('agent preview survives refresh, shows evidence, applies once and undoes as one operation', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByRole('button', { name: '取消生成' })).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  context.preview()
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
+  await expect(page.getByRole('button', { name: '应用方案' })).toBeVisible()
+  expect(context.snapshot().boards[0].edges).toHaveLength(0)
+  await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeDisabled()
+  await expect(page.locator('[data-edge-id]').getByRole('button', { name: '锁定连线', exact: true })).toBeDisabled()
+  await page.locator('.domain-edges text').filter({ hasText: '改进' }).click()
+  await expect(page.getByText('The later paper extends the attention operator.')).toBeVisible()
+  await expect(page.locator('.domain-evidence-sources summary').filter({ hasText: 'PDF 第 8 页' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '引用语境深读' })).toBeVisible()
+  await expect(page.getByText('Uses the earlier operator as an experimental baseline.')).toBeVisible()
+  await expect(page.getByText('所分析片段中未找到明确表述。')).toHaveCount(2)
+  const sources = page.locator('.domain-evidence-sources')
+  await expect(sources.locator('details')).toHaveCount(3)
+  await expect(page.locator('.domain-citation-discussion blockquote')).toHaveCount(0)
+  await page.locator('.domain-citation-discussion').getByRole('button', { name: '证据 2', exact: true }).click()
+  const sharedSource = sources.locator('details').nth(1)
+  await expect(sharedSource).toHaveAttribute('open', '')
+  await expect(sharedSource.locator('blockquote')).toHaveCount(2)
+  await expect(sharedSource).toContainText('The earlier operator serves as our experimental baseline under equal compute budgets.')
+  await expect(sharedSource).toContainText('All baselines use the same training budget.')
+  await expect(sharedSource).toContainText('支持：连线依据 · 引用用途')
+  await expect(sharedSource).toContainText(reviews[1].title)
+  await sources.locator('details').nth(2).locator('summary').click()
+  await expect(sources.locator('details').nth(2)).toContainText(reviews[0].title)
+  await page.screenshot({ path: '/tmp/knowra-domain-agent-preview.png', fullPage: true })
+  await page.getByRole('button', { name: '应用方案' }).click()
+  await expect.poll(() => context.snapshot().boards[0].edges.length).toBe(1)
+  await page.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect.poll(() => context.snapshot().boards[0].nodes).toEqual(before.nodes)
+  await expect.poll(() => context.snapshot().boards[0].edges).toEqual(before.edges)
+  expect(context.errors).toEqual([])
+})
+
+test('discarding an agent preview leaves original cards unchanged', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByRole('button', { name: '取消生成' })).toBeVisible()
+  const before = structuredClone(context.snapshot().boards[0])
+  context.preview()
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await page.getByRole('button', { name: '放弃方案' }).click()
+  await expect(page.getByRole('button', { name: 'agent代连', exact: true })).toBeEnabled()
+  expect(context.snapshot().boards[0]).toEqual(before)
+})
+
+test('Domain model can be selected independently and changing main model preserves it', async ({ page }) => {
+  await setup(page)
+  const tasks = ['paper_extract', 'paper_chat', 'domain_connect']
+  let config = {
+    scan_directory: '/test', similarity_threshold: 0.6,
+    model_gateway: {
+      providers: [{ id: 'openai', label: 'OpenAI', provider_type: 'openai', api_key: '', base_url: '', enabled: true }],
+      models: ['first', 'second'].map(id => ({ id: `openai/${id}`, label: id, provider_id: 'openai', upstream_model: id, model_kind: 'chat', supports_vision: true, supported_tasks: tasks })),
+      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
+      task_bindings: Object.fromEntries(tasks.map(id => [id, { model_id: 'openai/first', reasoning_effort: 'medium' }])),
+      available_provider_types: [],
+    },
+  }
+  await page.route('**/api/config', async route => {
+    if (route.request().method() !== 'GET') config = { ...config, ...route.request().postDataJSON() }
+    await route.fulfill({ json: config })
+  })
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('button', { name: /^任务模型/ }).click()
+  const section = (name: string) => page.locator('.rounded-xl').filter({ has: page.locator('p').filter({ hasText: new RegExp(`^${name}$`) }) }).last()
+  const domain = section('索骥代连')
+  const main = section('主模型')
+  await expect(domain).toBeVisible()
+  await domain.locator('select').nth(3).selectOption('openai/second')
+  await main.locator('select').nth(3).selectOption('openai/second')
+  await main.locator('select').nth(3).selectOption('openai/first')
+  await expect(domain.locator('select').nth(3)).toHaveValue('openai/second')
+  await page.getByRole('button', { name: '保存设置' }).click()
+  await expect.poll(() => config.model_gateway.task_bindings.domain_connect.model_id).toBe('openai/second')
+  expect(config.model_gateway.task_bindings.paper_extract.model_id).toBe('openai/first')
 })
