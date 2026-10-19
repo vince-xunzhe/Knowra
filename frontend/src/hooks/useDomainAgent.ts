@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { listDomainRuns, type DomainAgentRun } from '../api/domains'
 
-export function useDomainAgent() {
+export function useDomainAgent(loadRuns = listDomainRuns) {
   const [runs, setRuns] = useState<DomainAgentRun[]>([])
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
@@ -16,7 +16,7 @@ export function useDomainAgent() {
     fetching.current = true
     const version = ++generation.current
     try {
-      const next = await listDomainRuns()
+      const next = await loadRuns()
       if (!Array.isArray(next)) throw new Error('无法确认画布编辑状态，请重试')
       if (version !== generation.current) return
       setRuns(next)
@@ -25,7 +25,7 @@ export function useDomainAgent() {
     } catch (e) {
       if (version === generation.current) setLoadError(e instanceof Error ? e.message : String(e))
     } finally { fetching.current = false }
-  }, [])
+  }, [loadRuns])
   const act = useCallback(async (operation: () => Promise<DomainAgentRun | void>) => {
     if (running.current) return
     running.current = true

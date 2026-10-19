@@ -10,6 +10,18 @@ export interface DomainPaper {
   eligible: boolean
   reason: 'not_reviewed' | 'empty_review' | null
   incomplete: boolean
+  roadmap?: {
+    arxivId: string | null
+    doi: string | null
+    sourceUrl: string
+    reason: string
+    branch: string
+    libraryPaperId: string | null
+    libraryStatus: 'in_library' | 'not_imported' | 'no_arxiv'
+    downloadStatus: null | 'queued' | 'running' | 'failed'
+    downloadError: string | null
+    reviewReady?: boolean
+  }
 }
 export interface CanvasNode {
   id: string
@@ -133,3 +145,18 @@ export const startDomainRun = (boardId: string, revision: number, heights: Recor
 export const discardDomainRun = (id: string) => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data)
 export const applyDomainRun = (id: string) =>
   api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data)
+
+/** The two editors share canvas interactions, but never persistence or jobs. */
+export interface DomainApi {
+  load: typeof loadDomains
+  save: typeof saveDomains
+  papers: typeof loadDomainPapers
+  runs: typeof listDomainRuns
+  start: typeof startDomainRun
+  discard: typeof discardDomainRun
+  apply: typeof applyDomainRun
+}
+export const domainApi: DomainApi = {
+  load: loadDomains, save: saveDomains, papers: loadDomainPapers,
+  runs: listDomainRuns, start: startDomainRun, discard: discardDomainRun, apply: applyDomainRun,
+}

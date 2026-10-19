@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
-import { loadDomains, saveDomains, type DomainState, type DomainSnapshot, type DomainBoard } from '../api/domains'
+import { domainApi, type DomainApi, type DomainState, type DomainSnapshot, type DomainBoard } from '../api/domains'
 
 /** One mounted workspace owns the session history and serial save queue. */
-export function useDomainWorkspace() {
+export function useDomainWorkspace(api: Pick<DomainApi, 'load' | 'save'> = domainApi) {
   const [state, setState] = useState<DomainState | null>(null)
   const [status, setStatus] = useState<'loading' | 'saved' | 'pending' | 'saving' | 'error' | 'conflict'>(
     'loading',
@@ -44,7 +44,7 @@ export function useDomainWorkspace() {
       // Serialize saves so a slow response never overwrites a newer edit.
       while (current.current && current.current !== saved.current) {
         const snapshot = current.current
-        const result = await saveDomains(snapshot, revision.current)
+        const result = await api.save(snapshot, revision.current)
         revision.current = result.revision
         saved.current = snapshot
       }
@@ -55,7 +55,7 @@ export function useDomainWorkspace() {
     } finally {
       busy.current = false
     }
-  }, [])
+  }, [api])
 
   const apply = useCallback(
     (next: DomainState) => {
@@ -108,7 +108,7 @@ export function useDomainWorkspace() {
     if (timer.current) clearTimeout(timer.current)
     setStatus('loading')
     try {
-      const result = await loadDomains()
+      const result = await api.load()
       revision.current = result.revision
       current.current = result.state
       saved.current = result.state
@@ -121,7 +121,7 @@ export function useDomainWorkspace() {
     } catch {
       setStatus('error')
     }
-  }, [refreshHistory])
+  }, [api, refreshHistory])
 
   const retry = useCallback(() => {
     if (!current.current) {
@@ -140,7 +140,7 @@ export function useDomainWorkspace() {
     ) return
     refreshing.current = true
     try {
-      const result = await loadDomains()
+      const result = await api.load()
       // A taxonomy refresh must never replace edits made while the request ran.
       if (
         current.current !== snapshot || busy.current || remoteBusy.current || blocked.current || revision.current !== version
@@ -157,7 +157,7 @@ export function useDomainWorkspace() {
     } finally {
       refreshing.current = false
     }
-  }, [refreshHistory])
+  }, [api, refreshHistory])
 
   const withSaved = useCallback(async <T,>(operation: (snapshot: DomainSnapshot) => Promise<T>) => {
     if (remoteBusy.current) throw new Error('请等待当前操作完成')

@@ -671,7 +671,8 @@ test('conflict preserves unsaved content until explicit reload and modal escape 
 test('navigation order and inherited system categories preserve edits on taxonomy refresh', async ({ page }) => {
   const context = await setup(page, true)
   const labels = (await page.getByRole('navigation').getByRole('button').allTextContents()).map((label) => label.trim())
-  expect(labels.indexOf('索骥')).toBe(labels.indexOf('推荐') - 1)
+  expect(labels.indexOf('索骥')).toBe(labels.indexOf('识途') - 1)
+  expect(labels.indexOf('识途')).toBe(labels.indexOf('推荐') - 1)
   expect(labels.indexOf('索骥')).toBeGreaterThan(labels.indexOf('回顾'))
   const selector = page.getByRole('combobox', { name: '领域', exact: true })
   await expect(selector.getByRole('option')).toHaveCount(7)
@@ -786,15 +787,15 @@ test('discarding an agent preview leaves original cards unchanged', async ({ pag
   expect(context.snapshot().boards[0]).toEqual(before)
 })
 
-test('Domain model can be selected independently and changing main model preserves it', async ({ page }) => {
+test('Domain and Roadmap models can be selected independently and changing main model preserves them', async ({ page }) => {
   await setup(page)
-  const tasks = ['paper_extract', 'paper_chat', 'domain_connect']
+  const tasks = ['paper_extract', 'paper_chat', 'domain_connect', 'roadmap_research']
   let config = {
     scan_directory: '/test', similarity_threshold: 0.6,
     model_gateway: {
       providers: [{ id: 'openai', label: 'OpenAI', provider_type: 'openai', api_key: '', base_url: '', enabled: true }],
       models: ['first', 'second'].map(id => ({ id: `openai/${id}`, label: id, provider_id: 'openai', upstream_model: id, model_kind: 'chat', supports_vision: true, supported_tasks: tasks })),
-      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
+      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id === 'roadmap_research' ? '识途调研' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
       task_bindings: Object.fromEntries(tasks.map(id => [id, { model_id: 'openai/first', reasoning_effort: 'medium' }])),
       available_provider_types: [],
     },
@@ -808,13 +809,17 @@ test('Domain model can be selected independently and changing main model preserv
   await page.getByRole('button', { name: /^任务模型/ }).click()
   const section = (name: string) => page.locator('.rounded-xl').filter({ has: page.locator('p').filter({ hasText: new RegExp(`^${name}$`) }) }).last()
   const domain = section('索骥代连')
+  const roadmap = section('识途调研')
   const main = section('主模型')
   await expect(domain).toBeVisible()
   await domain.locator('select').nth(3).selectOption('openai/second')
+  await roadmap.locator('select').nth(3).selectOption('openai/second')
   await main.locator('select').nth(3).selectOption('openai/second')
   await main.locator('select').nth(3).selectOption('openai/first')
   await expect(domain.locator('select').nth(3)).toHaveValue('openai/second')
+  await expect(roadmap.locator('select').nth(3)).toHaveValue('openai/second')
   await page.getByRole('button', { name: '保存设置' }).click()
   await expect.poll(() => config.model_gateway.task_bindings.domain_connect.model_id).toBe('openai/second')
+  expect(config.model_gateway.task_bindings.roadmap_research.model_id).toBe('openai/second')
   expect(config.model_gateway.task_bindings.paper_extract.model_id).toBe('openai/first')
 })
