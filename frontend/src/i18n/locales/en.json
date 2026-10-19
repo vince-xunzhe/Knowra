@@ -1396,5 +1396,8 @@
   "关系由所列原文片段支持；可打开来源核对。": "The relationship is supported by the listed full-text excerpts. Open the sources to verify.",
   "关系为 AI 推断；请结合所列证据与报告中的全文缺口判断。": "This relationship is an AI inference. Consider the evidence and full-text gaps listed in the report.",
   "原文 · PDF 第 {0} 页": "Full text · PDF page {0}",
-  "原文全文 · 页码未知": "Full text · page unknown"
+  "原文全文 · 页码未知": "Full text · page unknown",
+  "路线图": "Roadmap",
+  "总体调研报告": "Overall research report",
+  "展开报告": "Expand report"
 }

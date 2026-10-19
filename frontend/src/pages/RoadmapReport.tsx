@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, FileText, Loader2, X } from 'lucide-react'
+import { Download, FileText, Loader2, Maximize, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { getRoadmapReport, type RoadmapReport as Report } from '../api/roadmaps'
 import { t as tr } from '../i18n/catalog'
 import { sourceUrl } from '../utils/sourceUrl'
 
-export default function RoadmapReport({ boardId, boardName, active, runKey }: {
+export default function RoadmapReport({ boardId, boardName, active, visible, runKey }: {
   boardId: string
   boardName: string
   active: boolean
+  visible: boolean
   runKey: string
 }) {
   const [open, setOpen] = useState(false)
@@ -56,10 +57,41 @@ export default function RoadmapReport({ boardId, boardName, active, runKey }: {
     anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
+  const status = report ? tr(report.status === 'preview' ? '预览报告 · 应用方案后保存' : '已应用方案的调研报告')
+    : tr('七步调研：筛选、全文评估与证据分级，记录来源和缺口。')
+  const content = loading ? <p className="roadmap-report-message" role="status"><Loader2 size={16} className="spin" />{tr('加载中…')}</p>
+    : error ? <div className="domain-error" role="alert">{error}<button onClick={() => void load()}>{tr('重试')}</button></div>
+    : report ? <div className="markdown-notes roadmap-report-markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{
+        a: ({ href, children }) => {
+          const url = sourceUrl(href)
+          return url ? <a href={url} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>
+        },
+        img: ({ alt }) => <span>{alt || ''}</span>,
+      }}>{report.markdown}</ReactMarkdown>
+    </div> : <p className="roadmap-report-message">{tr('暂无调研报告。请先生成路线图，完成后可查看和下载。')}</p>
   return <>
-    <button className="roadmap-report-trigger" onClick={() => { setOpen(true); void load() }}>
-      <FileText size={15} />{tr('调研报告')}
-    </button>
+    <section id="roadmap-report-panel" role="tabpanel" aria-labelledby="roadmap-report-tab"
+      className="roadmap-report-panel" hidden={!visible}>
+      <header className="roadmap-report-panel-header">
+        <div>
+          <h2><FileText size={19} />{boardName} · {tr('总体调研报告')}</h2>
+          <p>{status}</p>
+        </div>
+        <div className="roadmap-report-actions">
+          <button disabled={!report || loading || !!error} onClick={() => setOpen(true)}>
+            <Maximize size={15} />{tr('展开报告')}
+          </button>
+          <button className="domain-primary" disabled={!report || loading || !!error} onClick={download}>
+            <Download size={15} />{tr('下载 Markdown')}
+          </button>
+        </div>
+      </header>
+      <div className="roadmap-report-body" tabIndex={0} aria-label={tr('总体调研报告')}>
+        <article className="roadmap-report-document">{content}</article>
+      </div>
+      <footer className="roadmap-report-panel-footer">{tr('全文未获取或证据不足的部分，会在报告中列为缺口。')}</footer>
+    </section>
     {active && open && <div className="domain-modal-backdrop" onClick={() => setOpen(false)}>
       <section ref={dialog} role="dialog" aria-modal="true" aria-label={tr('调研报告')}
         className="domain-modal roadmap-report-modal" onClick={event => event.stopPropagation()}
@@ -74,22 +106,12 @@ export default function RoadmapReport({ boardId, boardName, active, runKey }: {
         }}>
         <header>
           <div><h2>{boardName} · {tr('调研报告')}</h2>
-            <p>{report ? tr(report.status === 'preview' ? '预览报告 · 应用方案后保存' : '已应用方案的调研报告') : tr('七步调研：筛选、全文评估与证据分级，记录来源和缺口。')}</p>
+            <p>{status}</p>
           </div>
           <button ref={closeButton} aria-label={tr('关闭')} onClick={() => setOpen(false)}><X size={18} /></button>
         </header>
         <div className="roadmap-report-body">
-          {loading ? <p role="status"><Loader2 size={14} className="spin" />{tr('加载中…')}</p>
-            : error ? <div className="domain-error" role="alert">{error}<button onClick={() => void load()}>{tr('重试')}</button></div>
-            : report ? <div className="markdown-notes roadmap-report-markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} skipHtml components={{
-                a: ({ href, children }) => {
-                  const url = sourceUrl(href)
-                  return url ? <a href={url} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>
-                },
-                img: ({ alt }) => <span>{alt || ''}</span>,
-              }}>{report.markdown}</ReactMarkdown>
-            </div> : <p>{tr('暂无调研报告。请先生成路线图，完成后可查看和下载。')}</p>}
+          {content}
         </div>
         <footer>
           <span>{tr('全文未获取或证据不足的部分，会在报告中列为缺口。')}</span>

@@ -46,6 +46,7 @@ async function setup(page: Page, populated = false) {
   let domainWrites = 0
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
   let previewReport: RoadmapReport | null = null
+  let reportFailures = 0
   const browserErrors: string[] = []
   page.on('pageerror', e => browserErrors.push(e.message))
   await page.route('**/api/**', async route => {
@@ -61,7 +62,13 @@ async function setup(page: Page, populated = false) {
         state = body.state; revision++; json = { revision }
       } else json = { state, revision }
     } else if (path === '/api/roadmaps/papers') json = candidates
-    else if (path === '/api/roadmaps/report') json = url.searchParams.get('boardId') === 'roadmap-vlm' ? null : (runs[0]?.status === 'preview' ? previewReport : appliedReport)
+    else if (path === '/api/roadmaps/report') {
+      if (reportFailures > 0) {
+        reportFailures--
+        return route.fulfill({ status: 503, json: { detail: 'Report temporarily unavailable' } })
+      }
+      json = url.searchParams.get('boardId') === 'roadmap-vlm' ? null : (runs[0]?.status === 'preview' ? previewReport : appliedReport)
+    }
     else if (path === '/api/roadmaps/agent/runs') {
       if (method === 'POST') {
         researchPosts++
@@ -111,6 +118,10 @@ async function setup(page: Page, populated = false) {
   await expect(page.getByRole('combobox', { name: '领域', exact: true })).toHaveValue('roadmap-llm')
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
+    failReportOnce: () => { reportFailures++ },
+    savedReport(markdown: string) {
+      appliedReport = { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown }
+    },
     preview(reason?: string, markdown = '# Preview research report\n\n## Screening\n\nSelected sources.') {
       candidates = structuredClone(papers)
       if (reason) candidates[0].roadmap!.reason = reason
@@ -238,48 +249,141 @@ test('discarding new research restores saved descriptions and leaves the existin
   expect(app.errors()).toEqual([])
 })
 
-test('research reports show preview and applied versions, download Markdown locally, and restore the saved report after discard', async ({ page }) => {
+test('inline research reports refresh previews, expand safely, download Markdown, and restore applied reports after discard', async ({ page }) => {
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  const reportTab = roadmap.getByRole('tab', { name: '总体调研报告', exact: true })
+  const canvasTab = roadmap.getByRole('tab', { name: '路线图', exact: true })
   const dialog = page.getByRole('dialog', { name: '调研报告', exact: true })
-  await roadmap.getByRole('button', { name: '调研报告', exact: true }).click()
+  await expect(canvasTab).toHaveAttribute('aria-selected', 'true')
+  await reportTab.click()
+  await expect(report).toBeVisible()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
+  await expect(report.getByText('Some full texts were unavailable.', { exact: true })).toBeVisible()
+  await expect(dialog).toHaveCount(0)
+  await report.getByRole('button', { name: '展开报告', exact: true }).click()
   await expect(dialog.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
-  await expect(dialog.getByText('Some full texts were unavailable.', { exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(dialog).toHaveCount(0)
-  await expect(roadmap.getByRole('button', { name: '调研报告', exact: true })).toBeFocused()
+  await expect(report.getByRole('button', { name: '展开报告', exact: true })).toBeFocused()
+  await canvasTab.click()
   await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
-  const markdown = '# Seven-step report\n\n## Sources\n\n[Verified source](https://arxiv.org/abs/1810.04805)\n\n[Unsafe](javascript:alert%281%29)\n\n<img src="https://example.com/tracker.png">\n\n## Evidence gaps\n\nFull text unavailable for a historical paper.\n' + Array.from({ length: 20 }, (_, i) => `\n\n### Assessment ${i + 1}\n\nEvidence and limitations for the selected paper.`).join('')
+  await reportTab.click()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
+  const markdown = '# LLM 技术方向总体调研报告\n\n## 1. 范围与问题\n\n梳理注意力架构与预训练的发展脉络，区分论文作者的结论与调研推断。\n\n## 2. 检索与来源核验\n\n[Verified source](https://arxiv.org/abs/1810.04805)\n\n[Unsafe](javascript:alert%281%29)\n\n<img src="https://example.com/tracker.png">\n\n## 3. 初筛与入选理由\n\n| 论文 | 年份 | 来源 | 阅读覆盖 |\n| --- | --- | --- | --- |\n| Attention Is All You Need | 2017 | arXiv | 摘要与正文 |\n| BERT | 2018 | arXiv | 摘要与正文 |\n| 经典期刊论文 | 1986 | DOI | 仅摘要 |\n\n## 4. 关键论文全文评估\n\n经典期刊论文全文未获取，未据此推断具体实验结果。\n\n## 5. 关系与证据等级\n\n架构继承关系需要正文证据支持，时间顺序本身不能证明继承。\n\n## 6. 发展分支与路线图\n\n按架构设计、预训练方法整理分支，允许保留独立节点。\n\n## 7. 缺口与后续阅读\n\nFull text unavailable for a historical paper.\n' + Array.from({ length: 12 }, (_, i) => `\n\n### 论文评估记录 ${i + 1}\n\n记录研究问题、作者贡献、证据定位与未能核实的结论。`).join('')
   app.preview(undefined, markdown)
-  await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()
-  await roadmap.getByRole('button', { name: '调研报告', exact: true }).click()
-  await expect(dialog.getByRole('heading', { name: 'Seven-step report', exact: true })).toBeVisible()
+  await expect(report.getByRole('heading', { name: 'LLM 技术方向总体调研报告', exact: true })).toBeVisible()
+  await expect(report.getByText('预览报告 · 应用方案后保存', { exact: true })).toBeVisible()
+  await expect(report.getByRole('link', { name: 'Verified source' })).toHaveAttribute('href', papers[1].roadmap!.sourceUrl)
+  await expect(report.getByRole('link', { name: 'Unsafe', exact: true })).toHaveCount(0)
+  await expect(report.locator('img')).toHaveCount(0)
+  await expect(report.getByRole('table')).toBeVisible()
+  await expect.poll(() => report.locator('.roadmap-report-body').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+  await page.screenshot({ path: '/tmp/knowra-shitu-inline-report.png' })
+  const downloadPromise = page.waitForEvent('download')
+  await report.getByRole('button', { name: '下载 Markdown', exact: true }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('LLM-research.md')
+  expect(await readFile((await download.path())!, 'utf8')).toBe(markdown)
+  await report.getByRole('button', { name: '展开报告', exact: true }).click()
+  await expect(dialog.getByRole('heading', { name: 'LLM 技术方向总体调研报告', exact: true })).toBeVisible()
   await expect(dialog.getByText('预览报告 · 应用方案后保存', { exact: true })).toBeVisible()
-  await expect(dialog.getByRole('link', { name: 'Verified source' })).toHaveAttribute('href', 'https://arxiv.org/abs/1810.04805')
+  await expect(dialog.getByRole('link', { name: 'Verified source' })).toHaveAttribute('href', papers[1].roadmap!.sourceUrl)
   await expect(dialog.getByRole('link', { name: 'Unsafe', exact: true })).toHaveCount(0)
   await expect(dialog.locator('img')).toHaveCount(0)
   await expect.poll(() => dialog.locator('.roadmap-report-body').evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
   await page.screenshot({ path: '/tmp/knowra-shitu-research-report.png' })
-  const downloadPromise = page.waitForEvent('download')
+  const expandedDownloadPromise = page.waitForEvent('download')
   await dialog.getByRole('button', { name: '下载 Markdown', exact: true }).click()
-  const download = await downloadPromise
-  expect(download.suggestedFilename()).toBe('LLM-research.md')
-  expect(await readFile((await download.path())!, 'utf8')).toBe(markdown)
+  const expandedDownload = await expandedDownloadPromise
+  expect(await readFile((await expandedDownload.path())!, 'utf8')).toBe(markdown)
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await canvasTab.click()
   await roadmap.getByRole('button', { name: '放弃方案', exact: true }).click()
-  await roadmap.getByRole('button', { name: '调研报告', exact: true }).click()
-  await expect(dialog.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
-  await expect(dialog.getByText('已应用方案的调研报告', { exact: true })).toBeVisible()
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await reportTab.click()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
+  await expect(report.getByText('已应用方案的调研报告', { exact: true })).toBeVisible()
+  await canvasTab.click()
   await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   app.preview(undefined, markdown)
   await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()
   await roadmap.getByRole('button', { name: '应用方案', exact: true }).click()
-  await roadmap.getByRole('button', { name: '调研报告', exact: true }).click()
-  await expect(dialog.getByText('已应用方案的调研报告', { exact: true })).toBeVisible()
-  await expect(dialog.getByRole('heading', { name: 'Seven-step report', exact: true })).toBeVisible()
+  await reportTab.click()
+  await expect(report.getByText('已应用方案的调研报告', { exact: true })).toBeVisible()
+  await expect(report.getByRole('heading', { name: 'LLM 技术方向总体调研报告', exact: true })).toBeVisible()
+  expect(app.errors()).toEqual([])
+})
+
+test('report view handles empty categories and retries loading failures without showing another field’s report', async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
+  await roadmap.getByRole('combobox', { name: '领域', exact: true }).selectOption('roadmap-vlm')
+  await expect(report.getByRole('heading', { name: 'VLM · 总体调研报告', exact: true })).toBeVisible()
+  await expect(report.getByText('暂无调研报告。请先生成路线图，完成后可查看和下载。', { exact: true })).toBeVisible()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toHaveCount(0)
+  await expect(report.getByRole('button', { name: '展开报告', exact: true })).toBeDisabled()
+  await expect(report.getByRole('button', { name: '下载 Markdown', exact: true })).toBeDisabled()
+  app.failReportOnce()
+  await roadmap.getByRole('combobox', { name: '领域', exact: true }).selectOption('roadmap-llm')
+  await expect(report.getByRole('alert')).toContainText('调研报告加载失败，请重试。')
+  await expect(report.getByRole('button', { name: '下载 Markdown', exact: true })).toBeDisabled()
+  await report.getByRole('button', { name: '重试', exact: true }).click()
+  await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
+  await expect(report.getByRole('button', { name: '下载 Markdown', exact: true })).toBeEnabled()
+  await roadmap.getByRole('tab', { name: '路线图', exact: true }).click()
+  await expect(roadmap.getByTestId('roadmap-canvas')).toBeVisible()
+  expect(app.errors()).toEqual([])
+})
+
+test('reading the report preserves the mounted canvas, selection and undo history while disabling canvas shortcuts', async ({ page }) => {
+  const app = await setup(page, true)
+  app.savedReport('# A long research report\n\n' + Array.from({ length: 35 }, (_, i) => `## Paper ${i + 1}\n\nResearch evidence and limitations.\n\n`).join(''))
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  const canvas = roadmap.getByTestId('roadmap-canvas')
+  const node = canvas.locator('[data-node-id="node-1"]')
+  const reportTab = roadmap.getByRole('tab', { name: '总体调研报告', exact: true })
+  const canvasTab = roadmap.getByRole('tab', { name: '路线图', exact: true })
+  await roadmap.getByRole('button', { name: '缩小', exact: true }).click()
+  await expect.poll(() => app.state().boards[0].viewport.zoom).toBe(0.8)
+  await node.getByRole('heading').click()
+  await roadmap.getByRole('textbox', { name: '卡片备注', exact: true }).fill('Preserve this research note')
+  await expect.poll(() => app.state().boards[0].nodes[1].text).toBe('Preserve this research note')
+  const before = structuredClone(app.state().boards[0])
+  const originalBounds = await node.boundingBox()
+  await reportTab.click()
+  await expect(report.getByRole('heading', { name: 'A long research report', exact: true })).toBeVisible()
+  await expect(canvas).toHaveCount(1)
+  await expect(canvas).toBeHidden()
+  await expect(roadmap.getByRole('button', { name: '收起研究工作区', exact: true })).toHaveCount(0)
+  const scrollBody = report.locator('.roadmap-report-body')
+  await scrollBody.focus()
+  await page.keyboard.press('Space')
+  await expect.poll(() => scrollBody.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  for (const key of ['Delete', 'Backspace', 'Control+z', 'Meta+z', 'Escape']) {
+    await page.keyboard.press(key)
+    await expect(canvas.locator('[data-kind="paper"]')).toHaveCount(3)
+    await expect(node).toHaveAttribute('data-selected', 'true')
+    await expect(node).toContainText('Preserve this research note')
+  }
+  await reportTab.focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(canvasTab).toBeFocused()
+  await expect(canvasTab).toHaveAttribute('aria-selected', 'true')
+  await expect(canvas).toBeVisible()
+  await expect(node).toHaveAttribute('data-selected', 'true')
+  await expect(roadmap.getByRole('textbox', { name: '卡片备注', exact: true })).toHaveValue('Preserve this research note')
+  await expect(roadmap.locator('.domain-view-tools')).toContainText('80%')
+  expect(await node.boundingBox()).toEqual(originalBounds)
+  expect(app.state().boards[0]).toEqual(before)
+  await roadmap.getByRole('button', { name: '撤销', exact: true }).click()
+  await expect(roadmap.getByRole('textbox', { name: '卡片备注', exact: true })).toHaveValue('')
   expect(app.errors()).toEqual([])
 })
 

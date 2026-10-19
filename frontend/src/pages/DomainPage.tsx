@@ -6,6 +6,7 @@ import {
   Check,
   Download,
   ExternalLink,
+  FileText,
   Frame,
   Hand,
   Link2,
@@ -164,6 +165,9 @@ export default function DomainPage({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
   const [tool, setTool] = useState<'select' | 'hand'>('select')
+  const [roadmapView, setRoadmapView] = useState<'canvas' | 'report'>('canvas')
+  const showReport = isRoadmap && roadmapView === 'report'
+  const canvasActive = active && !showReport
   const [linkSource, setLinkSource] = useState<string | null>(null)
   const [popover, setPopover] = useState<string | null>(null)
   const [tab, setTab] = useState<ReviewField>('core_contribution')
@@ -189,6 +193,7 @@ export default function DomainPage({
     [update],
   )
   const onSize = useCallback((key: string, width: number, height: number) => {
+    if (!width || !height) return
     setSizes((s) =>
       s[key]?.width === width && s[key]?.height === height ? s : { ...s, [key]: { width, height } },
     )
@@ -232,9 +237,11 @@ export default function DomainPage({
   useEffect(() => {
     const element = canvas.current
     if (!element) return
-    const observer = new ResizeObserver(() =>
-      setCanvasSize({ width: element.clientWidth, height: element.clientHeight }),
-    )
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth && element.clientHeight) {
+        setCanvasSize({ width: element.clientWidth, height: element.clientHeight })
+      }
+    })
     observer.observe(element)
     return () => observer.disconnect()
   }, [active, loaded])
@@ -304,10 +311,13 @@ export default function DomainPage({
     if (popover && removed.has(popover)) setPopover(null)
   }
   useEffect(() => {
-    if (!active) return
+    if (!canvasActive) {
+      space.current = false
+      return
+    }
     const keydown = (event: KeyboardEvent) => {
       if (
-        (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') ||
+        (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"],[role="tablist"]') ||
         importOpen ||
         nameDialog
       )
@@ -349,7 +359,7 @@ export default function DomainPage({
   })
   useEffect(() => {
     const element = canvas.current
-    if (!element || !active) return
+    if (!element || !canvasActive) return
     const wheel = (event: WheelEvent) => {
       if ((event.target as HTMLElement).closest('.domain-popover')) return
       event.preventDefault()
@@ -370,7 +380,7 @@ export default function DomainPage({
     }
     element.addEventListener('wheel', wheel, { passive: false })
     return () => element.removeEventListener('wheel', wheel)
-  }, [active, patchBoard, loaded])
+  }, [canvasActive, patchBoard, loaded])
 
   const localPoint = (e: { clientX: number; clientY: number }): Point => {
     const rect = canvas.current!.getBoundingClientRect()
@@ -811,8 +821,27 @@ export default function DomainPage({
           {isRoadmap ? tr('共 {0} 篇 · 已入库 {1} 篇 · 非 arXiv {2} 篇', { 0: boardPapers.length, 1: inLibraryCount, 2: noArxivCount })
             : tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}
         </span>}
-        {isRoadmap && board && <RoadmapReport key={board.id} boardId={board.id} boardName={board.name} active={active} runKey={`${run?.id ?? ''}:${run?.status ?? ''}`} />}
-        <button
+        {isRoadmap && <div className="roadmap-view-tabs" role="tablist" aria-label={tr('识途')}
+          onKeyDown={event => {
+            const next = event.key === 'Home' ? 'canvas' : event.key === 'End' ? 'report'
+              : event.key === 'ArrowLeft' || event.key === 'ArrowRight' ? (showReport ? 'canvas' : 'report') : null
+            if (!next) return
+            event.preventDefault()
+            setRoadmapView(next)
+            event.currentTarget.querySelector<HTMLButtonElement>(`#roadmap-${next}-tab`)?.focus()
+          }}>
+          <button id="roadmap-canvas-tab" role="tab" aria-selected={!showReport}
+            aria-controls="roadmap-canvas-panel" tabIndex={showReport ? -1 : 0}
+            onClick={() => setRoadmapView('canvas')}>
+            <Frame size={15} />{tr('路线图')}
+          </button>
+          <button id="roadmap-report-tab" role="tab" aria-selected={showReport}
+            aria-controls="roadmap-report-panel" tabIndex={showReport ? 0 : -1}
+            onClick={() => setRoadmapView('report')}>
+            <FileText size={15} />{tr('总体调研报告')}
+          </button>
+        </div>}
+        {!showReport && <button
           className="domain-inspector-toggle"
           aria-label={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
           title={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
@@ -822,7 +851,7 @@ export default function DomainPage({
         >
           {inspectorCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
           {tr('研究工作区')}
-        </button>
+        </button>}
       </div>
       {paperError && (
         <div className="domain-error" role="alert">
@@ -845,7 +874,11 @@ export default function DomainPage({
           }) : (imports.job.error || tr('下载任务已停止，可重试未入库论文。'))}</span>
         {!!importResult?.failed && <span>{tr('再次点击一键下载，将跳过已入库论文并重试失败项。')}</span>}
       </div>}
-      <div ref={domainBodyRef} className={`domain-body${inspectorResizing ? ' is-resizing' : ''}`}>
+      {isRoadmap && board && <RoadmapReport key={board.id} boardId={board.id} boardName={board.name}
+        active={active && showReport} visible={showReport} runKey={`${run?.id ?? ''}:${run?.status ?? ''}`} />}
+      <div ref={domainBodyRef} className={`domain-body${inspectorResizing ? ' is-resizing' : ''}`}
+        hidden={showReport} id={isRoadmap ? 'roadmap-canvas-panel' : undefined}
+        role={isRoadmap ? 'tabpanel' : undefined} aria-labelledby={isRoadmap ? 'roadmap-canvas-tab' : undefined}>
         <div
           ref={canvas}
           data-testid={`${mode}-canvas`}
