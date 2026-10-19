@@ -21,6 +21,20 @@ class TaskQueueTests(unittest.TestCase):
         self.queue = TaskStore(Path(self.tmp.name) / 'tasks.db')
         self.queue.initialize()
 
+    def test_roadmap_progress_is_readable_but_resume_requires_new_research(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.jobs import router
+
+        job = self.queue.submit('roadmap', 'roadmap:vision', {'run_id': 'run'})
+        self.queue.update(job['job_id'], status='failed', error='network unavailable')
+        app = FastAPI()
+        app.include_router(router)
+        with patch.object(task_runtime, '_store', self.queue), patch.object(task_runtime, 'ensure_worker'):
+            with TestClient(app) as client:
+                self.assertEqual(client.get('/api/jobs/' + job['job_id']).status_code, 200)
+                self.assertEqual(client.post('/api/jobs/' + job['job_id'] + '/resume').status_code, 409)
+
     def test_concurrent_submissions_are_idempotent(self):
         def submit(_):
             return self.queue.submit('papers', 'papers', {'paper_ids': ['p']})['job_id']

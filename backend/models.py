@@ -123,6 +123,39 @@ class DomainAgentRun(Base):
     created = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
 
 
+class RoadmapWorkspace(Base):
+    """Local discovery boards; external paper references never create library rows."""
+
+    __tablename__ = "roadmap_workspace"
+    id = Column(Integer, primary_key=True)
+    revision = Column(Integer, nullable=False, default=1)
+    state = Column(JSON, nullable=False)
+
+
+class RoadmapPaper(Base):
+    """Verified bibliographic metadata, independent from downloaded local PDFs."""
+
+    __tablename__ = "roadmap_papers"
+    id = Column(String, primary_key=True, default=_uuid)
+    data = Column("metadata", JSON, nullable=False)
+    library_paper_id = Column(String, nullable=True)
+    created = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
+class RoadmapRun(Base):
+    """Persistent research previews, with an edit lease on their source board."""
+
+    __tablename__ = "roadmap_runs"
+    id = Column(String, primary_key=True, default=_uuid)
+    board_id = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, default="pending")
+    snapshot = Column(JSON, nullable=False)
+    proposal = Column(JSON, nullable=True)
+    job_id = Column(String, nullable=True)
+    error = Column(Text, nullable=True)
+    created = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+
 class KnowledgeNode(Base):
     __tablename__ = "knowledge_nodes"
 

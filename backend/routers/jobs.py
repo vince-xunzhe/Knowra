@@ -62,6 +62,8 @@ def resume_job(job_id: str):
     job = runtime.store().get(job_id)
     if job and job["kind"] == "domain":
         raise HTTPException(409, "请在索骥重新生成，以使用当前画布和锁定状态。")
+    if job and job["kind"] == "roadmap":
+        raise HTTPException(409, "请在识途重新调研，以使用当前路线图和锁定状态。")
     try:
         job = runtime.store().resume(job_id)
     except KeyError:
