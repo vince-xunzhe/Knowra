@@ -129,6 +129,24 @@
 .roadmap-report-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 12px 0; }
 .roadmap-report-markdown th, .roadmap-report-markdown td { border: 1px solid var(--domain-border); padding: 6px 10px; text-align: left; }
 .roadmap-report-markdown blockquote { border-left: 3px solid var(--domain-border); margin: 12px 0; padding-left: 12px; color: var(--domain-muted); }
+.roadmap-diagram { margin: 20px 0; padding: 18px; border: 1px solid var(--domain-border); border-radius: 10px; overflow: auto; background: var(--domain-panel); }
+.roadmap-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+.roadmap-diagram-fallback pre, .roadmap-report-markdown pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.roadmap-diagram-fallback > p { color: var(--domain-muted); font-size: 12px; }
+.roadmap-report-image { display: block; max-width: 100%; max-height: 860px; width: auto; height: auto; margin: 20px auto 10px; border: 1px solid var(--domain-border); border-radius: 8px; background: white; object-fit: contain; }
+.roadmap-page .domain-text[data-roadmap-role="topic"] { color: var(--text-primary, #e2e8f0); border-color: #818cf8; background: color-mix(in srgb, var(--domain-panel) 86%, #6366f1); box-shadow: 0 5px 22px #6366f119; }
+.roadmap-page .domain-text[data-roadmap-role="branch"] { color: var(--text-primary, #e2e8f0); border-color: #22d3ee65; background: color-mix(in srgb, var(--domain-panel) 94%, #22d3ee); }
+.roadmap-node-role { display: block; color: var(--color-indigo-300, #a5b4fc); font-size: 11px; letter-spacing: .08em; margin-bottom: 8px; }
+.roadmap-page [data-roadmap-role="branch"] .roadmap-node-role { color: var(--color-cyan-300, #67e8f9); }
+.roadmap-node-title { font-size: 17px; font-weight: 600; line-height: 1.5; white-space: pre-wrap; }
+.roadmap-page [data-roadmap-role="topic"] .roadmap-node-title { font-size: 21px; }
+.roadmap-page .domain-text[data-roadmap-role] .domain-card-footer { margin: 12px 0 -6px; }
+.roadmap-page .roadmap-paper-year { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.roadmap-milestone { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: #d9a441; letter-spacing: 0; }
+.roadmap-milestone svg { fill: #d9a44124; }
+.roadmap-page .domain-paper[data-roadmap-role="milestone"] { border-color: #b58c41; }
+.roadmap-page .roadmap-structure-edge .domain-edge-line { stroke-dasharray: 6 5; stroke-width: 1.3; opacity: .65; }
+.roadmap-page .roadmap-structure-edge text { font-size: 10px; }
 .domain-header {
   display: flex;
   align-items: center;

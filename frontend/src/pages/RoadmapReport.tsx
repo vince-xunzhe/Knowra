@@ -1,10 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Children, isValidElement, useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Download, FileText, Loader2, Maximize, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { getRoadmapReport, type RoadmapReport as Report } from '../api/roadmaps'
+import { exportRoadmapReport, getRoadmapReport, type RoadmapReport as Report } from '../api/roadmaps'
 import { t as tr } from '../i18n/catalog'
 import { sourceUrl } from '../utils/sourceUrl'
+import RoadmapDiagram from './RoadmapDiagram'
+
+function ReportCodeBlock({ children }: { children?: ReactNode }) {
+  const child = Children.toArray(children)[0]
+  if (isValidElement<{ className?: string; children?: ReactNode }>(child) && child.props.className === 'language-mermaid') {
+    return <RoadmapDiagram source={String(child.props.children ?? '').trim()} />
+  }
+  return <pre>{children}</pre>
+}
+
+function ReportImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
+  const [failed, setFailed] = useState(false)
+  // Only locally verified official HTML figures or original PDF pages may become images. Ordinary web links
+  // remain links; external Markdown images cannot issue tracking requests.
+  if (!src || !/^\/api\/roadmaps\/report-assets\/[a-f0-9]{64}\.png$/.test(src)) return <span>{alt || ''}</span>
+  return failed ? <span>{tr('原图暂时无法加载')}{alt ? ` · ${alt}` : ''}</span> : <img
+    className="roadmap-report-image" src={src} alt={alt || tr('论文原文图')} title={title}
+    loading="lazy" decoding="async" onError={() => setFailed(true)} />
+}
 
 export default function RoadmapReport({ boardId, boardName, active, visible, runKey }: {
   boardId: string
@@ -17,6 +36,8 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
   const [report, setReport] = useState<Report | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
   const sequence = useRef(0)
   const dialog = useRef<HTMLElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
@@ -48,15 +69,28 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
     closeButton.current?.focus()
     return () => previous?.focus({ preventScroll: true })
   }, [active, open])
-  const download = () => {
-    if (!report || loading) return
-    const url = URL.createObjectURL(new Blob([report.markdown], { type: 'text/markdown;charset=utf-8' }))
+  const saveFile = (blob: Blob, extension: string) => {
+    const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `${boardName.replace(/[<>:"/\\|?*]/g, '-').trim().slice(0, 80) || 'roadmap'}-research.md`
+    anchor.download = `${boardName.replace(/[<>:"/\\|?*]/g, '-').trim().slice(0, 80) || 'roadmap'}-research.${extension}`
     anchor.click()
     setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
+  const download = () => {
+    if (!report || loading) return
+    saveFile(new Blob([report.markdown], { type: 'text/markdown;charset=utf-8' }), 'md')
+  }
+  const downloadBundle = async () => {
+    if (!report?.hasAssets || loading || exporting) return
+    setExporting(true); setExportError('')
+    try { saveFile(await exportRoadmapReport(boardId), 'zip') }
+    catch { setExportError(tr('导出报告及图片失败，请重试。')) }
+    finally { setExporting(false) }
+  }
+  const bundleButton = report?.hasAssets && <button disabled={loading || exporting || !!error} onClick={() => void downloadBundle()}>
+    {exporting ? <Loader2 size={15} className="spin" /> : <Download size={15} />}{tr('下载报告及图片')}
+  </button>
   const status = report ? tr(report.status === 'preview' ? '预览报告 · 应用方案后保存' : '已应用方案的调研报告')
     : tr('七步调研：筛选、全文评估与证据分级，记录来源和缺口。')
   const content = loading ? <p className="roadmap-report-message" role="status"><Loader2 size={16} className="spin" />{tr('加载中…')}</p>
@@ -67,7 +101,8 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
           const url = sourceUrl(href)
           return url ? <a href={url} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>
         },
-        img: ({ alt }) => <span>{alt || ''}</span>,
+        pre: ReportCodeBlock,
+        img: ReportImage,
       }}>{report.markdown}</ReactMarkdown>
     </div> : <p className="roadmap-report-message">{tr('暂无调研报告。请先生成路线图，完成后可查看和下载。')}</p>
   return <>
@@ -85,8 +120,10 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
           <button className="domain-primary" disabled={!report || loading || !!error} onClick={download}>
             <Download size={15} />{tr('下载 Markdown')}
           </button>
+          {bundleButton}
         </div>
       </header>
+      {exportError && <p role="alert" className="domain-error">{exportError}</p>}
       <div className="roadmap-report-body" tabIndex={0} aria-label={tr('总体调研报告')}>
         <article className="roadmap-report-document">{content}</article>
       </div>
@@ -110,12 +147,14 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
           </div>
           <button ref={closeButton} aria-label={tr('关闭')} onClick={() => setOpen(false)}><X size={18} /></button>
         </header>
+        {exportError && <p role="alert" className="domain-error">{exportError}</p>}
         <div className="roadmap-report-body">
           {content}
         </div>
         <footer>
           <span>{tr('全文未获取或证据不足的部分，会在报告中列为缺口。')}</span>
           <button className="domain-primary" disabled={!report || loading || !!error} onClick={download}><Download size={15} />{tr('下载 Markdown')}</button>
+          {bundleButton}
         </footer>
       </section>
     </div>}

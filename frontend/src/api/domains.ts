@@ -24,6 +24,7 @@ export interface DomainPaper {
   }
 }
 export interface CanvasNode {
+  roadmapRole?: 'topic' | 'branch' | 'milestone' | null
   id: string
   kind: 'paper' | 'text' | 'group'
   x: number
@@ -36,6 +37,7 @@ export interface CanvasNode {
   locked: boolean
 }
 export interface CanvasEdge {
+  roadmapStructure?: boolean
   analysis?: DomainAnalysis | null
   id: string
   source: string
@@ -108,7 +110,7 @@ export interface DomainEvidence {
   quote: string
 }
 export interface DomainAnalysis {
-  relation: 'builds_on' | 'improves' | 'inspired_by' | 'compares' | 'cites'
+  relation: 'builds_on' | 'improves' | 'inspired_by' | 'compares' | 'cites' | 'evolves_into' | 'branches_into' | 'enables' | 'unifies'
   certainty: 'explicit' | 'inferred'
   reason: string
   evidence: DomainEvidence[]

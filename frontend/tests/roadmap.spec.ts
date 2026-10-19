@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
+import { Buffer } from 'node:buffer'
 import type { DomainAgentRun, DomainBoard, DomainPaper, DomainSnapshot, DomainState } from '../src/api/domains'
 import type { RoadmapImportJob, RoadmapReport } from '../src/api/roadmaps'
 
@@ -47,6 +48,8 @@ async function setup(page: Page, populated = false) {
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
   let previewReport: RoadmapReport | null = null
   let reportFailures = 0
+  let exportFailures = 0
+  let exportRequests = 0
   const browserErrors: string[] = []
   page.on('pageerror', e => browserErrors.push(e.message))
   await page.route('**/api/**', async route => {
@@ -68,6 +71,18 @@ async function setup(page: Page, populated = false) {
         return route.fulfill({ status: 503, json: { detail: 'Report temporarily unavailable' } })
       }
       json = url.searchParams.get('boardId') === 'roadmap-vlm' ? null : (runs[0]?.status === 'preview' ? previewReport : appliedReport)
+    }
+    else if (path === '/api/roadmaps/report/export') {
+      exportRequests++
+      expect(url.searchParams.get('boardId')).toBe('roadmap-llm')
+      if (exportFailures > 0) {
+        exportFailures--
+        return route.fulfill({ status: 409, json: { detail: 'Cached figure unavailable' } })
+      }
+      return route.fulfill({ contentType: 'application/zip', body: Buffer.from('PK\u0003\u0004mock-report-and-figure') })
+    }
+    else if (/^\/api\/roadmaps\/report-assets\/[a-f0-9]{64}\.png$/.test(path)) {
+      return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII=', 'base64') })
     }
     else if (path === '/api/roadmaps/agent/runs') {
       if (method === 'POST') {
@@ -119,13 +134,30 @@ async function setup(page: Page, populated = false) {
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
     failReportOnce: () => { reportFailures++ },
-    savedReport(markdown: string) {
-      appliedReport = { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown }
+    failExportOnce: () => { exportFailures++ },
+    exportRequests: () => exportRequests,
+    savedReport(markdown: string, hasAssets = false) {
+      appliedReport = { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown, hasAssets }
     },
-    preview(reason?: string, markdown = '# Preview research report\n\n## Screening\n\nSelected sources.') {
+    developmentTree() {
+      state.boards[0] = {
+        ...board(true), viewport: { x: 30, y: 0, zoom: 1 },
+        nodes: [
+          { id: 'topic', kind: 'text', roadmapRole: 'topic', text: '语言模型发展', x: 200, y: 70, width: 280, height: 140, paperId: null, groupId: null, locked: false },
+          { id: 'branch', kind: 'text', roadmapRole: 'branch', text: '注意力架构', x: 200, y: 280, width: 280, height: 130, paperId: null, groupId: null, locked: false },
+          ...board(true).nodes.map((n, i) => ({ ...n, x: i * 340 + 30, y: 490, roadmapRole: i === 0 ? 'milestone' as const : null })),
+        ],
+        edges: [
+          ...board(true).edges.map(e => ({ ...e, label: '演进', analysis: { ...e.analysis!, relation: 'evolves_into' as const } })),
+          { id: 'topic-branch', source: 'topic', target: 'branch', label: '研究分支', locked: false, roadmapStructure: true, analysis: null },
+          { id: 'branch-paper', source: 'branch', target: 'node-0', label: '代表论文', locked: false, roadmapStructure: true, analysis: null },
+        ],
+      }
+    },
+    preview(reason?: string, markdown = '# Preview research report\n\n## Screening\n\nSelected sources.', proposalBoard = board(true)) {
       candidates = structuredClone(papers)
       if (reason) candidates[0].roadmap!.reason = reason
-      runs = [{ ...runs[0], status: 'preview', proposal: { board: board(true), added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
+      runs = [{ ...runs[0], status: 'preview', proposal: { board: proposalBoard, added: 1, removed: 0, protected: 0, rejected: 0, warnings: [], unconnected: [] } }]
       previewReport = { boardId: 'roadmap-llm', runId: runs[0].id, status: 'preview', markdown }
     },
     fullTextEvidence(withPage = true) {
@@ -384,6 +416,144 @@ test('reading the report preserves the mounted canvas, selection and undo histor
   expect(app.state().boards[0]).toEqual(before)
   await roadmap.getByRole('button', { name: '撤销', exact: true }).click()
   await expect(roadmap.getByRole('textbox', { name: '卡片备注', exact: true })).toHaveValue('')
+  expect(app.errors()).toEqual([])
+})
+
+test('development trees distinguish topic, branch and milestone nodes, route vertical edges, and keep structure editable', async ({ page }) => {
+  const app = await setup(page, true)
+  app.developmentTree()
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '识途', exact: true }).click()
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const topic = roadmap.locator('[data-node-id="topic"]')
+  const branch = roadmap.locator('[data-node-id="branch"]')
+  const milestone = roadmap.locator('[data-node-id="node-0"]')
+  await expect(topic).toHaveAttribute('data-roadmap-role', 'topic')
+  await expect(branch).toHaveAttribute('data-roadmap-role', 'branch')
+  await expect(milestone.getByText('里程碑', { exact: true })).toBeVisible()
+  const structure = roadmap.locator('[data-edge-id="topic-branch"]')
+  await expect(structure).toHaveAttribute('data-roadmap-structure', 'true')
+  await expect(structure).toHaveAttribute('data-orientation', 'vertical')
+  const coordinates = (await structure.locator('.domain-edge-line').getAttribute('d'))!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+  expect(coordinates[0]).toBe(340)
+  expect(coordinates[2]).toBe(coordinates[0])
+  expect(coordinates[6]).toBe(340)
+  expect(coordinates[1]).toBeLessThan(coordinates[7])
+  await expect(roadmap.locator('[data-edge-id="evolution"]')).toHaveAttribute('data-orientation', 'horizontal')
+  await topic.getByRole('heading').click()
+  await roadmap.getByRole('textbox', { name: '主题名称', exact: true }).fill('语言模型技术演进')
+  await expect.poll(() => app.state().boards[0].nodes.find(n => n.id === 'topic')?.text).toBe('语言模型技术演进')
+  await branch.getByRole('heading').click()
+  await roadmap.getByRole('textbox', { name: '分支名称', exact: true }).fill('注意力与预训练')
+  await branch.getByRole('button', { name: '连接节点', exact: true }).click()
+  await expect(topic.getByRole('button', { name: '连接节点', exact: true })).toBeDisabled()
+  await roadmap.locator('[data-node-id="node-1"]').getByRole('button', { name: '连接论文', exact: true }).click()
+  await expect.poll(() => app.state().boards[0].edges.some(e => e.source === 'branch' && e.target === 'node-1' && e.roadmapStructure && !e.analysis)).toBe(true)
+  await topic.getByRole('button', { name: '连接节点', exact: true }).click()
+  await expect(milestone.getByRole('button', { name: '连接论文', exact: true })).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await structure.getByRole('button', { name: '锁定连线', exact: true }).click()
+  await expect(roadmap.getByRole('heading', { name: '结构连线', exact: true })).toBeVisible()
+  await expect(roadmap.getByText('用于组织主题、分支与代表论文，不表示论文之间的证据关系。', { exact: true })).toBeVisible()
+  await expect(roadmap.getByRole('heading', { name: /连线解读/ })).toHaveCount(0)
+  await page.screenshot({ path: '/tmp/knowra-shitu-development-tree.png' })
+  expect(app.domainWrites()).toBe(0)
+  expect(app.errors()).toEqual([])
+})
+
+test('the first preview fits a wide tree when its canvas becomes visible and never overrides later viewport changes', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 800 })
+  const app = await setup(page)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const canvas = roadmap.getByTestId('roadmap-canvas')
+  const proposed: DomainBoard = {
+    ...board(true),
+    nodes: [
+      { id: 'wide-topic', kind: 'text', roadmapRole: 'topic', text: '语言模型技术发展', x: 2000, y: 0, width: 280, height: 140, paperId: null, groupId: null, locked: false },
+      ...papers.map((p, i) => ({ id: `wide-branch-${i}`, kind: 'text' as const, roadmapRole: 'branch' as const, text: p.roadmap!.branch, x: i * 2000, y: 300, width: 280, height: 130, paperId: null, groupId: null, locked: false })),
+      ...board(true).nodes.map((n, i) => ({ ...n, x: i * 2000, y: 620 })),
+    ],
+    edges: papers.flatMap((_, i) => [
+      { id: `wide-root-${i}`, source: 'wide-topic', target: `wide-branch-${i}`, label: '研究分支', locked: false, roadmapStructure: true },
+      { id: `wide-leaf-${i}`, source: `wide-branch-${i}`, target: `node-${i}`, label: '代表论文', locked: false, roadmapStructure: true },
+    ]),
+  }
+  const initialViewport = structuredClone(app.state().boards[0].viewport)
+  await roadmap.getByRole('button', { name: '生成路线图', exact: true }).click()
+  await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
+  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  app.preview(undefined, undefined, proposed)
+  await expect(roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true }).getByText('预览报告 · 应用方案后保存', { exact: true })).toBeVisible()
+  expect(app.state().boards[0].viewport).toEqual(initialViewport)
+  await roadmap.getByRole('tab', { name: '路线图', exact: true }).click()
+  await expect.poll(() => app.state().boards[0].viewport.zoom).toBeLessThan(0.15)
+  const canvasBounds = (await canvas.boundingBox())!
+  for (const node of proposed.nodes) {
+    const bounds = (await canvas.locator(`[data-node-id="${node.id}"]`).boundingBox())!
+    expect(bounds.x).toBeGreaterThanOrEqual(canvasBounds.x)
+    expect(bounds.y).toBeGreaterThanOrEqual(canvasBounds.y)
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(canvasBounds.x + canvasBounds.width)
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(canvasBounds.y + canvasBounds.height)
+  }
+  expect(app.state().boards[0].nodes).toEqual([])
+  await page.screenshot({ path: '/tmp/knowra-shitu-first-preview-fit.png' })
+  const fittedZoom = app.state().boards[0].viewport.zoom
+  await roadmap.getByRole('button', { name: '放大', exact: true }).click()
+  await expect.poll(() => app.state().boards[0].viewport.zoom).toBe(fittedZoom * 1.25)
+  const chosenViewport = structuredClone(app.state().boards[0].viewport)
+  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  await roadmap.getByRole('tab', { name: '路线图', exact: true }).click()
+  await page.setViewportSize({ width: 1180, height: 850 })
+  await roadmap.getByRole('button', { name: '应用方案', exact: true }).click()
+  await expect(roadmap.getByRole('button', { name: '重新调研', exact: true })).toBeEnabled()
+  expect(app.state().boards[0].viewport).toEqual(chosenViewport)
+  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
+  app.preview(undefined, undefined, proposed)
+  await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()
+  expect(app.state().boards[0].viewport).toEqual(chosenViewport)
+  expect(app.errors()).toEqual([])
+})
+
+test('narrative reports render bounded flowcharts and verified local figures, and export figures with retry', async ({ page }) => {
+  const app = await setup(page, true)
+  const asset = `/api/roadmaps/report-assets/${'a'.repeat(64)}.png`
+  const externalRequests: string[] = []
+  page.on('request', request => { if (request.url().includes('tracking.invalid')) externalRequests.push(request.url()) })
+  const markdown = '# 技术发展叙事\n\n从注意力架构到预训练目标，关键变化在于学习方式。\n\n```mermaid\nflowchart TB\n topic["语言模型"] --> branch["注意力与预训练"]\n branch --> p1["Transformer"]\n p1 -->|演进| p2["BERT"]\n```\n\n## 原文架构图\n\n![Transformer 原文架构图](' + asset + ')\n\n来源：论文第 3 页。\n\n![外部图](https://tracking.invalid/figure.png)\n\n![无效资产](/api/roadmaps/report-assets/unverified.png)\n\n<img src="https://tracking.invalid/raw.png">\n\n```mermaid\nflowchart TB\n A --> B\n click A "https://tracking.invalid/click"\n```'
+  app.savedReport(markdown, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  const flowchart = report.getByRole('img', { name: '技术发展流程图', exact: true })
+  await expect(flowchart.locator('svg')).toBeVisible({ timeout: 15000 })
+  await expect(flowchart).toContainText('语言模型')
+  await expect(flowchart).toContainText('BERT')
+  await expect(flowchart.locator('a, image, foreignObject, script')).toHaveCount(0)
+  const originalFigure = report.getByRole('img', { name: 'Transformer 原文架构图', exact: true })
+  await originalFigure.scrollIntoViewIfNeeded()
+  await expect(originalFigure).toHaveAttribute('src', asset)
+  await expect.poll(() => originalFigure.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1)
+  await expect(report.locator('img')).toHaveCount(1)
+  await expect(report.getByText('流程图无法渲染，已保留原始定义。', { exact: true })).toBeVisible()
+  app.failExportOnce()
+  await report.getByRole('button', { name: '下载报告及图片', exact: true }).click()
+  await expect(report.getByRole('alert')).toContainText('导出报告及图片失败，请重试。')
+  const downloadPromise = page.waitForEvent('download')
+  await report.getByRole('button', { name: '下载报告及图片', exact: true }).click()
+  const download = await downloadPromise
+  expect(download.suggestedFilename()).toBe('LLM-research.zip')
+  expect((await readFile((await download.path())!)).toString()).toBe('PK\u0003\u0004mock-report-and-figure')
+  expect(app.exportRequests()).toBe(2)
+  expect(externalRequests).toEqual([])
+  await report.getByRole('button', { name: '展开报告', exact: true }).click()
+  const expanded = page.getByRole('dialog', { name: '调研报告', exact: true })
+  await expect(expanded.getByRole('img', { name: '技术发展流程图', exact: true }).locator('svg')).toBeVisible()
+  await expect(expanded.getByRole('img', { name: '技术发展流程图', exact: true })).toContainText('BERT')
+  await expect(expanded.getByRole('button', { name: '下载报告及图片', exact: true })).toBeEnabled()
+  await expanded.getByRole('button', { name: '关闭', exact: true }).click()
+  await report.locator('.roadmap-report-body').evaluate(element => { element.scrollTop = 0 })
+  await page.screenshot({ path: '/tmp/knowra-shitu-narrative-flowchart.png' })
   expect(app.errors()).toEqual([])
 })
 

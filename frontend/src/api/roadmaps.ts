@@ -20,6 +20,7 @@ export interface RoadmapReport {
   runId: string
   markdown: string
   status: 'preview' | 'applied'
+  hasAssets?: boolean
 }
 
 const api = axios.create({ baseURL: '/api/roadmaps', timeout: 30000 })
@@ -40,3 +41,5 @@ export const getRoadmapImport = (boardId: string) =>
   api.get<RoadmapImportJob | null>('/imports', { params: { boardId } }).then(r => r.data)
 export const getRoadmapReport = (boardId: string, signal?: AbortSignal) =>
   api.get<RoadmapReport | null>('/report', { params: { boardId }, signal }).then(r => r.data)
+export const exportRoadmapReport = (boardId: string) =>
+  api.get<Blob>('/report/export', { params: { boardId }, responseType: 'blob' }).then(r => r.data)

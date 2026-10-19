@@ -20,6 +20,7 @@ import {
   Redo2,
   Search,
   Sparkles,
+  Star,
   Trash2,
   Type,
   Undo2,
@@ -48,6 +49,7 @@ import DomainEdgeEvidence from './DomainEdgeEvidence'
 import RoadmapPaperDetails, { RoadmapPaperStatus } from './RoadmapPaperDetails'
 import RoadmapReport from './RoadmapReport'
 import { sourceUrl } from '../utils/sourceUrl'
+import { roadmapEdgeGeometry } from '../lib/roadmapGeometry'
 import './DomainPage.css'
 
 const FIELDS: [ReviewField, string][] = [
@@ -57,7 +59,7 @@ const FIELDS: [ReviewField, string][] = [
   ['motivation', '研究动机'],
 ]
 const id = () => crypto.randomUUID()
-const clampZoom = (z: number) => Math.min(2.5, Math.max(0.15, z))
+const clampZoom = (z: number, minimum = 0.15) => Math.min(2.5, Math.max(minimum, z))
 type Point = { x: number; y: number }
 type Gesture = {
   mode: 'move' | 'pan' | 'select' | 'resize'
@@ -75,6 +77,7 @@ function CanvasItem({
   children,
   onStart,
   onSize,
+  roadmapRole,
 }: {
   node: CanvasNode
   selected: boolean
@@ -82,6 +85,7 @@ function CanvasItem({
   children: React.ReactNode
   onStart: (e: ReactPointerEvent, node: CanvasNode, resize?: boolean) => void
   onSize: (id: string, width: number, height: number) => void
+  roadmapRole?: CanvasNode['roadmapRole']
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -97,6 +101,7 @@ function CanvasItem({
       data-node-id={node.id}
       data-kind={node.kind}
       data-selected={selected}
+      data-roadmap-role={roadmapRole || undefined}
       className={`domain-node domain-${node.kind} ${selected ? 'is-selected' : ''} ${node.locked ? 'is-locked' : ''}`}
       style={{
         left: node.x,
@@ -185,6 +190,7 @@ export default function DomainPage({
   const gesture = useRef<Gesture | null>(null)
   const space = useRef(false)
   const loadSequence = useRef(0)
+  const fittedPreviewRuns = useRef(new Set<string>())
   const paperMap = new Map(papers.map((p) => [p.id, p]))
   const patchBoard = useCallback(
     (fn: (b: DomainBoard) => DomainBoard, record = true) => {
@@ -245,6 +251,30 @@ export default function DomainPage({
     observer.observe(element)
     return () => observer.disconnect()
   }, [active, loaded])
+  useEffect(() => {
+    const proposal = run?.proposal?.board
+    if (!isRoadmap || !canvasActive || agent.busy || liveBoard?.nodes.length !== 0 ||
+      run?.status !== 'preview' || !proposal?.nodes.length || fittedPreviewRuns.current.has(run.id)) return
+    // Wait for registered paper titles so their rendered card heights are known.
+    if (!paperError && proposal.nodes.some(n => n.kind === 'paper' && !papers.some(p => p.id === n.paperId))) return
+    const frame = requestAnimationFrame(() => {
+      const element = canvas.current
+      if (!element?.clientWidth || !element.clientHeight) return
+      const measured = new Map(Array.from(element.querySelectorAll<HTMLElement>('[data-node-id]'))
+        .map(node => [node.dataset.nodeId, { width: node.offsetWidth, height: node.offsetHeight }]))
+      const minX = Math.min(...proposal.nodes.map(n => n.x)), minY = Math.min(...proposal.nodes.map(n => n.y))
+      const maxX = Math.max(...proposal.nodes.map(n => n.x + (measured.get(n.id)?.width || n.width))),
+        maxY = Math.max(...proposal.nodes.map(n => n.y + (measured.get(n.id)?.height || n.height)))
+      const zoom = clampZoom(Math.min((element.clientWidth - 120) / (maxX - minX),
+        (element.clientHeight - 120) / (maxY - minY), 1.2), 0.05)
+      fittedPreviewRuns.current.add(run.id)
+      patchBoard(b => ({ ...b, viewport: { zoom,
+        x: (element.clientWidth - (maxX - minX) * zoom) / 2 - minX * zoom,
+        y: (element.clientHeight - (maxY - minY) * zoom) / 2 - minY * zoom,
+      } }), false)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [isRoadmap, canvasActive, agent.busy, liveBoard?.nodes.length, run, papers, paperError, canvasSize, patchBoard])
   useEffect(() => {
     if (!active || !popover) return
     const outside = (event: PointerEvent) => {
@@ -367,7 +397,7 @@ export default function DomainPage({
       patchBoard((b) => {
         const v = b.viewport
         if (event.ctrlKey || event.metaKey) {
-          const zoom = clampZoom(v.zoom * Math.exp(-event.deltaY * 0.008))
+          const zoom = clampZoom(v.zoom * Math.exp(-event.deltaY * 0.008), isRoadmap ? 0.05 : 0.15)
           const x = event.clientX - rect.left,
             y = event.clientY - rect.top
           return {
@@ -380,7 +410,7 @@ export default function DomainPage({
     }
     element.addEventListener('wheel', wheel, { passive: false })
     return () => element.removeEventListener('wheel', wheel)
-  }, [canvasActive, patchBoard, loaded])
+  }, [canvasActive, patchBoard, loaded, isRoadmap])
 
   const localPoint = (e: { clientX: number; clientY: number }): Point => {
     const rect = canvas.current!.getBoundingClientRect()
@@ -502,21 +532,37 @@ export default function DomainPage({
     setRubber(null)
     if (canvas.current?.hasPointerCapture(e.pointerId)) canvas.current.releasePointerCapture(e.pointerId)
   }
+  const canConnect = (target: string) => {
+    if (!isRoadmap || !linkSource || linkSource === target) return true
+    const sourceNode = board?.nodes.find(n => n.id === linkSource)
+    const targetNode = board?.nodes.find(n => n.id === target)
+    return (sourceNode?.kind === 'paper' && targetNode?.kind === 'paper') ||
+      (sourceNode?.roadmapRole === 'topic' && targetNode?.roadmapRole === 'branch') ||
+      (sourceNode?.roadmapRole === 'branch' && targetNode?.kind === 'paper')
+  }
   const connect = (target: string) => {
+    if (readOnly || !canConnect(target)) return
     expandInspector()
     if (!linkSource || linkSource === target) {
       setLinkSource(target)
       return
     }
-    patchBoard((b) => ({
-      ...b,
-      edges: [...b.edges, { id: id(), source: linkSource, target, label: '', locked: false }],
-    }))
+    patchBoard((b) => {
+      const sourceRole = b.nodes.find(n => n.id === linkSource)?.roadmapRole
+      const structure = isRoadmap && (sourceRole === 'topic' || sourceRole === 'branch')
+      return {
+        ...b,
+        edges: [...b.edges, { id: id(), source: linkSource, target,
+          label: structure ? tr(sourceRole === 'topic' ? '研究分支' : '代表论文') : '', locked: false,
+          ...(structure ? { roadmapStructure: true, analysis: null } : {}),
+        }],
+      }
+    })
     setLinkSource(null)
   }
   const zoomBy = (factor: number) =>
     patchBoard((b) => {
-      const zoom = clampZoom(b.viewport.zoom * factor),
+      const zoom = clampZoom(b.viewport.zoom * factor, isRoadmap ? 0.05 : 0.15),
         x = canvasSize.width / 2,
         y = canvasSize.height / 2
       return {
@@ -536,6 +582,7 @@ export default function DomainPage({
       maxY = Math.max(...board.nodes.map((n) => n.y + (sizes[n.id]?.height ?? n.height)))
     const zoom = clampZoom(
       Math.min((canvasSize.width - 120) / (maxX - minX), (canvasSize.height - 120) / (maxY - minY), 1.2),
+      isRoadmap ? 0.05 : 0.15,
     )
     patchBoard(
       (b) => ({
@@ -890,7 +937,7 @@ export default function DomainPage({
           onContextMenu={(e) => e.preventDefault()}
           style={{
             backgroundPosition: `${board?.viewport.x ?? 0}px ${board?.viewport.y ?? 0}px`,
-            backgroundSize: `${24 * (board?.viewport.zoom ?? 1)}px ${24 * (board?.viewport.zoom ?? 1)}px`,
+            backgroundSize: `${Math.max(isRoadmap ? 12 : 0, 24 * (board?.viewport.zoom ?? 1))}px ${Math.max(isRoadmap ? 12 : 0, 24 * (board?.viewport.zoom ?? 1))}px`,
           }}
         >
           {board && (
@@ -916,18 +963,23 @@ export default function DomainPage({
                     const source = board.nodes.find((n) => n.id === e.source),
                       target = board.nodes.find((n) => n.id === e.target)
                     if (!source || !target) return null
-                    const forward = target.x >= source.x
-                    const sx = source.x + (forward ? source.width : 0),
-                      tx = target.x + (forward ? 0 : target.width)
-                    const sy = source.y + Math.min(sizes[source.id]?.height ?? source.height, 160) / 2,
-                      ty = target.y + Math.min(sizes[target.id]?.height ?? target.height, 160) / 2
-                    const bend = Math.max(60, Math.abs(tx - sx) / 2) * (forward ? 1 : -1)
-                    const d = `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`
+                    const geometry = isRoadmap ? roadmapEdgeGeometry(source, target,
+                      sizes[source.id]?.height ?? source.height, sizes[target.id]?.height ?? target.height) : (() => {
+                      const forward = target.x >= source.x
+                      const sx = source.x + (forward ? source.width : 0), tx = target.x + (forward ? 0 : target.width)
+                      const sy = source.y + Math.min(sizes[source.id]?.height ?? source.height, 160) / 2,
+                        ty = target.y + Math.min(sizes[target.id]?.height ?? target.height, 160) / 2
+                      const bend = Math.max(60, Math.abs(tx - sx) / 2) * (forward ? 1 : -1)
+                      return { sx, sy, tx, ty, vertical: false, d: `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}` }
+                    })()
+                    const { sx, sy, tx, ty, d, vertical } = geometry
                     return (
                       <g
                         key={e.id}
-                        className={selectedEdge === e.id ? 'selected-edge' : ''}
+                        className={`${selectedEdge === e.id ? 'selected-edge' : ''}${isRoadmap && e.roadmapStructure ? ' roadmap-structure-edge' : ''}`}
                         data-edge-id={e.id}
+                        data-roadmap-structure={isRoadmap && !!e.roadmapStructure}
+                        data-orientation={vertical ? 'vertical' : 'horizontal'}
                         onPointerDown={(event) => {
                           event.stopPropagation()
                           expandInspector()
@@ -993,18 +1045,34 @@ export default function DomainPage({
                       readOnly={readOnly}
                       onStart={beginNode}
                       onSize={onSize}
+                      roadmapRole={isRoadmap ? n.roadmapRole : undefined}
                     >
                       {n.kind === 'group' ? (
                         <div className="domain-group-heading">
                           <Frame size={14} />
                           {n.text}
                         </div>
+                      ) : n.kind === 'text' && isRoadmap && (n.roadmapRole === 'topic' || n.roadmapRole === 'branch') ? (
+                        <>
+                          <span className="roadmap-node-role">{tr(n.roadmapRole === 'topic' ? '研究主题' : '研究分支')}</span>
+                          <h3 className="roadmap-node-title">{n.text}</h3>
+                          <div className="domain-card-footer">
+                            <button aria-label={tr('连接节点')} disabled={readOnly || !canConnect(n.id)}
+                              className={linkSource === n.id ? 'connecting' : ''} onClick={() => connect(n.id)}>
+                              <Link2 size={14} />{tr(linkSource && linkSource !== n.id ? '连接到这里' : '连线')}
+                            </button>
+                          </div>
+                        </>
                       ) : n.kind === 'text' ? (
                         <div className="domain-text-content">{n.text}</div>
                       ) : (
                         <>
                           <div className="domain-paper-head">
-                            <span>{paperMap.get(n.paperId!)?.year || tr('年份未知')}</span>
+                            <span className="roadmap-paper-year">{paperMap.get(n.paperId!)?.year || tr('年份未知')}
+                              {isRoadmap && n.roadmapRole === 'milestone' && <span className="roadmap-milestone" title={tr('关键里程碑')}>
+                                <Star size={12} aria-label={tr('关键里程碑')} />{tr('里程碑')}
+                              </span>}
+                            </span>
                             <div className="domain-paper-actions">
                               <button
                                 className="domain-review-jump"
@@ -1051,7 +1119,7 @@ export default function DomainPage({
                           <div className="domain-card-footer">
                             <button
                               aria-label={tr('连接论文')}
-                              disabled={readOnly}
+                              disabled={readOnly || !canConnect(n.id)}
                               className={linkSource === n.id ? 'connecting' : ''}
                               onClick={() => connect(n.id)}
                             >
@@ -1260,6 +1328,10 @@ export default function DomainPage({
           </section>}
           {isRoadmap && selectedPaper && <RoadmapPaperDetails paper={selectedPaper} onOpenReview={onOpenReview} />}
           {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={openReview} roadmap={isRoadmap} />}
+          {isRoadmap && edge?.roadmapStructure && <section className="domain-edge-evidence roadmap-structure-explanation">
+            <h2>{tr('结构连线')}</h2>
+            <p>{tr('用于组织主题、分支与代表论文，不表示论文之间的证据关系。')}</p>
+          </section>}
           <label className="domain-search">
             <Search size={15} />
             <input
@@ -1290,7 +1362,9 @@ export default function DomainPage({
           <fieldset disabled={readOnly} className="domain-edit-fields">
           <h2>
             {tr(
-              one?.kind === 'group'
+              isRoadmap && one?.roadmapRole === 'topic' ? '编辑主题'
+                : isRoadmap && one?.roadmapRole === 'branch' ? '编辑分支'
+                : one?.kind === 'group'
                 ? '编辑分组'
                 : one?.kind === 'text'
                   ? '编辑文字'
@@ -1306,7 +1380,9 @@ export default function DomainPage({
               <textarea
                 maxLength={50000}
                 aria-label={tr(
-                  one.kind === 'group' ? '分组名称' : one.kind === 'text' ? '独立文本' : '卡片备注',
+                  isRoadmap && one.roadmapRole === 'topic' ? '主题名称'
+                    : isRoadmap && one.roadmapRole === 'branch' ? '分支名称'
+                    : one.kind === 'group' ? '分组名称' : one.kind === 'text' ? '独立文本' : '卡片备注',
                 )}
                 disabled={isLocked(one)}
                 value={one.text}
@@ -1339,7 +1415,8 @@ export default function DomainPage({
                 }
               />
               <div className="domain-presets">
-                {['改进', '基于', '对比', '待验证'].map((label) => (
+                {(isRoadmap ? edge.roadmapStructure ? ['研究分支', '代表论文'] : ['演进', '分化', '突破推动', '融合', '待验证']
+                  : ['改进', '基于', '对比', '待验证']).map((label) => (
                   <button
                     key={label}
                     disabled={edge.locked}
