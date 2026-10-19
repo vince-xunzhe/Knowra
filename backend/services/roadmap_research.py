@@ -11,12 +11,14 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 from database import SessionLocal
 from models import RoadmapPaper, RoadmapRun
 
-from services.domain_agent import RELATIONS, instantiate
-from services.domain_agent_layout import arrange
+from services.domain_agent import RELATIONS as LEGACY_RELATIONS
+from services.roadmap_layout import arrange_tree
 from services.roadmap_sources import canonical_arxiv_id, canonical_doi, normalized_title
 from services.roadmap_state import Cancelled, check, fail_run, persist_preview
 
 SKILL_DIR = Path(__file__).resolve().parents[2] / "skills" / "shitu-roadmap"
+RELATIONS = {**LEGACY_RELATIONS, "evolves_into": "演进", "branches_into": "分化",
+             "enables": "突破推动", "unifies": "融合"}
 
 
 def skill_instructions():
@@ -88,6 +90,12 @@ def scope_catalog(board_id, incoming, existing):
         candidate = dict(item, id=pid)
         if old and old.get("arxivId") and not candidate.get("arxivId"):
             candidate = deepcopy(old)
+        elif old:
+            # Source resolvers supply bibliographic facts, not canvas branch
+            # decisions. Keep saved descriptions for cards not re-selected.
+            for key in ("reason", "branch"):
+                if not candidate.get(key):
+                    candidate[key] = old.get(key, "")
         catalog[pid] = candidate
     return catalog
 
@@ -201,9 +209,11 @@ def select_and_ground(raw, catalog):
             continue
         if pid not in selected and len(selected) < 30:
             selected[pid] = dict(catalog[pid], reason=reason, branch=branch)
+            if isinstance(item.get("milestone"), bool):
+                selected[pid]["milestone"] = item["milestone"]
     if not selected:
         raise ValueError("没有可核验的路线图论文；原画布未修改。")
-    relations, pairs = [], set()
+    relations, pairs, successors = [], set(), {}
     for edge in raw_edges[:200]:
         if not isinstance(edge, dict):
             rejected += 1
@@ -236,50 +246,167 @@ def select_and_ground(raw, catalog):
         if not evidence:
             rejected += 1
             continue
+        reachable, pending = set(), [b]
+        while pending:
+            current = pending.pop()
+            if current not in reachable:
+                reachable.add(current)
+                pending.extend(successors.get(current, ()))
+        if a in reachable:
+            # New developmental links must not create circular progression.
+            # User-locked cycles are handled separately and remain untouched.
+            rejected += 1
+            continue
         explicit = edge.get("certainty") == "explicit" and any(
-            e["page"] is not None or e["locator"].endswith("#fulltext") for e in evidence)
+            e["paperId"] == b and (e["page"] is not None or e["locator"].endswith("#fulltext")) for e in evidence)
         relations.append({"source": a, "target": b, "relation": relation,
                           "certainty": "explicit" if explicit else "inferred", "reason": reason, "evidence": evidence})
         pairs.add(frozenset((a, b)))
+        successors.setdefault(a, set()).add(b)
     return selected, relations, rejected
+
+
+def tree_nodes(board, catalog, selected):
+    """Create editable topic/branch labels without replacing user-authored nodes."""
+    proposed = deepcopy(board)
+    existing_ids = {n["paperId"] for n in board["nodes"] if n["kind"] == "paper"}
+    for pid, paper in selected.items():
+        if pid not in existing_ids:
+            proposed["nodes"].append({"id": str(uuid4()), "kind": "paper", "x": 80, "y": 80,
+                                      "width": 280, "height": 180, "paperId": pid,
+                                      "groupId": None, "text": "", "locked": False,
+                                      "roadmapRole": "milestone" if paper.get("milestone") else None})
+    node_map = {n["id"]: n for n in proposed["nodes"]}
+    for node in proposed["nodes"]:
+        paper = selected.get(node.get("paperId"), {})
+        group = node_map.get(node.get("groupId"), {})
+        if "milestone" in paper and not node["locked"] and not group.get("locked"):
+            node["roadmapRole"] = "milestone" if paper["milestone"] else None
+
+    def label(role, value):
+        key = str(uuid5(NAMESPACE_URL, board["id"] + ":" + role + ":" + normalized(value)))
+        if key in node_map:
+            key = str(uuid4())
+        item = {"id": key, "kind": "text", "roadmapRole": role, "x": 80, "y": 80,
+                "width": 320 if role == "topic" else 280, "height": 90,
+                "paperId": None, "groupId": None, "text": value, "locked": False}
+        proposed["nodes"].append(item)
+        node_map[key] = item
+        return item
+
+    topic = next((node for node in proposed["nodes"] if node.get("roadmapRole") == "topic"), None)
+    topic = topic or label("topic", board["name"])
+    papers = dict(catalog, **selected)
+    cards = [node for node in proposed["nodes"] if node["kind"] == "paper"]
+    branches, used = {}, set()
+    names = list(dict.fromkeys(papers.get(node["paperId"], {}).get("branch") or "其他" for node in cards))
+    normalized_names = {normalized(name) for name in names}
+    for name in names:
+        candidates = [node for node in proposed["nodes"] if node.get("roadmapRole") == "branch" and node["id"] not in used
+                      and (normalized(node["text"]) == normalized(name) or normalized(node["text"]) not in normalized_names)]
+        match = next((node for node in candidates if normalized(node["text"]) == normalized(name)), None)
+        if match is None:
+            # A human may have renamed the branch label. Its saved membership
+            # identifies the branch without overwriting that edited text.
+            member_ids = {node["id"] for node in cards if (papers.get(node["paperId"], {}).get("branch") or "其他") == name
+                          and (catalog.get(node["paperId"], {}).get("branch") or "其他") == name}
+            match = next((node for node in candidates if any(
+                edge.get("roadmapStructure") and edge["source"] == node["id"] and edge["target"] in member_ids
+                for edge in board["edges"])), None)
+        match = match or label("branch", name)
+        branches[name] = match["id"]
+        used.add(match["id"])
+    return proposed, papers, topic["id"], branches
+
+
+def instantiate_tree(board, papers, relations, topic_id, branches):
+    """Keep organizational links distinct from evidence-backed paper evolution."""
+    nodes = {node["id"]: node for node in board["nodes"]}
+    by_paper = {}
+    for node in board["nodes"]:
+        if node["kind"] == "paper":
+            by_paper.setdefault(node["paperId"], []).append(node)
+    edges = [deepcopy(edge) for edge in board["edges"] if edge["locked"]]
+    seen = {frozenset((nodes[edge["source"]]["paperId"], nodes[edge["target"]]["paperId"]))
+            for edge in edges if not edge.get("roadmapStructure")}
+    for relation in relations:
+        pair = frozenset((relation["source"], relation["target"]))
+        if pair in seen:
+            continue
+        source, target = min(((a, b) for a in by_paper[relation["source"]] for b in by_paper[relation["target"]]),
+                             key=lambda pair: (pair[0].get("groupId") != pair[1].get("groupId"), pair[0]["id"], pair[1]["id"]))
+        edges.append({"id": str(uuid4()), "source": source["id"], "target": target["id"],
+                      "label": RELATIONS[relation["relation"]], "locked": False, "roadmapStructure": False,
+                      "analysis": {key: value for key, value in relation.items() if key not in ("source", "target")}})
+        seen.add(pair)
+    pairs = {(edge["source"], edge["target"]) for edge in edges}
+    edge_ids = {edge["id"] for edge in edges}
+
+    def connect(source, target, label):
+        if (source, target) not in pairs:
+            key = str(uuid5(NAMESPACE_URL, board["id"] + ":structure:" + source + ":" + target))
+            if key in edge_ids:
+                key = str(uuid4())
+            edges.append({"id": key,
+                          "source": source, "target": target, "label": label, "locked": False,
+                          "analysis": None, "roadmapStructure": True})
+            pairs.add((source, target))
+            edge_ids.add(key)
+
+    for branch in (node for node in board["nodes"] if node.get("roadmapRole") == "branch"):
+        connect(topic_id, branch["id"], "研究分支")
+    for name, key in branches.items():
+        members = {node["id"] for node in board["nodes"] if node["kind"] == "paper"
+                   and (papers.get(node["paperId"], {}).get("branch") or "其他") == name}
+        successors = {member: set() for member in members}
+        incoming = set()
+        for edge in edges:
+            if edge["source"] in members and edge["target"] in members:
+                successors[edge["source"]].add(edge["target"])
+                incoming.add(edge["target"])
+        reached = set()
+
+        def visit(start, reached, successors):
+            stack = [start]
+            while stack:
+                current = stack.pop()
+                if current not in reached:
+                    reached.add(current)
+                    stack.extend(successors[current])
+
+        roots = sorted(members - incoming)
+        for member in roots:
+            connect(key, member, "代表论文")
+            visit(member, reached, successors)
+        # Locked cycles are preserved. Attach each remaining component once so
+        # every paper remains reachable without fabricating a scholarly chain.
+        for member in sorted(members):
+            if member not in reached:
+                connect(key, member, "代表论文")
+                visit(member, reached, successors)
+    return edges
 
 
 def proposal_for(board, heights, catalog, raw, warnings):
     from routers.domains import Board
 
     selected, relations, rejected = select_and_ground(raw, catalog)
-    proposed = deepcopy(board)
-    existing_ids = {n["paperId"] for n in board["nodes"] if n["kind"] == "paper"}
-    first_generation = not board["nodes"]
-    groups = {}
-    if first_generation:
-        # Branches are real editable group nodes, not a fixed timeline overlay.
-        for branch in dict.fromkeys(p["branch"] for p in selected.values()):
-            gid = str(uuid4())
-            groups[branch] = gid
-            proposed["nodes"].append({"id": gid, "kind": "group", "x": 80, "y": 80,
-                                      "width": 640, "height": 420, "paperId": None,
-                                      "groupId": None, "text": branch, "locked": False})
-    for pid, paper in selected.items():
-        if pid not in existing_ids:
-            proposed["nodes"].append({"id": str(uuid4()), "kind": "paper", "x": 80, "y": 80,
-                                      "width": 280, "height": 180, "paperId": pid,
-                                      "groupId": groups.get(paper["branch"]), "text": "", "locked": False})
-    proposed["edges"] = instantiate(proposed, relations)
-    all_papers = dict(catalog, **selected)
-    proposed = arrange(proposed, all_papers, heights)
+    proposed, all_papers, topic_id, branches = tree_nodes(board, catalog, selected)
+    proposed["edges"] = instantiate_tree(proposed, all_papers, relations, topic_id, branches)
+    proposed = arrange_tree(proposed, all_papers, heights, topic_id, branches)
     proposed = Board.model_validate(proposed).model_dump()
     linked = {n["paperId"] for n in proposed["nodes"] if n["kind"] == "paper"
-              and any(n["id"] in (e["source"], e["target"]) for e in proposed["edges"])}
+              and any(not e["roadmapStructure"] and n["id"] in (e["source"], e["target"]) for e in proposed["edges"])}
     notes = [{"paperId": "", "message": text(message, 1500)} for message in warnings[:40]]
     if len(selected) < 20:
         notes.append({"paperId": "", "message": f"本次仅筛选出 {len(selected)} 篇可核验论文，未为凑足数量补造条目。"})
     notes.append({"paperId": "", "message": "仅在有可定位全文引文时支持原文明示；其余发展关系为 AI 推断。全文阅读覆盖和筛选缺口见调研报告。"})
+    notes.append({"paperId": "", "message": "主题和分支之间的组织连线仅用于导览，不表示论文引用或学术继承关系。"})
     result = {
         "board": proposed, "warnings": notes, "rejected": rejected,
         "unconnected": [{"paperId": p["id"], "title": p["title"]} for p in selected.values() if p["id"] not in linked],
-        "added": sum(not e["locked"] for e in proposed["edges"]),
-        "removed": sum(not e["locked"] for e in board["edges"]),
+        "added": sum(not e["locked"] and not e["roadmapStructure"] for e in proposed["edges"]),
+        "removed": sum(not e["locked"] and not e.get("roadmapStructure") for e in board["edges"]),
         "protected": sum(e["locked"] for e in proposed["edges"]),
     }
     from services.roadmap_state import PaperMetadata
@@ -373,15 +500,25 @@ def generate(ctx, payload):
             raise ValueError("全文评估后没有符合筛选标准的候选；原画布未修改。")
         synthesis_papers = [{k: v for k, v in p.items() if k not in ("fullText", "fullTextPages")} for p in selected.values()]
         ctx.phase("5/7 · 按主题综合里程碑与发展脉络")
-        raw = ctx.step("research_synthesis_v2", lambda: ask("synthesize", {
+        raw = ctx.step("research_development_tree_v3", lambda: ask("synthesize", {
             "category": board["name"], "targetPapers": 25,
             "plan": plan, "papers": synthesis_papers, "evaluations": evaluations,
-        }, 14000))
+            "researchCoverage": {
+                "accessedAt": resolved.get("accessedAt"),
+                "searchLog": resolved.get("searchLog", [])[:80],
+                "screening": resolved.get("screening", {}),
+                "candidateCount": len(catalog), "selectedCount": len(selected),
+                "excluded": excluded[:60], "warnings": warnings[:40],
+                "fullText": [{key: paper.get(key) for key in ("id", "fullTextStatus", "fullTextCoverage")}
+                             for paper in readings["papers"]],
+            },
+        }, 20000))
         check(run_id)
         ctx.phase("6/7 · 复核来源身份、引文页码与连线证据")
         # The final selection cannot reintroduce a candidate excluded by screening.
         final_selected, final_relations, final_rejected = select_and_ground(raw, selected)
-        accepted_raw = dict(raw, papers=[{"id": p["id"], "reason": p["reason"], "branch": p["branch"]} for p in final_selected.values()])
+        accepted_raw = dict(raw, papers=[{key: p[key] for key in ("id", "reason", "branch", "milestone") if key in p}
+                                        for p in final_selected.values()])
         proposal, papers = proposal_for(board, snapshot.get("heights", {}), dict(catalog, **selected), accepted_raw, warnings)
         proposal["rejected"] = screen_rejected + final_rejected
         if proposal["protected"]:
@@ -389,7 +526,8 @@ def generate(ctx, payload):
         ctx.phase("7/7 · 生成结构化 Markdown 调研报告")
         proposal["report"] = render_report(board["name"], plan, resolved, catalog, excluded,
                                             readings, evaluations, papers, final_relations,
-                                            proposal["warnings"], proposal["rejected"])
+                                            proposal["warnings"], proposal["rejected"],
+                                            narrative=raw.get("narrative"), board=proposal["board"])
         persist_preview(run_id, proposal, papers)
         ctx.phase("路线图预览已就绪，请在识途应用或放弃")
         return {"run_id": run_id, "board_id": board["id"], "preview": True}

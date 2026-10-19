@@ -129,6 +129,8 @@ def _stored_text(local):
 
 
 def _read_one(metadata, check):
+    from services.roadmap_figures import extract_figures
+
     problems, coverage, pages = [], _coverage("unavailable"), []
     local = _local_materials(metadata)
     if local:
@@ -140,9 +142,11 @@ def _read_one(metadata, check):
                 raise ValueError("本地论文路径包含不安全的相对段")
             text, coverage, pages = _read_pdf(resolve_paper_path(local["filepath"]), "local_pdf", check)
             if text:
+                figures, figure_warnings = extract_figures(resolve_paper_path(local["filepath"]), metadata, pages, check)
+                problems.extend(figure_warnings)
                 source = ("https://arxiv.org/pdf/" + canonical_arxiv_id(metadata["arxivId"])
                           if metadata.get("arxivId") else metadata.get("sourceUrl", ""))
-                return text, source, coverage, pages, problems
+                return text, source, coverage, pages, problems, figures
             problems.append("本地 PDF 未提取到可读文字；未执行 OCR。")
         except _CancelledRead:
             raise
@@ -152,7 +156,7 @@ def _read_one(metadata, check):
         if local["text"].strip():
             text, coverage, pages = _stored_text(local)
             if text:
-                return text, metadata.get("sourceUrl", ""), coverage, pages, problems
+                return text, metadata.get("sourceUrl", ""), coverage, pages, problems, []
     check()
     if metadata.get("arxivId"):
         aid = canonical_arxiv_id(metadata["arxivId"])
@@ -164,11 +168,13 @@ def _read_one(metadata, check):
             check()
             text, coverage, pages = _read_pdf(path, "arxiv_pdf", check)
             if text:
-                return text, "https://arxiv.org/pdf/" + aid, coverage, pages, problems
+                figures, figure_warnings = extract_figures(path, metadata, pages, check)
+                problems.extend(figure_warnings)
+                return text, "https://arxiv.org/pdf/" + aid, coverage, pages, problems, figures
             problems.append("arXiv PDF 未提取到可读文字；未执行 OCR。")
     else:
         problems.append("未找到可用的本地全文或 arXiv 版本；未访问付费或受限全文。")
-    return "", metadata.get("sourceUrl", ""), coverage, pages, problems
+    return "", metadata.get("sourceUrl", ""), coverage, pages, problems, []
 
 
 def read_key_papers(papers, cancelled=lambda: None, progress=lambda label: None):
@@ -199,10 +205,10 @@ def read_key_papers(papers, cancelled=lambda: None, progress=lambda label: None)
             progress(f"读取关键论文全文 {index + 1}/{len(selected)} · {title[:80]}")
             result = deepcopy(metadata)
             try:
-                text, source, coverage, pages, problems = _read_one(metadata, check)
+                text, source, coverage, pages, problems, figures = _read_one(metadata, check)
                 result.update(fullText=text, fullTextSource=source, fullTextCoverage=coverage,
                               fullTextPages=pages,
-                              fullTextStatus="read" if text else "unavailable")
+                              fullTextStatus="read" if text else "unavailable", figures=figures)
                 if not text:
                     result["fullTextError"] = "；".join(problems) or "没有可用的全文内容。"
                 if problems:
@@ -216,7 +222,7 @@ def read_key_papers(papers, cancelled=lambda: None, progress=lambda label: None)
                 result.update(fullText="", fullTextSource=metadata.get("sourceUrl", ""),
                               fullTextPages=[],
                               fullTextCoverage=_coverage("unavailable"),
-                              fullTextStatus="unavailable", fullTextError=message)
+                              fullTextStatus="unavailable", fullTextError=message, figures=[])
                 warnings.append(f"《{title}》：{message}")
             check()
             results.append(result)

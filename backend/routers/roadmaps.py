@@ -1,12 +1,15 @@
 """Local discovery canvases, research previews and explicit batch adoption."""
 
 from copy import deepcopy
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Annotated
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from models import RoadmapPaper, RoadmapRun, RoadmapWorkspace
 from pydantic import Field
 from services import task_runtime
@@ -222,8 +225,54 @@ def report(boardId: str, db: Annotated[Session, Depends(get_db)]):
     for row in rows:
         markdown = (row.proposal or {}).get("report")
         if markdown:
-            return {"boardId": boardId, "runId": row.id, "status": row.status, "markdown": markdown}
+            from services.roadmap_figures import report_asset_ids
+
+            return {"boardId": boardId, "runId": row.id, "status": row.status, "markdown": markdown,
+                    "hasAssets": bool(report_asset_ids(markdown))}
     return None
+
+
+@router.get("/report-assets/{asset_id}.png")
+def report_asset(asset_id: str, db: Annotated[Session, Depends(get_db)]):
+    from services.roadmap_figures import asset_path, report_asset_ids
+
+    try:
+        path = asset_path(asset_id)
+    except ValueError:
+        raise HTTPException(404, "报告图片不存在") from None
+    # Only images actually referenced by retained reports are exposed; cached
+    # images from failed/discarded research are not public static files.
+    referenced = any(asset_id in report_asset_ids((proposal or {}).get("report", ""))
+                     for (proposal,) in db.query(RoadmapRun.proposal).filter(
+                         RoadmapRun.status.in_(("preview", "applied"))).all())
+    if not referenced or not path.is_file():
+        raise HTTPException(404, "报告图片不存在")
+    return FileResponse(path, media_type="image/png", headers={"X-Content-Type-Options": "nosniff"})
+
+
+@router.get("/report/export")
+def export_report(boardId: str, db: Annotated[Session, Depends(get_db)]):
+    from services.roadmap_figures import ASSET_PREFIX, asset_path, report_asset_ids
+
+    data = report(boardId, db)
+    if not data:
+        raise HTTPException(404, "暂无可下载的调研报告")
+    markdown = data["markdown"]
+    output = BytesIO()
+    with ZipFile(output, "w", compression=ZIP_DEFLATED) as archive:
+        for asset_id in report_asset_ids(markdown):
+            try:
+                path = asset_path(asset_id)
+                raw = path.read_bytes()
+            except (ValueError, OSError):
+                raise HTTPException(409, "报告图片缺失，请重新生成报告后导出") from None
+            name = "assets/" + asset_id + ".png"
+            archive.writestr(name, raw)
+            markdown = markdown.replace(ASSET_PREFIX + asset_id + ".png", name)
+        archive.writestr("report.md", markdown.encode("utf-8"))
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/zip",
+                             headers={"Content-Disposition": 'attachment; filename="roadmap-report.zip"'})
 
 
 class ImportRequest(StrictModel):

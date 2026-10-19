@@ -129,6 +129,18 @@ def test_workspace_inherits_categories_but_rejects_fabricated_papers(env):
         assert db.query(Paper).count() == 0
 
 
+def test_wide_roadmap_viewport_roundtrips_at_five_percent(env):
+    snap = env.client.get("/api/roadmaps").json()
+    viewport = {"x": 12, "y": -24, "zoom": 0.05}
+    snap["state"]["boards"][0]["viewport"] = viewport
+    response = env.client.put("/api/roadmaps", json=snap)
+    assert response.status_code == 200, response.text
+    saved = env.client.get("/api/roadmaps").json()
+    assert saved["state"]["boards"][0]["viewport"] == viewport
+    saved["state"]["boards"][0]["viewport"]["zoom"] = 0.01
+    assert env.client.put("/api/roadmaps", json=saved).status_code == 422
+
+
 def test_external_catalog_can_be_edited_without_downloading_and_saves_conflict(env):
     add_catalog(env, metadata())
     snap = saved_board(env, "classic")

@@ -31,7 +31,8 @@ class StrictModel(BaseModel):
 class Viewport(StrictModel):
     x: float = 80
     y: float = 80
-    zoom: float = Field(default=1, ge=0.15, le=2.5)
+    # Roadmap trees can span many branches; Domain keeps its 15% UI minimum.
+    zoom: float = Field(default=1, ge=0.05, le=2.5)
 
 
 class CanvasNode(StrictModel):
@@ -45,6 +46,7 @@ class CanvasNode(StrictModel):
     groupId: Optional[str] = Field(default=None, max_length=100)
     text: str = Field(default="", max_length=50000)
     locked: bool = False
+    roadmapRole: Optional[Literal["topic", "branch", "milestone"]] = None
 
     @model_validator(mode="after")
     def check_kind(self):
@@ -52,6 +54,10 @@ class CanvasNode(StrictModel):
             raise ValueError("Only imported paper references can have a paperId")
         if self.kind == "group" and self.groupId:
             raise ValueError("Nested groups are not supported")
+        if self.roadmapRole in ("topic", "branch") and self.kind != "text":
+            raise ValueError("Roadmap topics and branches must be text nodes")
+        if self.roadmapRole == "milestone" and self.kind != "paper":
+            raise ValueError("Only paper cards can be roadmap milestones")
         return self
 
 
@@ -80,7 +86,8 @@ class CitationDiscussion(StrictModel):
 
 
 class EdgeAnalysis(StrictModel):
-    relation: Literal["builds_on", "improves", "inspired_by", "compares", "cites"]
+    relation: Literal["builds_on", "improves", "inspired_by", "compares", "cites",
+                      "evolves_into", "branches_into", "enables", "unifies"]
     certainty: Literal["explicit", "inferred"]
     reason: str = Field(min_length=1, max_length=3000)
     evidence: list[EdgeEvidence] = Field(min_length=1, max_length=8)
@@ -94,6 +101,7 @@ class CanvasEdge(StrictModel):
     label: str = Field(default="", max_length=2000)
     locked: bool = False
     analysis: Optional[EdgeAnalysis] = None
+    roadmapStructure: bool = False
 
 
 class Board(StrictModel):
@@ -119,10 +127,16 @@ class Board(StrictModel):
             ):
                 raise ValueError("Invalid group reference")
         for edge in self.edges:
-            if edge.source == edge.target or any(
-                key not in nodes or nodes[key].kind != "paper"
-                for key in (edge.source, edge.target)
-            ):
+            if edge.source == edge.target or any(key not in nodes for key in (edge.source, edge.target)):
+                raise ValueError("Connections must join two different existing nodes")
+            if edge.roadmapStructure:
+                source, target = nodes[edge.source], nodes[edge.target]
+                if edge.analysis is not None or not (
+                    (source.roadmapRole == "topic" and target.roadmapRole == "branch")
+                    or (source.roadmapRole == "branch" and target.kind == "paper")
+                ):
+                    raise ValueError("Roadmap structure joins topic to branch or branch to paper without scholarly evidence")
+            elif any(nodes[key].kind != "paper" for key in (edge.source, edge.target)):
                 raise ValueError("Connections must join two paper instances")
         return self
 

@@ -56,15 +56,15 @@ Use `include: false` with a specific `screeningReason` when the actual text show
 
 ## synthesize
 
-Input: the plan, screened `papers` catalog, and checked `evaluations` from key full texts. Only catalog IDs may be selected or connected. Sources may omit abstracts or full text; do not fill gaps with invented quotations. Use the evaluation excerpts with their page numbers when they support a relationship.
+Input: the plan, screened `papers` catalog, checked `evaluations` from key full texts, and `researchCoverage` (actual search log, screening counts, exclusions, warnings and per-paper reading coverage). Use these recorded facts for the methods section; an absent record is unknown, not a successful search. Only catalog IDs may be selected or connected. Sources may omit abstracts or full text; do not fill gaps with invented quotations. Use the evaluation excerpts with their page numbers when they support a relationship. An explicit development relationship requires a statement in the later/target paper; the earlier work's own description cannot establish how later work builds on it.
 
 ```json
 {
-  "papers": [{"id": "catalog ID", "reason": "Why this work is a useful milestone", "branch": "Technical branch"}],
+  "papers": [{"id": "catalog ID", "reason": "Why this work is a useful milestone", "branch": "Technical branch", "milestone": true}],
   "edges": [{
     "source": "earlier catalog ID",
     "target": "later catalog ID",
-    "relation": "builds_on",
+    "relation": "evolves_into",
     "certainty": "inferred",
     "reason": "Concrete relationship and limits of the available evidence",
     "evidence": [{"paperId": "catalog ID", "quote": "Continuous source excerpt", "page": null}]
@@ -72,8 +72,31 @@ Input: the plan, screened `papers` catalog, and checked `evaluations` from key f
 }
 ```
 
-Select approximately 20–30 papers (maximum 30 selections per run, including existing papers), fewer if the catalog does not support that many relevant milestones. Existing canvas cards remain even when not selected in this run. Choose 3–6 meaningful branch labels where possible. Permitted relations: `builds_on`, `improves`, `inspired_by`, `compares`, `cites`. Each edge has 1–4 excerpts from its two endpoints. The server reconstructs source URLs and validates quotations, page numbers and IDs. Use `explicit` only for relationships directly stated in a verified full-text excerpt; metadata-only relationships remain `inferred`. Do not output source URLs, coordinates, local-library IDs or invented verification flags.
+Select approximately 20–30 papers (maximum 30 selections per run, including existing papers), fewer if the catalog does not support that many relevant milestones. Existing canvas cards remain even when not selected in this run. Choose 3–6 meaningful branch labels where possible. Prefer development relations: `evolves_into`, `branches_into`, `enables`, `unifies`. Legacy `builds_on`, `improves`, `inspired_by`, `compares`, `cites` remain accepted, but a citation list is not the target product. Use `milestone: true` sparingly for paradigm-changing work and explain the concrete change in its reason. The server creates the category topic and branch nodes plus structural membership edges; do not invent pseudo-paper IDs for those nodes. Each edge has 1–4 excerpts from its two endpoints. The server reconstructs source URLs and validates quotations, page numbers and IDs. Use `explicit` only for relationships directly stated in a verified full-text excerpt; metadata-only relationships remain `inferred`. Do not output source URLs, coordinates, local-library IDs or invented verification flags.
 
 For `cites`, the later/target paper must have the earlier/source paper's verified DOI or arXiv ID in its `references`, or its abstract/full text must explicitly mention the earlier paper's full title or identifier. Generic topic overlap does not establish a citation. When a verified reference matches, the server includes that reference identifier as evidence; otherwise quote the explicit mention or relevant full-text citation context. If neither is available, omit the citation edge.
 
-The server performs a final identity and evidence check and generates the seven-section Markdown report from the verified stage outputs, including source failures, exclusions and reading coverage. No separate free-form report call may introduce new papers or unsupported claims.
+Also include `narrative` in this same JSON object. A paragraph P is `{"text":"Connected prose explaining a technical point", "paperIds":["verified selected paper ID"]}`. Every technical paragraph requires nonempty source IDs, all from your final selected papers; unknown IDs invalidate the entire paragraph. Inline prose is plain text; the server adds numbered source links. Do not add raw HTML, Mermaid, image URLs, or local paths.
+
+```json
+{
+  "narrative": {
+    "abstract": [{"text":"Scope, major development stages and present challenges", "paperIds":["selected ID"]}],
+    "introduction": {
+      "background": [], "scope": [], "problem": [], "significance": []
+    },
+    "methods": [],
+    "problemOverview": [],
+    "developmentHistory": [{"title":"Stage and paradigm shift", "paragraphs":[]}],
+    "currentBranches": [{"title":"A current technical branch", "paragraphs":[]}],
+    "openProblems": [],
+    "conclusion": []
+  }
+}
+```
+
+Each empty array above is a placeholder for 1-4 P paragraphs when supplied evidence supports them (up to 8 development stages / current branches). Prefer synthesis across papers over listing one abstract after another. Explain prior limitations, the new approach, changed assumptions, resulting capabilities and remaining limits. Cite the key work in the paragraph where its architecture figure belongs. Methods must describe the actual supplied research coverage and criteria, not invent a systematic-review protocol. Do not copy a source abstract wholesale into the review. When evidence is missing, use fewer paragraphs and state the specific gap; do not fill sections with generic claims.
+
+The server validates identities, excerpts, page numbers, narrative source IDs and graph endpoints. It derives the Markdown development diagram from the validated canvas; source-ID validation does not prove a paragraph's scientific claims. Clearly mark your inference and limited full-text coverage. Real architecture figures, if supplied in `papers[].figures`, are server-created assets with `figureLabel`, `caption`, `page`, `sourceUrl`, `kind` (`figure` or whole PDF `page`) and `imageUrl`. Their captions support locating an illustration, not claims about its performance. Do not invent figures for papers without assets.
+
+The reader-facing report is a narrative review. Seven-step retrieval logs, screening decisions, evidence checks and reading coverage remain in the audit appendix, and key-paper assessments remain in the full-text appendix. No separate free-form report call may introduce new papers or unsupported claims.

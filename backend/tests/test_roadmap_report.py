@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from services.roadmap_report import render_report
+from services.roadmap_report import render_report, validate_narrative
 
 
 def paper(pid="a", **changes):
@@ -54,7 +54,7 @@ def inputs():
 
 def test_seven_stages_failed_search_missing_fulltext_and_coverage_are_visible():
     report = render_report(**inputs())
-    assert len(re.findall(r"^## [1-7]\. ", report, re.MULTILINE)) == 7
+    assert len(re.findall(r"^### A[1-7]\. ", report, re.MULTILINE)) == 7
     for value in ("来源访问日期：2026-10-19", "具有可核验来源", "HTTP 429", "本轮来源解析后候选",
                   "没有可用本地全文", "内容已截断", "已检查 3 / 总计 10 页", "提取文字页码：1、3",
                   "无文字页：2", "不构成系统综述", "未登记 DOI", "未找到已核验 arXiv 版本"):
@@ -219,3 +219,171 @@ def test_complete_flag_without_consistent_page_coverage_never_claims_complete_ex
     report = render_report(**args)
     assert "逐页文字提取完成" not in report
     assert "完整性未确认" in report
+
+
+def narrative():
+    def paragraph(text, ids=None):
+        return {"text": text, "paperIds": ids or ["a"]}
+
+    return {
+        "abstract": [paragraph("从已有研究可以归纳出本文关注的研究线索。", ["a", "b"])],
+        "introduction": {
+            "background": [paragraph("已登记的技术背景。")],
+            "scope": [paragraph("所讨论的方法范围。")],
+            "problem": [paragraph("文献所描述的问题。")],
+            "significance": [paragraph("来源中阐述的研究意义。")],
+        },
+        "methods": [paragraph("对文献中方法的有据综合。")],
+        "problemOverview": [paragraph("问题与前提条件的综合描述。")],
+        "developmentHistory": [{"title": "范式里程碑", "paragraphs": [paragraph("已经核验的历史分析。")]}],
+        "currentBranches": [{"title": "表征学习", "paragraphs": [paragraph("已有分支的技术分析。")]}],
+        "openProblems": [paragraph("文献支持的开放问题。")],
+        "conclusion": [paragraph("在所列材料范围内得到的综合结论。")],
+    }
+
+
+def final_board():
+    return {
+        "nodes": [{"id": "topic", "kind": "text", "text": "世界模型", "roadmapRole": "topic"},
+                  {"id": "branch", "kind": "text", "text": "表征学习", "roadmapRole": "branch"},
+                  {"id": "pa", "kind": "paper", "paperId": "a", "roadmapRole": "milestone"},
+                  {"id": "pb", "kind": "paper", "paperId": "b", "roadmapRole": None}],
+        "edges": [{"id": "e1", "source": "topic", "target": "branch", "roadmapStructure": True},
+                  {"id": "e2", "source": "branch", "target": "pa", "roadmapStructure": True},
+                  {"id": "e3", "source": "pb", "target": "pa", "analysis": {
+                      "relation": "evolves_into", "certainty": "inferred"}}],
+    }
+
+
+def figure(asset="a", **overrides):
+    return {"assetId": asset * 64, "imageUrl": f"/api/roadmaps/report-assets/{asset * 64}.png",
+            "paperId": "a", "figureLabel": "Figure 2", "caption": "Recorded architecture diagram.",
+            "sourceUrl": "https://arxiv.org/pdf/1706.03762", "page": 3, "kind": "figure", **overrides}
+
+
+def test_review_narrative_precedes_the_complete_audit_and_uses_numbered_verified_sources():
+    args = inputs()
+    args.update(narrative=narrative(), board=final_board())
+    report = render_report(**args)
+    assert len(re.findall(r"^## [1-9]\. ", report, re.MULTILINE)) == 9
+    assert report.index("## 9. 参考文献") < report.index("## 附录 A.")
+    assert "已经核验的历史分析" in report and "尚缺跨论文综合分析" not in report
+    assert "[2](https://arxiv.org/abs/1706.03762)" in report
+    assert "[1](https://doi.org/10.1038/323533a0)" in report
+    assert "SECRET_" not in report and "HTTP 429" in report
+
+
+def test_narrative_rejects_entire_unknown_or_missing_citation_paragraphs_and_invalid_urls():
+    args = inputs()
+    raw = narrative()
+    raw["abstract"] = [{"text": "UNKNOWN_PAPER_CLAIM", "paperIds": ["a", "ghost"]},
+                       {"text": "UNCITED_CLAIM", "paperIds": []},
+                       {"text": "UNTYPED_CLAIM", "paperIds": "a"},
+                       {"text": "Valid repeated citation.", "paperIds": ["a", "a"]}]
+    raw["mermaid"] = "MODEL_SUPPLIED_MERMAID_MUST_NOT_BE_USED"
+    before = copy.deepcopy(raw)
+    clean, warnings = validate_narrative(raw, args["papers"])
+    assert clean["abstract"] == [{"text": "Valid repeated citation.", "paperIds": ["a"]}]
+    assert warnings and raw == before
+    args["narrative"] = raw
+    report = render_report(**args)
+    for value in ("UNKNOWN_PAPER_CLAIM", "UNCITED_CLAIM", "UNTYPED_CLAIM", "MODEL_SUPPLIED_MERMAID"):
+        assert value not in report
+    assert "有段落缺少正文或已核验来源引用，未采用" in report
+    clean, warnings = validate_narrative(raw, [paper(sourceUrl="javascript:alert(1)")])
+    assert not clean["abstract"] and warnings
+
+
+def test_old_outputs_use_only_recorded_grounded_material_without_inventing_review_claims():
+    args = inputs()
+    report = render_report(**args)
+    main = report.split("## 附录 A.", 1)[0]
+    assert "尚缺跨论文综合分析" in main and "本节尚缺有来源支持的综述内容" in main
+    assert "可定位证据支持的贡献" in main and "登记入选理由" in main
+    assert "是否仍属开放问题需进一步核验" in main
+    args["evaluations"][0]["evidence"] = []
+    main = render_report(**args).split("## 附录 A.", 1)[0]
+    assert "可定位证据支持的贡献" not in main
+    assert "未提供可用的最终画布" in main and "```mermaid" not in main
+
+
+def test_mermaid_is_derived_from_real_board_with_structure_distinct_from_paper_evolution():
+    args = inputs()
+    args["board"] = final_board()
+    report = render_report(**args)
+    graph = report.split("```mermaid\n", 1)[1].split("```", 1)[0]
+    assert graph.startswith("flowchart TD\n")
+    assert 'n0("世界模型")' in graph and 'n1{"表征学习"}' in graph
+    assert 'n0 -.->|"研究分支"| n1' in graph
+    assert 'n1 -.->|"代表论文"| n2' in graph
+    assert 'n3 -->|"推断：演进"| n2' in graph
+    assert "n1 -.->" in graph and "n1 -->" not in graph
+    assert "1986 · An Earlier Classic" in graph
+    assert 'n2["★ 2017 · A Verified Milestone"]' in graph
+    assert "★ 标记画布中的里程碑论文" in report
+
+
+def test_mermaid_escapes_code_and_preserves_unknown_papers_without_inventing_their_titles():
+    args = inputs()
+    args["board"] = final_board()
+    args["board"]["nodes"][0]["text"] = 'Topic "]\n```\nclick n0 "javascript:bad" <script> %%'
+    args["board"]["nodes"].append({"id": "injected", "kind": "paper", "paperId": "ghost"})
+    args["board"]["edges"] += [{"source": "injected", "target": "pa"},
+                              {"source": "pa", "target": "branch", "roadmapStructure": True}]
+    report = render_report(**args)
+    graph = report.split("```mermaid\n", 1)[1].split("```", 1)[0]
+    assert "<script>" not in graph and "%%" not in graph and '\nclick ' not in graph
+    assert "injected" not in graph and "n2 -.->" not in graph
+    assert 'n4["既有论文 · ghost"]' in graph
+    assert "＂" in graph and "｀｀｀" in graph
+    assert report.count("```mermaid") == 1
+
+
+def test_tree_keeps_catalog_only_old_papers_and_edges_but_narrative_references_stay_final_only():
+    args = inputs()
+    args["catalog"]["old"] = paper("old", title="Retained Earlier Paper", year="2000")
+    args["board"] = final_board()
+    args["board"]["nodes"].append({"id": "old-node", "kind": "paper", "paperId": "old"})
+    args["board"]["edges"].append({"source": "old-node", "target": "pa", "analysis": {
+        "relation": "enables", "certainty": "explicit"}})
+    args["narrative"] = narrative()
+    args["narrative"]["conclusion"].append({"text": "OLD_PAPER_UNSELECTED_CLAIM", "paperIds": ["old"]})
+    report = render_report(**args)
+    graph = report.split("```mermaid\n", 1)[1].split("```", 1)[0]
+    assert 'n4["2000 · Retained Earlier Paper"]' in graph
+    assert 'n4 -->|"突破推动"| n2' in graph
+    assert "包含保留的既有卡片；正文分析针对本轮入选论文" in report
+    assert "OLD_PAPER_UNSELECTED_CLAIM" not in report
+    references = report.split("## 9. 参考文献", 1)[1].split("## 附录 A.", 1)[0]
+    assert "Retained Earlier Paper" not in references
+
+
+def test_verified_figures_are_placed_by_cited_paper_deduplicated_and_provenance_is_visible():
+    args = inputs()
+    args["narrative"] = narrative()
+    args["readings"]["papers"][0]["figures"] = [figure(), figure(), figure("b", kind="page", page=5)]
+    report = render_report(**args)
+    first_url = f"/api/roadmaps/report-assets/{'a' * 64}.png"
+    assert report.count(first_url) == 1
+    assert report.index(first_url) < report.index("## 6. 当前研究分支")
+    assert "PDF 整页图（包含图示，并非裁剪的原图）" in report
+    assert "[PDF 第 5 页](https://arxiv.org/pdf/1706.03762#page=5)" in report
+    assert "原图说明：Recorded architecture diagram" in report
+    assert "## 附录 B." not in report
+
+
+def test_figures_require_matching_asset_hash_paper_and_safe_sources_and_unused_go_to_appendix():
+    args = inputs()
+    args["narrative"] = {"abstract": [{"text": "A sourced abstract.", "paperIds": ["a"]}]}
+    args["readings"]["papers"][0]["figures"] = [
+        figure("a", imageUrl="https://evil.example/tracker.png"),
+        figure("b", imageUrl=f"/api/roadmaps/report-assets/{'c' * 64}.png"),
+        figure("c", paperId="ghost"), figure("d", sourceUrl="javascript:alert(1)"),
+        figure("e", caption="<img src=x onerror=alert(1)>"),
+    ]
+    report = render_report(**args)
+    assert "evil.example" not in report and "<img" not in report
+    assert "## 附录 B. 关键论文原图与架构图" in report
+    assert report.count("![") == 1
+    assert f"/api/roadmaps/report-assets/{'e' * 64}.png" in report
+    assert "&lt;img" in report

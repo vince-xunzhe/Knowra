@@ -58,15 +58,22 @@ def test_grounding_rejects_unknown_ids_fabricated_quotes_reverse_years_and_self_
     assert edges[0]["evidence"][0]["source"] == "text"
 
 
-def test_preview_has_real_branch_groups_and_does_not_write_papers_to_library():
+def test_preview_has_topic_branch_tree_and_distinct_evidence_backed_edges():
     catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
     initial = board()
     proposal, selected = research.proposal_for(initial, {}, catalog, synthesis(), [])
     assert initial["nodes"] == []
-    groups = [n for n in proposal["board"]["nodes"] if n["kind"] == "group"]
+    topics = [n for n in proposal["board"]["nodes"] if n["roadmapRole"] == "topic"]
+    branches = [n for n in proposal["board"]["nodes"] if n["roadmapRole"] == "branch"]
     cards = [n for n in proposal["board"]["nodes"] if n["kind"] == "paper"]
-    assert {g["text"] for g in groups} == {"Foundations", "Applications"}
-    assert all(n["groupId"] in {g["id"] for g in groups} for n in cards)
+    assert len(topics) == 1 and topics[0]["text"] == "视觉"
+    assert {n["text"] for n in branches} == {"Foundations", "Applications"}
+    assert all(n["kind"] == "text" for n in topics + branches)
+    assert all(n["groupId"] is None for n in cards)
+    assert max(n["y"] for n in topics) < min(n["y"] for n in branches)
+    assert max(n["y"] for n in branches) < min(n["y"] for n in cards)
+    structures = [edge for edge in proposal["board"]["edges"] if edge["roadmapStructure"]]
+    assert len(structures) == 4 and all(edge["analysis"] is None for edge in structures)
     assert {p["id"] for p in selected} == {"a", "b"}
     assert proposal["board"]["edges"][0]["analysis"]["certainty"] == "inferred"
 
@@ -102,11 +109,152 @@ def test_board_scoped_ids_are_stable_and_existing_arxiv_is_not_downgraded():
     assert updated[existing["id"]]["arxivId"] == "1706.03762"
 
 
+def test_source_refresh_preserves_saved_branch_until_synthesis_selects_a_replacement():
+    existing = paper("old", "2010", branch="Saved branch")
+    incoming = dict(existing, id="resolver", reason="", branch="", abstract="Updated source abstract")
+    catalog = research.scope_catalog("vision", [incoming], [existing])
+    assert catalog["old"]["branch"] == "Saved branch"
+    assert catalog["old"]["reason"] == existing["reason"]
+    assert catalog["old"]["abstract"] == "Updated source abstract"
+
+
+def test_branch_reclassification_does_not_steal_an_existing_branch_label():
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
+    raw = synthesis()
+    raw["papers"][1]["branch"] = "Foundations"
+    first, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    old_branch = next(node for node in first["board"]["nodes"] if node["roadmapRole"] == "branch")
+    raw["papers"][0]["branch"] = "New direction"
+    second, _ = research.proposal_for(first["board"], {}, catalog, raw, [])
+    branches = [node for node in second["board"]["nodes"] if node["roadmapRole"] == "branch"]
+    assert {node["text"] for node in branches} == {"Foundations", "New direction"}
+    assert next(node for node in branches if node["text"] == "Foundations")["id"] == old_branch["id"]
+
+
 def test_selected_papers_cannot_exceed_thirty():
     catalog = {str(i): paper(str(i), "2020") for i in range(45)}
     raw = {"papers": [{"id": p, "branch": "one", "reason": "Milestone"} for p in catalog], "edges": []}
     selected, _, _ = research.select_and_ground(raw, catalog)
     assert len(selected) == 30
+
+
+@pytest.mark.parametrize(("relation", "label"), [("evolves_into", "演进"), ("branches_into", "分化"),
+                                               ("enables", "突破推动"), ("unifies", "融合")])
+def test_development_relations_require_evidence_and_keep_milestone_role(relation, label):
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
+    raw = synthesis()
+    raw["papers"][0]["milestone"] = True
+    raw["papers"][1]["milestone"] = False
+    raw["edges"][0]["relation"] = relation
+    result, metadata = research.proposal_for(board(), {}, catalog, raw, [])
+    cards = {node["paperId"]: node for node in result["board"]["nodes"] if node["kind"] == "paper"}
+    assert cards["a"]["roadmapRole"] == "milestone" and cards["b"]["roadmapRole"] is None
+    relation_edge = next(edge for edge in result["board"]["edges"] if not edge["roadmapStructure"])
+    assert relation_edge["label"] == label and relation_edge["analysis"]["relation"] == relation
+    assert all("milestone" not in entry for entry in metadata)
+    raw["edges"][0]["evidence"] = []
+    rejected, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    assert all(edge["roadmapStructure"] and edge["analysis"] is None for edge in rejected["board"]["edges"])
+    assert {entry["paperId"] for entry in rejected["unconnected"]} == {"a", "b"}
+
+
+def test_same_branch_connects_entry_papers_without_forcing_scholarly_chains():
+    catalog = {pid: paper(pid, year) for pid, year in (("a", "2010"), ("b", "2020"), ("c", "2021"))}
+    raw = synthesis()
+    raw["papers"][1]["branch"] = "Foundations"
+    raw["papers"].append({"id": "c", "reason": "An independent approach", "branch": "Foundations"})
+    raw["edges"][0]["relation"] = "evolves_into"
+    result, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    graph = result["board"]
+    cards = {node["paperId"]: node for node in graph["nodes"] if node["kind"] == "paper"}
+    branch = next(node for node in graph["nodes"] if node["roadmapRole"] == "branch")
+    roots = {edge["target"] for edge in graph["edges"] if edge["source"] == branch["id"]}
+    assert roots == {cards["a"]["id"], cards["c"]["id"]}
+    assert cards["a"]["y"] < cards["b"]["y"]
+    assert len([edge for edge in graph["edges"] if edge["analysis"]]) == 1
+    assert result["unconnected"] == [{"paperId": "c", "title": catalog["c"]["title"]}]
+
+
+def test_rerun_preserves_renamed_labels_user_groups_notes_and_all_locked_items():
+    from routers.domains import Board
+
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020"), "c": paper("c", "2021")}
+    preview, _ = research.proposal_for(board(), {}, catalog, synthesis(), [])
+    old = preview["board"]
+    topic = next(node for node in old["nodes"] if node["roadmapRole"] == "topic")
+    topic.update(text="My topic annotation", locked=True, x=150, y=70)
+    branch = next(node for node in old["nodes"] if node["roadmapRole"] == "branch" and node["text"] == "Foundations")
+    branch.update(text="My renamed branch", locked=True, x=250, y=300)
+    card = next(node for node in old["nodes"] if node.get("paperId") == "a")
+    card.update(text="Private note", groupId="user-group", x=400, y=900)
+    old["nodes"].extend([{"id": "user-group", "kind": "group", "x": 360, "y": 850,
+                          "width": 800, "height": 600, "text": "My selected studies"},
+                         {"id": "user-note", "kind": "text", "x": 1250, "y": 80, "text": "Do not move this note"}])
+    for edge in old["edges"]:
+        if edge["target"] == branch["id"] or not edge["roadmapStructure"]:
+            edge.update(locked=True, label="Human label")
+    old = Board.model_validate(old).model_dump()
+    originals = {node["id"]: copy.deepcopy(node) for node in old["nodes"]
+                 if node["id"] in (topic["id"], branch["id"], card["id"], "user-group", "user-note")}
+    locks = [copy.deepcopy(edge) for edge in old["edges"] if edge["locked"]]
+    raw = {"papers": [{"id": "c", "reason": "New milestone", "branch": "Foundations", "milestone": True}], "edges": []}
+    result, _ = research.proposal_for(old, {}, catalog, raw, [])
+    actual = {node["id"]: node for node in result["board"]["nodes"]}
+    assert all(actual[key] == value for key, value in originals.items())
+    assert all(edge in result["board"]["edges"] for edge in locks)
+    assert len([node for node in actual.values() if node["roadmapRole"] == "topic"]) == 1
+    assert len([node for node in actual.values() if node["roadmapRole"] == "branch"]) == 2
+    assert {node["paperId"] for node in actual.values() if node["kind"] == "paper"} == {"a", "b", "c"}
+    assert result["protected"] == len(locks)
+
+
+def test_locked_paper_cycle_is_kept_and_attached_to_tree_without_infinite_layout():
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
+    raw = synthesis()
+    raw["papers"][1]["branch"] = "Foundations"
+    first, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    old = first["board"]
+    forward = next(edge for edge in old["edges"] if edge["analysis"])
+    forward["locked"] = True
+    reverse = dict(copy.deepcopy(forward), id="locked-cycle", source=forward["target"], target=forward["source"])
+    old["edges"].append(reverse)
+    raw["edges"] = []
+    result, _ = research.proposal_for(old, {}, catalog, raw, [])
+    assert forward in result["board"]["edges"] and reverse in result["board"]["edges"]
+    branch = next(node for node in result["board"]["nodes"] if node["roadmapRole"] == "branch")
+    assert any(edge["source"] == branch["id"] and edge["roadmapStructure"] for edge in result["board"]["edges"])
+
+
+def test_generated_development_relations_do_not_add_circular_progression():
+    catalog = {pid: paper(pid, "2020") for pid in ("a", "b", "c")}
+    raw = {"papers": [{"id": pid, "reason": "A milestone", "branch": "One branch"} for pid in catalog],
+           "edges": [{"source": a, "target": b, "relation": "evolves_into", "reason": "A checked evolution",
+                      "evidence": [{"paperId": b, "quote": "learns reusable visual representations"}]}
+                     for a, b in (("a", "b"), ("b", "c"), ("c", "a"))]}
+    _, relations, rejected = research.select_and_ground(raw, catalog)
+    assert [(entry["source"], entry["target"]) for entry in relations] == [("a", "b"), ("b", "c")]
+    assert rejected == 1
+
+
+def test_schema_separates_tree_structure_from_scholarly_evidence():
+    from pydantic import ValidationError
+    from routers.domains import Board, CanvasNode
+
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
+    preview, _ = research.proposal_for(board(), {}, catalog, synthesis(), [])
+    graph = preview["board"]
+    structure = next(edge for edge in graph["edges"] if edge["roadmapStructure"])
+    analysis = next(edge["analysis"] for edge in graph["edges"] if edge["analysis"])
+    forged = copy.deepcopy(graph)
+    next(edge for edge in forged["edges"] if edge["id"] == structure["id"])["analysis"] = analysis
+    with pytest.raises(ValidationError):
+        Board.model_validate(forged)
+    forged = copy.deepcopy(graph)
+    next(edge for edge in forged["edges"] if edge["id"] == structure["id"])["roadmapStructure"] = False
+    with pytest.raises(ValidationError):
+        Board.model_validate(forged)
+    with pytest.raises(ValidationError):
+        CanvasNode.model_validate({"id": "bad", "kind": "text", "x": 0, "y": 0, "roadmapRole": "milestone"})
 
 
 def test_citation_requires_reference_or_explicit_mention_in_citing_abstract():
@@ -174,6 +322,17 @@ def test_fulltext_evaluation_without_verified_quotes_is_not_used():
     assert checked["evidence"][0]["page"] == 2
 
 
+def test_earlier_papers_own_description_cannot_establish_explicit_development():
+    catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
+    excerpt = "Our network learns reusable visual representations from local windows."
+    catalog["a"].update(fullText=excerpt, fullTextPages=[{"page": 2, "text": excerpt}],
+                        fullTextSource=catalog["a"]["sourceUrl"])
+    raw = synthesis()
+    raw["edges"][0].update(relation="evolves_into", certainty="explicit",
+                           evidence=[{"paperId": "a", "quote": excerpt, "page": 2}])
+    assert research.select_and_ground(raw, catalog)[1][0]["certainty"] == "inferred"
+
+
 def test_bibliography_elsewhere_does_not_turn_unrelated_excerpt_into_explicit_citation():
     catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
     unrelated = "We train every model for ten epochs."
@@ -238,6 +397,7 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
     monkeypatch.setattr("model_gateway.runtime.preflight_task_runtime", lambda *a: None)
     monkeypatch.setattr("services.roadmap_sources.collect_candidates", lambda *a, **kw: {
         "papers": [paper("a", "2010"), paper("b", "2020")], "warnings": [],
+        "searchLog": [{"source": "arxiv", "status": "ok", "query": "vision foundations", "matchedCount": 2}],
     })
     excerpt = "The full paper evaluates reusable visual features on three independent datasets."
     monkeypatch.setattr("services.roadmap_fulltext.read_key_papers", lambda papers, **kw: {
@@ -261,6 +421,12 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
             phases.append("evaluate")
             return json.dumps({"contribution": "Reusable visual features", "evidence": [{"quote": excerpt, "page": 2}]})
         phases.append("screen" if "当前阶段：screen" in system else "synthesize")
+        if phases[-1] == "synthesize":
+            coverage = data["researchCoverage"]
+            assert coverage["searchLog"][0]["matchedCount"] == 2
+            assert coverage["candidateCount"] == coverage["selectedCount"] == 2
+            assert len(coverage["fullText"]) == 2
+            assert all(p["fullTextCoverage"]["pagesVisited"] == 1 for p in coverage["fullText"])
         ids = [p["id"] for p in data["papers"]]
         result = synthesis()
         for selected, pid in zip(result["papers"], ids):
@@ -278,7 +444,8 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
     assert result["preview"]
     with research_db() as db:
         assert db.get(RoadmapRun, "run").status == "preview"
-        assert len(db.get(RoadmapRun, "run").proposal["board"]["edges"]) == 1
+        assert len([edge for edge in db.get(RoadmapRun, "run").proposal["board"]["edges"]
+                    if not edge["roadmapStructure"]]) == 1
         assert db.get(RoadmapRun, "run").proposal["report"]
         assert db.get(RoadmapWorkspace, 1).state["boards"][0]["nodes"] == []
         assert db.query(RoadmapPaper).count() == 2
