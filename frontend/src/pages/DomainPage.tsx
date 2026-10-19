@@ -13,6 +13,8 @@ import {
   LockKeyhole,
   Maximize,
   MousePointer2,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   Redo2,
   Search,
@@ -130,6 +132,7 @@ export default function DomainPage({
     resizing: inspectorResizing, onPointerDown: beginInspectorResize,
     onPointerMove: moveInspectorResize, onPointerUp: finishInspectorResize,
     endDrag: endInspectorResize, reset: resetInspectorWidth, onKeyDown: resizeInspectorWithKey,
+    collapsed: inspectorCollapsed, toggleCollapsed: toggleInspector,
   } = useDomainInspectorResize()
   const workspace = useDomainWorkspace()
   const agent = useDomainAgent()
@@ -757,6 +760,17 @@ export default function DomainPage({
         {board && <span className="domain-imported-count" data-testid="domain-imported-count" aria-live="polite">
           {tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}
         </span>}
+        <button
+          className="domain-inspector-toggle"
+          aria-label={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          title={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          aria-expanded={!inspectorCollapsed}
+          aria-controls="domain-inspector"
+          onClick={toggleInspector}
+        >
+          {inspectorCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
+          {tr('研究工作区')}
+        </button>
       </div>
       {paperError && (
         <div className="domain-error" role="alert">
@@ -1111,6 +1125,7 @@ export default function DomainPage({
         </div>
         <div
           className="domain-pane-divider"
+          hidden={inspectorCollapsed}
           role="separator"
           aria-orientation="vertical"
           aria-label={tr('调整研究工作区宽度')}
@@ -1127,7 +1142,7 @@ export default function DomainPage({
           onKeyDown={resizeInspectorWithKey}
           onDoubleClick={resetInspectorWidth}
         />
-        <aside className="domain-inspector" style={{ width: inspectorWidth }}>
+        <aside id="domain-inspector" className="domain-inspector" hidden={inspectorCollapsed} style={{ width: inspectorWidth }}>
           {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
           {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
             <h2>{tr('方案概览')}</h2>

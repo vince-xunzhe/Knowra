@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent } from 'react'
 
 const STORAGE_KEY = 'knowra.domain.inspectorWidth'
+const COLLAPSED_KEY = 'knowra.domain.inspectorCollapsed'
 const DEFAULT_WIDTH = 250
 const DIVIDER_WIDTH = 8
 
@@ -9,6 +10,9 @@ export function useDomainInspectorResize() {
   const bodyRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ pointerId: number; x: number; width: number } | null>(null)
   const [resizing, setResizing] = useState(false)
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem(COLLAPSED_KEY) === 'true' } catch { return false }
+  })
   const [bodyWidth, setBodyWidth] = useState(1000)
   const [preferredWidth, setPreferredWidth] = useState(() => {
     try {
@@ -22,6 +26,9 @@ export function useDomainInspectorResize() {
   const clamp = (value: number) => Math.min(max, Math.max(min, value))
   const width = clamp(preferredWidth)
 
+  useEffect(() => {
+    try { localStorage.setItem(COLLAPSED_KEY, String(collapsed)) } catch { /* Session toggling still works. */ }
+  }, [collapsed])
   useEffect(() => {
     const body = bodyRef.current
     if (!body) return
@@ -45,7 +52,11 @@ export function useDomainInspectorResize() {
     setResizing(false)
   }
   return {
-    bodyRef, width, min, max, resizing,
+    bodyRef, width, min, max, resizing, collapsed,
+    toggleCollapsed() {
+      endDrag()
+      setCollapsed(value => !value)
+    },
     onPointerDown(event: PointerEvent<HTMLDivElement>) {
       if (event.button !== 0) return
       event.preventDefault()

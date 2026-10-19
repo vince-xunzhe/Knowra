@@ -145,6 +145,15 @@
   flex: 1;
   min-height: 0;
 }
+.domain-selector .domain-inspector-toggle {
+  margin-left: auto;
+  border: 1px solid var(--domain-border);
+  background: var(--domain-panel);
+  white-space: nowrap;
+}
+.domain-inspector[hidden], .domain-pane-divider[hidden] {
+  display: none;
+}
 .domain-canvas {
   flex: 1;
   position: relative;
