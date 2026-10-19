@@ -53,6 +53,7 @@ export function useDomainInspectorResize() {
   }
   return {
     bodyRef, width, min, max, resizing, collapsed,
+    expand() { setCollapsed(false) },
     toggleCollapsed() {
       endDrag()
       setCollapsed(value => !value)

@@ -132,7 +132,7 @@ export default function DomainPage({
     resizing: inspectorResizing, onPointerDown: beginInspectorResize,
     onPointerMove: moveInspectorResize, onPointerUp: finishInspectorResize,
     endDrag: endInspectorResize, reset: resetInspectorWidth, onKeyDown: resizeInspectorWithKey,
-    collapsed: inspectorCollapsed, toggleCollapsed: toggleInspector,
+    collapsed: inspectorCollapsed, toggleCollapsed: toggleInspector, expand: expandInspector,
   } = useDomainInspectorResize()
   const workspace = useDomainWorkspace()
   const agent = useDomainAgent()
@@ -391,6 +391,7 @@ export default function DomainPage({
       return
     }
     if (e.button !== 0) return
+    expandInspector()
     if (!readOnly && linkSource && node.kind === 'paper') {
       connect(node.id)
       return
@@ -477,6 +478,7 @@ export default function DomainPage({
     if (canvas.current?.hasPointerCapture(e.pointerId)) canvas.current.releasePointerCapture(e.pointerId)
   }
   const connect = (target: string) => {
+    expandInspector()
     if (!linkSource || linkSource === target) {
       setLinkSource(target)
       return
@@ -539,6 +541,7 @@ export default function DomainPage({
   }
   const addElement = (kind: 'text' | 'group') => {
     if (!board) return
+    expandInspector()
     const p = worldPoint({ x: canvasSize.width / 2 - 140, y: canvasSize.height / 2 - 80 }, board)
     const node = newNode(kind, p.x, p.y)
     node.text = tr(kind === 'text' ? '在右侧编辑文字' : '新分组')
@@ -831,6 +834,7 @@ export default function DomainPage({
                         data-edge-id={e.id}
                         onPointerDown={(event) => {
                           event.stopPropagation()
+                          expandInspector()
                           setSelectedEdge(e.id)
                           setSelected(new Set())
                           setPopover(null)
@@ -858,6 +862,7 @@ export default function DomainPage({
                               onClick={(event) => {
                                 event.stopPropagation()
                                 if (readOnly) return
+                                expandInspector()
                                 setSelectedEdge(e.id)
                                 setSelected(new Set())
                                 setPopover(null)
@@ -914,6 +919,7 @@ export default function DomainPage({
                                   if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
                                 }}
                                 onClick={() => {
+                                  expandInspector()
                                   setSelected(new Set([n.id]))
                                   setSelectedEdge(null)
                                   setLinkSource(null)
@@ -931,6 +937,7 @@ export default function DomainPage({
                                 })}
                                 aria-expanded={popover === n.id}
                                 onClick={() => {
+                                  expandInspector()
                                   setPopover(popover === n.id ? null : n.id)
                                   setSelected(new Set([n.id]))
                                   setSelectedEdge(null)

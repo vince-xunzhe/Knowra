@@ -352,6 +352,53 @@ test('research workspace collapses, preserves width and content, and stays usabl
   expect(context.errors).toEqual([])
 })
 
+test('selecting canvas elements reopens the research workspace, including the same selection and readonly cards', async ({ page }) => {
+  const context = await setup(page)
+  await importPaper(page)
+  await importPaper(page, reviews[1].title)
+  const panel = page.locator('.domain-inspector')
+  const collapse = () => page.getByRole('button', { name: '收起研究工作区', exact: true }).click()
+  const cards = page.locator('[data-kind="paper"]')
+  await drag(page, cards.nth(1), 400, 0)
+  await cards.first().getByRole('button', { name: '连接论文', exact: true }).click()
+  await cards.nth(1).getByRole('button', { name: '连接论文', exact: true }).click()
+  await cards.first().locator('h3').click()
+  for (let i = 0; i < 2; i++) {
+    await collapse()
+    await cards.first().locator('h3').click()
+    await expect(panel.getByRole('textbox', { name: '卡片备注', exact: true })).toBeVisible()
+  }
+  await collapse()
+  await page.getByTestId('domain-canvas').click({ position: { x: 600, y: 500 } })
+  await expect(panel).toBeHidden()
+  await page.getByRole('button', { name: '平移画布', exact: true }).click()
+  await drag(page, cards.first(), 20, 10)
+  await expect(panel).toBeHidden()
+  await page.getByRole('button', { name: '选择与框选', exact: true }).click()
+  const point = await page.locator('.domain-edge-line').evaluate(el => {
+    const path = el as SVGPathElement
+    const p = path.getPointAtLength(path.getTotalLength() * 0.4).matrixTransform(path.getScreenCTM()!)
+    return { x: p.x, y: p.y }
+  })
+  await page.mouse.click(point.x, point.y)
+  await expect(panel.getByRole('textbox', { name: '连线说明', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '添加独立文本', exact: true }).click()
+  await collapse()
+  await page.locator('[data-kind="text"]').click()
+  await expect(panel.getByRole('textbox', { name: '独立文本', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '创建分组', exact: true }).click()
+  await collapse()
+  await page.locator('.domain-group-heading').click()
+  await expect(panel.getByRole('textbox', { name: '分组名称', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'agent代连', exact: true }).click()
+  await expect(page.getByText('分析论文关系 · 当前类别只读')).toBeVisible()
+  await collapse()
+  await cards.first().locator('h3').click()
+  await expect(panel.getByRole('textbox', { name: '卡片备注', exact: true })).toBeVisible()
+  await expect(panel.getByRole('textbox', { name: '卡片备注', exact: true })).toBeDisabled()
+  expect(context.errors).toEqual([])
+})
+
 test('review popover follows card and viewport, shows review source and restores on return', async ({
   page,
 }) => {
