@@ -226,8 +226,62 @@
   flex-shrink: 0;
   padding: 8px;
 }
+.roadmap-keywords {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 250px;
+  max-width: 520px;
+  flex: 1 1 360px;
+  color: var(--domain-muted);
+}
+.roadmap-keywords-label { flex: 0 0 auto; }
+.roadmap-keywords-values {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 7px;
+  overflow-x: auto;
+  border: 1px solid var(--domain-border);
+  border-radius: 7px;
+  background: var(--domain-panel);
+}
+.roadmap-keyword {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  max-width: 180px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid #6366f166;
+  border-radius: 999px;
+  color: var(--color-indigo-300, #a5b4fc);
+  background: #6366f117;
+  font-size: 11px;
+}
+.roadmap-keyword > button {
+  display: inline-flex;
+  padding: 1px;
+  color: currentColor;
+}
+.roadmap-keywords input {
+  min-width: 120px;
+  flex: 1 0 120px;
+  padding: 3px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--domain-text);
+  outline: 0;
+  font-size: 12px;
+}
+.roadmap-keywords-values:focus-within {
+  border-color: #818cf8aa;
+  box-shadow: 0 0 0 2px #6366f122;
+}
 .domain-imported-count {
-  margin-left: 8px;
   padding: 5px 10px;
   border: 1px solid var(--domain-border);
   border-radius: 6px;

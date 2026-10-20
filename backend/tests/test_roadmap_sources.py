@@ -259,6 +259,22 @@ def test_query_discovery_uses_relevance_and_surveys_not_only_latest(network):
     assert "ti:survey OR ti:review" in network.calls[1]["params"]["search_query"][0]
 
 
+def test_focus_keywords_scope_discovery_queries_to_the_selected_field(network):
+    network.handler = lambda url, params: feed()
+    sources.collect_candidates({
+        "queries": ["three dimensional reconstruction 3DGS", "broad unrelated query"],
+        "focusKeywords": ["3DGS", "4DGS"],
+    }, "三维重建-静态")
+
+    expressions = [call["params"]["search_query"][0] for call in network.calls]
+    assert len(expressions) == 4
+    assert all("三维重建-静态" not in expression for expression in expressions)
+    assert any("three" in expression and "3DGS" in expression for expression in expressions)
+    assert any("3DGS" in expression for expression in expressions)
+    assert any("4DGS" in expression for expression in expressions)
+    assert all("broad unrelated query" not in expression for expression in expressions)
+
+
 def test_arxiv_pacing_is_shared_across_runs(network):
     sources.collect_candidates({"queries": ["one"]}, "")
     sources.collect_candidates({"queries": ["two"]}, "")

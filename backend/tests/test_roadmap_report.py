@@ -62,6 +62,14 @@ def test_seven_stages_failed_search_missing_fulltext_and_coverage_are_visible():
     assert "不代表图表解析或全文理解已完整" not in report
 
 
+def test_report_records_the_user_focus_keywords_in_summary_and_audit():
+    args = inputs()
+    args["plan"]["focusKeywords"] = ["3DGS", "4DGS"]
+    report = render_report(**args)
+    assert "本轮关注关键词：3DGS、4DGS" in report
+    assert "**用户关注关键词**：3DGS、4DGS" in report
+
+
 def test_report_links_short_evidence_and_never_dumps_full_text_or_pages():
     report = render_report(**inputs())
     assert "This short passage is the supporting evidence" in report

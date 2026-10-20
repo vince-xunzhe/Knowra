@@ -10,7 +10,7 @@ from typing import Annotated, Literal, Optional
 from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
 from models import DomainWorkspace, Paper
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from services.domain_categories import reconcile_categories
 from services.paper_category_service import (
     effective_paper_category,
@@ -108,9 +108,25 @@ class Board(StrictModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=100)
     category: Optional[str] = Field(default=None, max_length=100)
+    researchKeywords: list[str] = Field(default_factory=list, max_length=6)
     nodes: list[CanvasNode] = Field(default_factory=list, max_length=10000)
     edges: list[CanvasEdge] = Field(default_factory=list, max_length=20000)
     viewport: Viewport = Field(default_factory=Viewport)
+
+    @field_validator("researchKeywords")
+    @classmethod
+    def research_keywords(cls, values):
+        result = []
+        seen = set()
+        for value in values:
+            cleaned = " ".join(value.split()) if isinstance(value, str) else ""
+            key = cleaned.casefold()
+            if not cleaned or len(cleaned) > 80:
+                raise ValueError("Research keywords must contain 1–80 characters")
+            if key not in seen:
+                result.append(cleaned)
+                seen.add(key)
+        return result
 
     @model_validator(mode="after")
     def check_references(self):

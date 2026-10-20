@@ -479,10 +479,23 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
     monkeypatch.setattr("config.load_config", dict)
     monkeypatch.setattr("config.task_model_id", lambda cfg, task: "mock-model")
     monkeypatch.setattr("model_gateway.runtime.preflight_task_runtime", lambda *a: None)
-    monkeypatch.setattr("services.roadmap_sources.collect_candidates", lambda *a, **kw: {
-        "papers": [paper("a", "2010"), paper("b", "2020")], "warnings": [],
-        "searchLog": [{"source": "arxiv", "status": "ok", "query": "vision foundations", "matchedCount": 2}],
-    })
+    with research_db() as db:
+        run = db.get(RoadmapRun, "run")
+        run.snapshot = {
+            **run.snapshot,
+            "board": {**run.snapshot["board"], "researchKeywords": ["3DGS", "4DGS"]},
+        }
+        db.commit()
+    collected_plan = {}
+
+    def collect(plan, *_args, **_kwargs):
+        collected_plan.update(plan)
+        return {
+            "papers": [paper("a", "2010"), paper("b", "2020")], "warnings": [],
+            "searchLog": [{"source": "arxiv", "status": "ok", "query": "vision foundations", "matchedCount": 2}],
+        }
+
+    monkeypatch.setattr("services.roadmap_sources.collect_candidates", collect)
     excerpt = "The full paper evaluates reusable visual features on three independent datasets."
     monkeypatch.setattr("services.roadmap_fulltext.read_key_papers", lambda papers, **kw: {
         "papers": [dict(p, fullText=excerpt, fullTextPages=[{"page": 2, "text": excerpt}],
@@ -496,6 +509,7 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
         assert kwargs["task_id"] == "roadmap_research"
         assert "shitu-roadmap" in system
         data = json.loads(request)
+        assert data["focusKeywords"] == ["3DGS", "4DGS"]
         if "当前阶段：plan" in system:
             phases.append("plan")
             return json.dumps({"researchQuestion": "How did visual representations develop?", "scope": "Foundations",
@@ -525,12 +539,16 @@ def test_complete_research_job_keeps_live_canvas_and_library_untouched(research_
     job = queue.submit("roadmap", "roadmap:vision", {"run_id": "run"})
     result = research.generate(Context(queue, job), job["payload"])
     assert phases == ["plan", "screen", "evaluate", "evaluate", "synthesize"]
+    assert collected_plan["focusKeywords"] == ["3DGS", "4DGS"]
     assert result["preview"]
     with research_db() as db:
-        assert db.get(RoadmapRun, "run").status == "preview"
-        assert len([edge for edge in db.get(RoadmapRun, "run").proposal["board"]["edges"]
+        stored_run = db.get(RoadmapRun, "run")
+        assert stored_run.status == "preview"
+        assert stored_run.proposal["board"]["researchKeywords"] == ["3DGS", "4DGS"]
+        assert "本轮关注关键词：3DGS、4DGS" in stored_run.proposal["report"]
+        assert len([edge for edge in stored_run.proposal["board"]["edges"]
                     if not edge["roadmapStructure"]]) == 1
-        assert db.get(RoadmapRun, "run").proposal["report"]
+        assert stored_run.proposal["report"]
         assert db.get(RoadmapWorkspace, 1).state["boards"][0]["nodes"] == []
         assert db.query(RoadmapPaper).count() == 2
         assert db.query(Paper).count() == 0

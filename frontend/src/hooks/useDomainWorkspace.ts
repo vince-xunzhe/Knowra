@@ -51,7 +51,8 @@ export function useDomainWorkspace(api: Pick<DomainApi, 'load' | 'save'> = domai
     return current.current?.boards.every((board) => {
       if (protectedBoards.current && !protectedBoards.current.has(board.id)) return true
       const replacement = next.boards.find(b => b.id === board.id)
-      return replacement && JSON.stringify([board.nodes, board.edges]) === JSON.stringify([replacement.nodes, replacement.edges])
+      return replacement && JSON.stringify([board.nodes, board.edges, board.researchKeywords ?? []]) ===
+        JSON.stringify([replacement.nodes, replacement.edges, replacement.researchKeywords ?? []])
     }) ?? true
   }, [])
 

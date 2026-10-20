@@ -101,6 +101,24 @@ def test_research_relation_policy_is_validated_and_saved_in_snapshot(env):
     assert response.status_code == 422
 
 
+def test_focus_keywords_are_normalized_persisted_and_snapshotted(env):
+    snap = env.client.get("/api/roadmaps").json()
+    snap["state"]["boards"][0]["researchKeywords"] = ["  3DGS  ", "3dgs", "4DGS"]
+    response = env.client.put("/api/roadmaps", json=snap)
+    assert response.status_code == 200, response.text
+
+    saved = env.client.get("/api/roadmaps").json()
+    assert saved["state"]["boards"][0]["researchKeywords"] == ["3DGS", "4DGS"]
+    run = start_research(env)
+    with env.db() as db:
+        assert db.get(RoadmapRun, run["id"]).snapshot["board"]["researchKeywords"] == ["3DGS", "4DGS"]
+    env.client.post(f"/api/roadmaps/agent/runs/{run['id']}/discard")
+
+    saved = env.client.get("/api/roadmaps").json()
+    saved["state"]["boards"][0]["researchKeywords"] = [f"keyword-{index}" for index in range(7)]
+    assert env.client.put("/api/roadmaps", json=saved).status_code == 422
+
+
 def make_proposal(env, run, papers, report=""):
     with env.db() as db:
         board = copy.deepcopy(db.get(RoadmapRun, run["id"]).snapshot["board"])

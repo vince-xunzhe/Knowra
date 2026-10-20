@@ -47,6 +47,7 @@ async function setup(page: Page, populated = false) {
   let layoutPosts = 0
   let lastLayoutOrientation: string | undefined
   let lastResearchPolicy: string | undefined
+  let lastResearchKeywords: string[] | undefined
   let domainWrites = 0
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
   let previewReport: RoadmapReport | null = null
@@ -119,6 +120,9 @@ async function setup(page: Page, populated = false) {
         const body = route.request().postDataJSON()
         expect(body.revision).toBe(revision)
         lastResearchPolicy = body.relationPolicy
+        lastResearchKeywords = structuredClone(
+          state.boards.find(board => board.id === body.boardId)?.researchKeywords ?? [],
+        )
         const run: DomainAgentRun = { id: `research-${researchPosts}`, boardId: body.boardId, status: 'pending', jobId: 'research-job', error: null, proposal: null, progress: { label: '核验论文来源' } }
         runs = [run]; json = run
       } else json = runs
@@ -167,6 +171,7 @@ async function setup(page: Page, populated = false) {
     saveAttempts: () => saveAttempts, researchPosts: () => researchPosts, layoutPosts: () => layoutPosts,
     lastLayoutOrientation: () => lastLayoutOrientation,
     lastResearchPolicy: () => lastResearchPolicy,
+    lastResearchKeywords: () => lastResearchKeywords,
     zoomMinimum: (minimum: number) => { zoomMinimum = minimum },
     conflict: () => { revision++ },
     failSave: (failure: typeof saveFailure) => { saveFailure = failure },
@@ -237,6 +242,29 @@ test('rerun asks whether to keep previous relationships before starting research
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   expect(app.researchPosts()).toBe(1)
   expect(app.lastResearchPolicy()).toBe('preserve')
+})
+
+test('focus keywords are saved with the field before roadmap research starts', async ({ page }) => {
+  const app = await setup(page)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const input = roadmap.getByRole('textbox', { name: '添加关注关键词', exact: true })
+
+  await input.fill('3DGS')
+  await input.press('Enter')
+  await input.fill('4DGS')
+  await input.press('Enter')
+
+  await expect(roadmap.getByText('3DGS', { exact: true })).toBeVisible()
+  await expect(roadmap.getByText('4DGS', { exact: true })).toBeVisible()
+  await expect.poll(() => app.state().boards[0].researchKeywords).toEqual(['3DGS', '4DGS'])
+
+  // Clicking research also commits the in-progress keyword through blur first.
+  await input.fill('NeRF')
+  await roadmap.getByRole('button', { name: '生成路线图', exact: true }).click()
+  await expect.poll(app.researchPosts).toBe(1)
+  expect(app.lastResearchKeywords()).toEqual(['3DGS', '4DGS', 'NeRF'])
+  await expect(input).toBeDisabled()
+  expect(app.errors()).toEqual([])
 })
 
 for (const recovery of ['research', 'alert'] as const) test(`an old backend rejecting 8% zoom recovers through ${recovery} retry without losing edits`, async ({ page }) => {

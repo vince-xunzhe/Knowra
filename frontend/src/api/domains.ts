@@ -54,6 +54,7 @@ export interface DomainBoard {
   id: string
   name: string
   category?: string | null
+  researchKeywords?: string[]
   nodes: CanvasNode[]
   edges: CanvasEdge[]
   viewport: Viewport

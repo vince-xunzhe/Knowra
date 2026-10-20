@@ -496,10 +496,26 @@ def collect_candidates(plan, category, cancelled=lambda: None, progress=lambda l
             screening["unverifiedSeeds"] += 1
             client.warn(f"未能核验论文《{title[:160]}》，已从候选列表排除。")
 
-    queries = plan.get("queries") if isinstance(plan.get("queries"), list) else []
-    queries = list(dict.fromkeys(_text(q, 200) for q in queries[:3] if _text(q, 200)))
-    if not queries and _text(category, 200):
-        queries = [_text(category, 200)]
+    focus = plan.get("focusKeywords") if isinstance(plan.get("focusKeywords"), list) else []
+    focus = list(dict.fromkeys(_text(q, 80) for q in focus[:6] if _text(q, 80)))
+    if focus:
+        # User focus terms are a deliberate scope boundary. Seed titles can
+        # still recover foundations. Prefer a planned query that explicitly
+        # retains the focus term; otherwise search the term itself. Appending a
+        # localized category name would make an English arXiv query return no
+        # matches for categories such as “三维重建-静态”.
+        planned = plan.get("queries") if isinstance(plan.get("queries"), list) else []
+        planned = list(dict.fromkeys(_text(q, 200) for q in planned[:3] if _text(q, 200)))
+        queries = []
+        for keyword in focus:
+            key = keyword.casefold()
+            queries.append(next((query for query in planned if key in query.casefold()), keyword))
+        queries = list(dict.fromkeys(queries))
+    else:
+        queries = plan.get("queries") if isinstance(plan.get("queries"), list) else []
+        queries = list(dict.fromkeys(_text(q, 200) for q in queries[:3] if _text(q, 200)))
+        if not queries and _text(category, 200):
+            queries = [_text(category, 200)]
     for index, query in enumerate(queries):
         cancelled()
         if len(papers) >= MAX_CANDIDATES:

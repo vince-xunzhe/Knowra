@@ -133,6 +133,69 @@ function CanvasItem({
   )
 }
 
+function RoadmapKeywordField({
+  keywords,
+  disabled,
+  onChange,
+}: {
+  keywords: string[]
+  disabled: boolean
+  onChange: (keywords: string[]) => void
+}) {
+  useLocale()
+  const [draft, setDraft] = useState('')
+  const commit = (raw: string) => {
+    const next = [...keywords]
+    const seen = new Set(next.map(keyword => keyword.toLocaleLowerCase()))
+    for (const value of raw.split(/[,，;；\n]+/)) {
+      const keyword = value.trim().replace(/\s+/g, ' ').slice(0, 80)
+      const key = keyword.toLocaleLowerCase()
+      if (keyword && !seen.has(key) && next.length < 6) {
+        next.push(keyword)
+        seen.add(key)
+      }
+    }
+    setDraft('')
+    if (next.length !== keywords.length) onChange(next)
+  }
+  return (
+    <div className="roadmap-keywords" role="group" aria-label={tr('关注关键词')}>
+      <span className="roadmap-keywords-label">{tr('关键词')}</span>
+      <div className="roadmap-keywords-values">
+        {keywords.map(keyword => <span className="roadmap-keyword" key={keyword}>
+          {keyword}
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={tr('删除关键词：{0}', { 0: keyword })}
+            onClick={() => onChange(keywords.filter(value => value !== keyword))}
+          ><X size={11} /></button>
+        </span>)}
+        <input
+          value={draft}
+          disabled={disabled || keywords.length >= 6}
+          maxLength={80}
+          aria-label={tr('添加关注关键词')}
+          placeholder={keywords.length ? tr('继续添加') : tr('添加关注方向')}
+          title={tr('输入关键词后按回车；最多添加 6 个。')}
+          onChange={event => setDraft(event.target.value)}
+          onBlur={() => commit(draft)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ',' || event.key === '，' || event.key === ';') {
+              event.preventDefault()
+              commit(draft)
+            } else if (event.key === 'Backspace' && !draft && keywords.length) {
+              onChange(keywords.slice(0, -1))
+            } else if (event.key === 'Escape') {
+              setDraft('')
+            }
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 export default function DomainPage({
   active,
   onOpenReview,
@@ -923,6 +986,12 @@ export default function DomainPage({
         >
           <Plus size={15} />
         </button>
+        {isRoadmap && board && <RoadmapKeywordField
+          key={board.id}
+          keywords={board.researchKeywords ?? []}
+          disabled={readOnly}
+          onChange={researchKeywords => patchBoard(current => ({ ...current, researchKeywords }))}
+        />}
         {board && <span className="domain-imported-count" data-testid={`${mode}-imported-count`} aria-live="polite">
           {isRoadmap ? tr('共 {0} 篇 · 已入库 {1} 篇 · 非 arXiv {2} 篇', { 0: boardPapers.length, 1: inLibraryCount, 2: noArxivCount })
             : tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}

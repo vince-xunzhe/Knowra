@@ -432,6 +432,7 @@ def generate(ctx, payload):
             run = db.get(RoadmapRun, run_id)
             snapshot = deepcopy(run.snapshot)
             board = snapshot["board"]
+            focus_keywords = list(board.get("researchKeywords", []))
             ids = {n["paperId"] for n in board["nodes"] if n["kind"] == "paper"}
             existing = [dict(p.data, id=p.id) for p in db.query(RoadmapPaper).filter(RoadmapPaper.id.in_(ids)).all()]
         from config import load_config, task_model_id
@@ -458,9 +459,11 @@ def generate(ctx, payload):
         ctx.phase("1/7 · 规划研究问题、范围与筛选标准")
         plan = ctx.step("research_plan", lambda: validate_plan(ask("plan", {
             "category": board["name"], "targetPapers": 25,
+            "focusKeywords": focus_keywords,
             "researchDate": datetime.now(timezone.utc).date().isoformat(),
             "existingPapers": [p["title"] for p in existing],
         }, 5000)))
+        plan["focusKeywords"] = focus_keywords
         ctx.phase("2/7 · 多库检索并核验候选身份")
         def retrieve():
             result = collect_candidates(plan, board["name"], cancelled=lambda: check(run_id),
@@ -476,6 +479,7 @@ def generate(ctx, payload):
         ctx.phase(f"3/7 · 去重、标题与摘要筛选 · {len(catalog)} 篇候选")
         screened = ctx.step("research_screen", lambda: ask("screen", {
             "category": board["name"], "plan": plan, "targetPapers": 25,
+            "focusKeywords": focus_keywords,
             "papers": list(catalog.values()),
         }, 8000))
         selected, key_ids, excluded, screen_rejected = screen_candidates(screened, catalog)
@@ -493,7 +497,8 @@ def generate(ctx, payload):
             ctx.phase("4/7 · 评估关键论文：" + paper["title"][:80])
             try:
                 evaluated = ctx.step("evaluate:" + paper["id"], lambda paper=paper: ground_evaluation(ask("evaluate", {
-                    "researchQuestion": plan.get("researchQuestion"), "paper": paper,
+                    "researchQuestion": plan.get("researchQuestion"),
+                    "focusKeywords": focus_keywords, "paper": paper,
                 }, 4000), paper))
                 evaluations.append(evaluated)
                 if evaluated.get("error"):
@@ -512,6 +517,7 @@ def generate(ctx, payload):
         ctx.phase("5/7 · 按主题综合里程碑与发展脉络")
         raw = ctx.step("research_development_tree_v3", lambda: ask("synthesize", {
             "category": board["name"], "targetPapers": 25,
+            "focusKeywords": focus_keywords,
             "plan": plan, "papers": synthesis_papers, "evaluations": evaluations,
             "researchCoverage": {
                 "accessedAt": resolved.get("accessedAt"),

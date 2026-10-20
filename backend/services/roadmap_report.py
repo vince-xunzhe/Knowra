@@ -437,8 +437,12 @@ def render_report(category, plan, resolved, catalog, excluded, readings, evaluat
     numbers = {paper["id"]: index + 1 for index, paper in enumerate(ordered)}
     figures, used_figures = _verified_figures(readings, final), set()
     lines = [f"# 识途文献综述：{_inline(category, 200) or '未指定方向'}", "",
-             "来源访问日期：" + _access_date(resolved), "",
-             "本报告用于组织技术文献阅读，不构成系统综述。并非所有论文均已读取全文；关键论文的阅读覆盖、证据与失败记录见附录 A4。", ""]
+             "来源访问日期：" + _access_date(resolved), ""]
+    focus = [_inline(keyword, 80) for keyword in plan.get("focusKeywords", [])
+             if _inline(keyword, 80)] if isinstance(plan.get("focusKeywords"), list) else []
+    if focus:
+        lines.extend(["本轮关注关键词：" + "、".join(focus), ""])
+    lines.extend(["本报告用于组织技术文献阅读，不构成系统综述。并非所有论文均已读取全文；关键论文的阅读覆盖、证据与失败记录见附录 A4。", ""])
     if fallback:
         lines.extend(["本轮未生成通过来源校验的独立综述正文。下文可用内容仅整理自已登记入选理由和有证据的全文评估；尚缺跨论文综合分析，未补写新的技术结论。", ""])
 
@@ -526,6 +530,10 @@ def _render_audit(category, plan, resolved, catalog, excluded, readings, evaluat
              "### A1. 研究问题、范围与纳排标准", "",
              "**研究问题**：" + (_inline(plan.get("researchQuestion"), 1500) or "未记录"), "",
              "**范围**：" + (_inline(plan.get("scope"), 2000) or "未记录"), ""]
+    focus = [_inline(keyword, 80) for keyword in plan.get("focusKeywords", [])
+             if _inline(keyword, 80)] if isinstance(plan.get("focusKeywords"), list) else []
+    if focus:
+        lines.extend(["**用户关注关键词**：" + "、".join(focus), ""])
     _criteria(lines, "纳入标准", plan.get("inclusionCriteria"))
     _criteria(lines, "排除标准", plan.get("exclusionCriteria"))
 
