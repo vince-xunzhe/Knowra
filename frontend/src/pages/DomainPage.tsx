@@ -48,6 +48,7 @@ import {
   type ReviewField,
 } from '../api/domains'
 import { arrangeRoadmap, roadmapApi, type RoadmapLayoutOrientation } from '../api/roadmaps'
+import { localApiErrorMessage } from '../api/errors'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
@@ -888,7 +889,7 @@ export default function DomainPage({
       fitAfterLayout.current = true
       workspace.install(result)
     }).catch(error => {
-      setActionError(error instanceof Error ? error.message : String(error))
+      setActionError(localApiErrorMessage(error, '布局整理失败，请重试。'))
     }).finally(() => setLayoutBusy(false))
   }
   const openReview = (paperId: string) => {
@@ -901,7 +902,7 @@ export default function DomainPage({
     if (!board || readOnly || imports.busy || !imports.ready) return
     setActionError('')
     void workspace.withSaved(snapshot => imports.start(board.id, snapshot.revision, [paperId])).catch(error => {
-      setActionError(error instanceof Error ? error.message : String(error))
+      setActionError(localApiErrorMessage(error, '论文下载启动失败，请重试。'))
     })
   }
   const statuses = {
@@ -946,7 +947,7 @@ export default function DomainPage({
             if (!board) return
             setActionError('')
             void workspace.withSaved(snapshot => imports.start(board.id, snapshot.revision)).catch(error => {
-              setActionError(error instanceof Error ? error.message : String(error))
+              setActionError(localApiErrorMessage(error, '论文下载启动失败，请重试。'))
             })
           }}
         >

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import axios from 'axios'
 import { listDomainRuns, type DomainAgentRun } from '../api/domains'
+import { localApiErrorMessage } from '../api/errors'
 
 export function useDomainAgent(loadRuns = listDomainRuns) {
   const [runs, setRuns] = useState<DomainAgentRun[]>([])
@@ -37,8 +37,7 @@ export function useDomainAgent(loadRuns = listDomainRuns) {
       const run = await operation()
       if (run) setRuns(old => [...old.filter(r => r.boardId !== run.boardId), run])
     } catch (e) {
-      setError(axios.isAxiosError(e) && typeof e.response?.data?.detail === 'string'
-        ? e.response.data.detail : e instanceof Error ? e.message : String(e))
+      setError(localApiErrorMessage(e, '调研启动失败，请重试。'))
     } finally {
       generation.current++
       running.current = false

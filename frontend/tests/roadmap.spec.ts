@@ -711,6 +711,28 @@ test('an existing roadmap can be arranged without running research again', async
   expect(app.errors()).toEqual([])
 })
 
+test('an outdated local backend is identified instead of exposing an Axios 422', async ({ page }) => {
+  const app = await setup(page, true)
+  app.developmentTree()
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '识途', exact: true }).click()
+  await page.route('**/api/roadmaps/layout', route => route.fulfill({
+    status: 422,
+    json: { detail: [{
+      type: 'extra_forbidden', loc: ['body', 'orientation'],
+      msg: 'Extra inputs are not permitted', input: 'vertical',
+    }] },
+  }))
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+
+  await roadmap.getByRole('button', { name: '整理布局', exact: true }).click()
+  await roadmap.getByRole('menuitem', { name: /竖直排列/ }).click()
+
+  const alert = roadmap.getByRole('alert')
+  await expect(alert).toContainText('本地服务仍在运行旧版本，请重新启动应用后重试。')
+  await expect(alert).not.toContainText('Request failed with status code 422')
+})
+
 test('the first preview fits a wide tree when its canvas becomes visible and never overrides later viewport changes', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 800 })
   const app = await setup(page)

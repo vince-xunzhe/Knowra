@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import axios from 'axios'
 import { getRoadmapImport, startRoadmapImport, type RoadmapImportJob } from '../api/roadmaps'
+import { localApiErrorMessage } from '../api/errors'
 
 export function useRoadmapImport(boardId: string | null, active: boolean, refreshPapers: () => Promise<void>) {
   const [jobs, setJobs] = useState<Record<string, RoadmapImportJob | null>>({})
@@ -25,7 +25,7 @@ export function useRoadmapImport(boardId: string | null, active: boolean, refres
       }
     } catch (error) {
       if (!stopped() && version === (versions.current.get(id) ?? 0)) {
-        setLoadErrors(previous => ({ ...previous, [id]: error instanceof Error ? error.message : String(error) }))
+        setLoadErrors(previous => ({ ...previous, [id]: localApiErrorMessage(error, '下载状态加载失败，请重试。') }))
       }
     }
   }, [refreshPapers])
@@ -52,8 +52,7 @@ export function useRoadmapImport(boardId: string | null, active: boolean, refres
       signatures.current.set(id, JSON.stringify(job))
       void refreshPapers()
     } catch (error) {
-      setErrors(previous => ({ ...previous, [id]: axios.isAxiosError(error) && typeof error.response?.data?.detail === 'string'
-        ? error.response.data.detail : error instanceof Error ? error.message : String(error) }))
+      setErrors(previous => ({ ...previous, [id]: localApiErrorMessage(error, '论文下载启动失败，请重试。') }))
     } finally { pending.current = null; setSubmitting(null) }
   }, [refreshPapers])
   const job = boardId ? jobs[boardId] : undefined
