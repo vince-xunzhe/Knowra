@@ -82,6 +82,18 @@
 .roadmap-paper-details h3 { margin: 18px 0 6px; color: var(--color-indigo-300, #a5b4fc); font-size: 12px; }
 .roadmap-paper-details p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; margin: 6px 0; }
 .roadmap-paper-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; color: var(--domain-muted); font-size: 11px; }
+.roadmap-collect-paper {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid #4f46e580;
+  border-radius: 5px;
+  color: var(--color-indigo-300, #a5b4fc);
+  background: #6366f112;
+  font-size: 11px;
+}
+.roadmap-collect-paper:hover:not(:disabled) { background: #6366f124; }
 .roadmap-source-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
 .roadmap-source-links a,
 .roadmap-page .domain-card-footer a,

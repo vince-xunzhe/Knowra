@@ -1354,6 +1354,8 @@
   "返回识途": "Back to Roadmap",
   "调研经典论文，发现技术方向的发展路线。": "Explore landmark papers and the evolution of a research field.",
   "正在下载入库": "Downloading to library",
+  "收集入库": "Add to library",
+  "正在收集": "Adding to library",
   "一键下载 arXiv": "Download all arXiv papers",
   "共 {0} 篇 · 已入库 {1} 篇 · 非 arXiv {2} 篇": "{0} papers · {1} in library · {2} non-arXiv",
   "调研论文加载失败，请重试。": "Could not load research papers. Please retry.",

@@ -1354,6 +1354,8 @@
   "返回识途": "Volver a Hoja de ruta",
   "调研经典论文，发现技术方向的发展路线。": "Explora artículos fundamentales y la evolución de un área de investigación.",
   "正在下载入库": "Descargando a la biblioteca",
+  "收集入库": "Añadir a la biblioteca",
+  "正在收集": "Añadiendo a la biblioteca",
   "一键下载 arXiv": "Descargar todos los artículos de arXiv",
   "共 {0} 篇 · 已入库 {1} 篇 · 非 arXiv {2} 篇": "{0} artículos · {1} en biblioteca · {2} fuera de arXiv",
   "调研论文加载失败，请重试。": "No se pudieron cargar los artículos. Inténtalo de nuevo.",

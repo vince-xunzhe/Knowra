@@ -896,6 +896,13 @@ export default function DomainPage({
     void workspace.flush()
     onOpenReview(libraryId)
   }
+  const collectPaper = (paperId: string) => {
+    if (!board || readOnly || imports.busy || !imports.ready) return
+    setActionError('')
+    void workspace.withSaved(snapshot => imports.start(board.id, snapshot.revision, [paperId])).catch(error => {
+      setActionError(error instanceof Error ? error.message : String(error))
+    })
+  }
   const statuses = {
     loading: '加载中…',
     saved: '已保存到本机',
@@ -1433,7 +1440,8 @@ export default function DomainPage({
                   <X size={16} />
                 </button>
               </div>
-              {isRoadmap ? popPaper && <RoadmapPaperDetails paper={popPaper} onOpenReview={onOpenReview} /> : <>
+              {isRoadmap ? popPaper && <RoadmapPaperDetails paper={popPaper} onOpenReview={onOpenReview}
+                onCollect={collectPaper} collectDisabled={readOnly || imports.busy || !imports.ready} /> : <>
               <div role="tablist" className="domain-review-tabs">
                 {FIELDS.map(([key, label]) => (
                   <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
@@ -1487,7 +1495,8 @@ export default function DomainPage({
             {run.proposal.unconnected.length > 0 && <details><summary>{tr('未连接论文')}</summary>{run.proposal.unconnected.map(p => <p key={p.paperId}>{p.title}</p>)}</details>}
             {run.proposal.rejected > 0 && <p>{tr('已过滤 {0} 条无有效证据的建议', { 0: run.proposal.rejected })}</p>}
           </section>}
-          {isRoadmap && selectedPaper && <RoadmapPaperDetails paper={selectedPaper} onOpenReview={onOpenReview} />}
+          {isRoadmap && selectedPaper && <RoadmapPaperDetails paper={selectedPaper} onOpenReview={onOpenReview}
+            onCollect={collectPaper} collectDisabled={readOnly || imports.busy || !imports.ready} />}
           {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={openReview} roadmap={isRoadmap} />}
           {isRoadmap && edge?.roadmapStructure && <section className="domain-edge-evidence roadmap-structure-explanation">
             <h2>{tr('结构连线')}</h2>

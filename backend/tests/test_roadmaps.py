@@ -504,6 +504,28 @@ def test_import_checks_revision_and_refuses_nonarxiv_only(env):
     assert env.client.post("/api/roadmaps/imports", json=body).status_code == 422
 
 
+def test_single_paper_import_only_queues_the_selected_board_paper(env):
+    add_catalog(env, metadata(), metadata("second", title="Second Paper", arxivId="2001.00001"),
+                metadata("outside", title="Outside Paper", arxivId="2002.00002"))
+    snap = saved_board(env, "classic", "second")
+    body = {
+        "boardId": snap["state"]["boards"][0]["id"],
+        "revision": snap["revision"],
+        "paperIds": ["second"],
+    }
+    response = env.client.post("/api/roadmaps/imports", json=body)
+    assert response.status_code == 202, response.text
+    queued = env.queue.get(response.json()["job_id"])
+    assert queued["payload"]["paper_ids"] == ["second"]
+    statuses = {paper["id"]: paper["roadmap"] for paper in env.client.get("/api/roadmaps/papers").json()}
+    assert statuses["second"]["downloadStatus"] == "queued"
+    assert statuses["classic"]["downloadStatus"] is None
+
+    env.queue.update(queued["job_id"], status="completed")
+    body["paperIds"] = ["outside"]
+    assert env.client.post("/api/roadmaps/imports", json=body).status_code == 422
+
+
 def test_import_matches_existing_library_without_downloading(env, monkeypatch):
     add_catalog(env, metadata())
     with env.db() as db:

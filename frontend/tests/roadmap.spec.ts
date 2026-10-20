@@ -43,6 +43,7 @@ async function setup(page: Page, populated = false) {
   let runs: DomainAgentRun[] = []
   let importJob: RoadmapImportJob | null = null
   let importPosts = 0
+  let lastImportPaperIds: string[] | undefined
   let researchPosts = 0
   let layoutPosts = 0
   let lastLayoutOrientation: string | undefined
@@ -141,9 +142,14 @@ async function setup(page: Page, populated = false) {
         const body = route.request().postDataJSON()
         expect(body.boardId).toBe('roadmap-llm')
         expect(body.revision).toBe(revision)
-        importJob = { job_id: `import-${importPosts}`, kind: 'roadmap_import', channel: 'roadmap_import:roadmap-llm', status: 'queued', error: null, result: null, progress: { label: '等待下载', total: 2, done: 0, imported: 0, skipped: 0, failed: 0 } }
-        candidates[1].roadmap!.downloadStatus = 'queued'
-        candidates[1].roadmap!.downloadError = null
+        lastImportPaperIds = body.paperIds
+        const selected = body.paperIds?.length ? candidates.filter(candidate => body.paperIds.includes(candidate.id))
+          : candidates.filter(candidate => candidate.roadmap?.arxivId)
+        importJob = { job_id: `import-${importPosts}`, kind: 'roadmap_import', channel: 'roadmap_import:roadmap-llm', status: 'queued', error: null, result: null, progress: { label: '等待下载', total: selected.length, done: 0, imported: 0, skipped: 0, failed: 0 } }
+        for (const candidate of selected) {
+          if (candidate.roadmap?.libraryStatus !== 'in_library') candidate.roadmap!.downloadStatus = 'queued'
+          candidate.roadmap!.downloadError = null
+        }
       }
       json = url.searchParams.get('boardId') === 'roadmap-vlm' ? null : importJob
     } else if (path === '/api/domains') {
@@ -167,7 +173,8 @@ async function setup(page: Page, populated = false) {
   await page.getByRole('navigation').getByRole('button', { name: '识途', exact: true }).click()
   await expect(page.getByRole('combobox', { name: '领域', exact: true })).toHaveValue('roadmap-llm')
   return {
-    state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
+    state: () => state, errors: () => browserErrors, importPosts: () => importPosts,
+    lastImportPaperIds: () => lastImportPaperIds, domainWrites: () => domainWrites,
     saveAttempts: () => saveAttempts, researchPosts: () => researchPosts, layoutPosts: () => layoutPosts,
     lastLayoutOrientation: () => lastLayoutOrientation,
     lastResearchPolicy: () => lastResearchPolicy,
@@ -409,6 +416,28 @@ test('bulk import exposes partial failures, retries only missing papers, and pre
   await expect(roadmap.locator('[data-node-id="node-1"]')).toContainText('Editable while downloading')
   await roadmap.getByRole('button', { name: '收起研究工作区', exact: true }).click()
   await page.screenshot({ path: '/tmp/knowra-shitu-roadmap.png' })
+  expect(app.errors()).toEqual([])
+})
+
+test('a selected arXiv paper can be collected into the library on its own', async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+
+  await roadmap.locator('[data-node-id="node-1"] h3').click()
+  const collect = roadmap.getByRole('button', { name: '收集入库', exact: true })
+  await expect(collect).toBeEnabled()
+  await collect.click()
+
+  await expect.poll(app.importPosts).toBe(1)
+  expect(app.lastImportPaperIds()).toEqual(['roadmap-bert'])
+  await expect(roadmap.getByRole('button', { name: '正在收集', exact: true })).toBeDisabled()
+
+  app.finishImport(false)
+  await expect(roadmap.getByText('已入库，尚未生成论文回顾；可在资料页处理。')).toBeVisible()
+  await expect(roadmap.getByRole('button', { name: '收集入库', exact: true })).toHaveCount(0)
+
+  await roadmap.locator('[data-node-id="node-2"] h3').click()
+  await expect(roadmap.getByRole('button', { name: '收集入库', exact: true })).toHaveCount(0)
   expect(app.errors()).toEqual([])
 })
 

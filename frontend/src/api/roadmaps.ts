@@ -37,8 +37,8 @@ export const roadmapApi: DomainApi = {
   apply: id => api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data),
 }
 
-export const startRoadmapImport = (boardId: string, revision: number) =>
-  api.post<RoadmapImportJob>('/imports', { boardId, revision }).then(r => r.data)
+export const startRoadmapImport = (boardId: string, revision: number, paperIds?: string[]) =>
+  api.post<RoadmapImportJob>('/imports', { boardId, revision, ...(paperIds ? { paperIds } : {}) }).then(r => r.data)
 export const getRoadmapImport = (boardId: string) =>
   api.get<RoadmapImportJob | null>('/imports', { params: { boardId } }).then(r => r.data)
 export const getRoadmapReport = (boardId: string, signal?: AbortSignal) =>

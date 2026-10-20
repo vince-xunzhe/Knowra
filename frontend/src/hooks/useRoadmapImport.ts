@@ -40,14 +40,14 @@ export function useRoadmapImport(boardId: string | null, active: boolean, refres
     void poll()
     return () => { stopped = true; clearTimeout(timer) }
   }, [active, boardId, load])
-  const start = useCallback(async (id: string, revision: number) => {
+  const start = useCallback(async (id: string, revision: number, paperIds?: string[]) => {
     if (pending.current) return
     pending.current = id
     setSubmitting(id)
     versions.current.set(id, (versions.current.get(id) ?? 0) + 1)
     setErrors(previous => ({ ...previous, [id]: '' }))
     try {
-      const job = await startRoadmapImport(id, revision)
+      const job = await startRoadmapImport(id, revision, paperIds)
       setJobs(previous => ({ ...previous, [id]: job }))
       signatures.current.set(id, JSON.stringify(job))
       void refreshPapers()

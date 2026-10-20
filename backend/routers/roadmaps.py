@@ -4,7 +4,7 @@ from collections import Counter
 from copy import deepcopy
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Optional
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -344,6 +344,7 @@ def export_report(boardId: str, db: Annotated[Session, Depends(get_db)]):
 class ImportRequest(StrictModel):
     boardId: str
     revision: int = Field(ge=1)
+    paperIds: Optional[list[str]] = Field(default=None, max_length=10000)
 
 
 @router.post("/imports", status_code=202)
@@ -355,7 +356,11 @@ def start_import(body: ImportRequest, db: Annotated[Session, Depends(get_db)]):
         raise HTTPException(409, "路线图已变化，请重新加载后下载。")
     board = find_board(row, body.boardId)
     ensure_no_research(db, body.boardId)
-    ids = sorted({n["paperId"] for n in board["nodes"] if n["kind"] == "paper"})
+    board_ids = {n["paperId"] for n in board["nodes"] if n["kind"] == "paper"}
+    requested = set(body.paperIds) if body.paperIds is not None else board_ids
+    if not requested or not requested.issubset(board_ids):
+        raise HTTPException(422, "只能下载当前路线图中已选定的论文。")
+    ids = sorted(requested)
     registered = db.query(RoadmapPaper).filter(RoadmapPaper.id.in_(ids)).all()
     downloadable = sorted(p.id for p in registered if p.data.get("arxivId"))
     if not downloadable:
