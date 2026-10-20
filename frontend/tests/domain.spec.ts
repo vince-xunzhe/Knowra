@@ -671,9 +671,7 @@ test('conflict preserves unsaved content until explicit reload and modal escape 
 test('navigation order and inherited system categories preserve edits on taxonomy refresh', async ({ page }) => {
   const context = await setup(page, true)
   const labels = (await page.getByRole('navigation').getByRole('button').allTextContents()).map((label) => label.trim())
-  expect(labels.indexOf('索骥')).toBe(labels.indexOf('识途') - 1)
-  expect(labels.indexOf('识途')).toBe(labels.indexOf('推荐') - 1)
-  expect(labels.indexOf('索骥')).toBeGreaterThan(labels.indexOf('回顾'))
+  expect(labels.slice(0, 7)).toEqual(['知识', '识途', '索骥', '回顾', '推荐', '资料', '看板'])
   const selector = page.getByRole('combobox', { name: '领域', exact: true })
   await expect(selector.getByRole('option')).toHaveCount(7)
   await expect(page.getByTestId('domain-imported-count')).toHaveText('已导入：0 张卡片')
