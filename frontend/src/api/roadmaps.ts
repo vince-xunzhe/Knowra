@@ -1,5 +1,5 @@
 import axios from 'axios'
-import type { DomainApi, DomainAgentRun, DomainBoard, DomainPaper, DomainSnapshot } from './domains'
+import type { DomainApi, DomainAgentRun, DomainBoard, DomainPaper, DomainSnapshot, ResearchRelationPolicy } from './domains'
 import type { BackgroundJob } from './jobs'
 
 export interface RoadmapImportProgress {
@@ -30,7 +30,8 @@ export const roadmapApi: DomainApi = {
   save: (state, revision) => api.put<{ revision: number }>('', { state, revision }).then(r => r.data),
   papers: () => api.get<DomainPaper[]>('/papers').then(r => r.data),
   runs: () => api.get<DomainAgentRun[]>('/agent/runs').then(r => r.data),
-  start: (boardId, revision, heights) => api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights }).then(r => r.data),
+  start: (boardId, revision, heights, relationPolicy?: ResearchRelationPolicy) =>
+    api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights, relationPolicy }).then(r => r.data),
   discard: id => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data),
   apply: id => api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data),
 }

@@ -141,9 +141,10 @@ export interface DomainAgentRun {
     unconnected: { paperId: string; title: string }[]
   }
 }
+export type ResearchRelationPolicy = 'refresh' | 'clear' | 'preserve'
 export const listDomainRuns = () => api.get<DomainAgentRun[]>('/agent/runs').then(r => r.data)
-export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>) =>
-  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights }).then(r => r.data)
+export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>, relationPolicy?: ResearchRelationPolicy) =>
+  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights, relationPolicy }).then(r => r.data)
 export const discardDomainRun = (id: string) => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data)
 export const applyDomainRun = (id: string) =>
   api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data)

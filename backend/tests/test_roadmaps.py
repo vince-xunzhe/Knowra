@@ -78,13 +78,27 @@ def saved_board(env, *ids):
     return env.client.get("/api/roadmaps").json()
 
 
-def start_research(env):
+def start_research(env, relation_policy="refresh"):
     snap = env.client.get("/api/roadmaps").json()
     response = env.client.post("/api/roadmaps/agent/runs", json={
         "boardId": snap["state"]["boards"][0]["id"], "revision": snap["revision"], "heights": {},
+        "relationPolicy": relation_policy,
     })
     assert response.status_code == 202, response.text
     return response.json()
+
+
+def test_research_relation_policy_is_validated_and_saved_in_snapshot(env):
+    run = start_research(env, "preserve")
+    with env.db() as db:
+        assert db.get(RoadmapRun, run["id"]).snapshot["relationPolicy"] == "preserve"
+    env.client.post(f"/api/roadmaps/agent/runs/{run['id']}/discard")
+    snap = env.client.get("/api/roadmaps").json()
+    response = env.client.post("/api/roadmaps/agent/runs", json={
+        "boardId": snap["state"]["boards"][0]["id"], "revision": snap["revision"],
+        "heights": {}, "relationPolicy": "unexpected",
+    })
+    assert response.status_code == 422
 
 
 def make_proposal(env, run, papers, report=""):

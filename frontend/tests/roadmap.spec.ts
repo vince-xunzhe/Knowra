@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect, type Locator, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { Buffer } from 'node:buffer'
 import type { DomainAgentRun, DomainBoard, DomainPaper, DomainSnapshot, DomainState } from '../src/api/domains'
@@ -44,6 +44,7 @@ async function setup(page: Page, populated = false) {
   let importJob: RoadmapImportJob | null = null
   let importPosts = 0
   let researchPosts = 0
+  let lastResearchPolicy: string | undefined
   let domainWrites = 0
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
   let previewReport: RoadmapReport | null = null
@@ -100,6 +101,7 @@ async function setup(page: Page, populated = false) {
         researchPosts++
         const body = route.request().postDataJSON()
         expect(body.revision).toBe(revision)
+        lastResearchPolicy = body.relationPolicy
         const run: DomainAgentRun = { id: `research-${researchPosts}`, boardId: body.boardId, status: 'pending', jobId: 'research-job', error: null, proposal: null, progress: { label: '核验论文来源' } }
         runs = [run]; json = run
       } else json = runs
@@ -146,6 +148,7 @@ async function setup(page: Page, populated = false) {
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
     saveAttempts: () => saveAttempts, researchPosts: () => researchPosts,
+    lastResearchPolicy: () => lastResearchPolicy,
     zoomMinimum: (minimum: number) => { zoomMinimum = minimum },
     conflict: () => { revision++ },
     failSave: (failure: typeof saveFailure) => { saveFailure = failure },
@@ -192,6 +195,31 @@ async function setup(page: Page, populated = false) {
   }
 }
 
+async function researchAgain(roadmap: Locator, choice: '清空并重新生成' | '保留历史关系' = '清空并重新生成') {
+  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  const dialog = roadmap.getByRole('dialog', { name: '重新调研', exact: true })
+  await expect(dialog.getByRole('heading', { name: '是否需要清空历史关系？', exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: choice, exact: false }).click()
+}
+
+test('rerun asks whether to keep previous relationships before starting research', async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  const dialog = roadmap.getByRole('dialog', { name: '重新调研', exact: true })
+  await expect(dialog).toContainText('论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。')
+  await page.screenshot({ path: '/tmp/knowra-shitu-rerun-relations.png' })
+  expect(app.researchPosts()).toBe(0)
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(dialog).toHaveCount(0)
+  expect(app.researchPosts()).toBe(0)
+
+  await researchAgain(roadmap, '保留历史关系')
+  await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
+  expect(app.researchPosts()).toBe(1)
+  expect(app.lastResearchPolicy()).toBe('preserve')
+})
+
 for (const recovery of ['research', 'alert'] as const) test(`an old backend rejecting 8% zoom recovers through ${recovery} retry without losing edits`, async ({ page }) => {
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
@@ -209,7 +237,7 @@ for (const recovery of ['research', 'alert'] as const) test(`an old backend reje
   await expect(roadmap.getByText('8%', { exact: true })).toBeVisible()
   expect(app.saveAttempts()).toBe(1)
   expect(app.state().boards[0].nodes[0].text).toBe('')
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
   await expect(roadmap.getByRole('alert')).toContainText(guidance)
   expect(app.saveAttempts()).toBe(2)
   expect(app.researchPosts()).toBe(0)
@@ -224,7 +252,7 @@ for (const recovery of ['research', 'alert'] as const) test(`an old backend reje
     expect(app.researchPosts()).toBe(0)
     expect(app.state().boards[0].nodes[0].text).toBe('Keep my unsaved research note')
   }
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   await expect(status).toContainText('已保存到本机')
   await expect(status).not.toContainText(guidance)
@@ -245,7 +273,7 @@ test('retrying research after a revision conflict never retries a write or repla
   await note.fill('Retain the conflicting local edit')
   await expect(roadmap.locator('.domain-save')).toContainText('画布已在其他窗口更新，请重新加载')
   for (let attempt = 0; attempt < 2; attempt++) {
-    await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+    await researchAgain(roadmap)
     await expect(roadmap.getByRole('alert')).toContainText('画布已在其他窗口更新，请重新加载')
     await expect(note).toHaveValue('Retain the conflicting local edit')
   }
@@ -367,7 +395,8 @@ test('discarding new research restores saved descriptions and leaves the existin
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
   const before = structuredClone(app.state().boards[0])
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
+  expect(app.lastResearchPolicy()).toBe('clear')
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   app.preview('A proposed replacement explanation')
   await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()
@@ -399,7 +428,7 @@ test('inline research reports refresh previews, expand safely, download Markdown
   await expect(dialog).toHaveCount(0)
   await expect(report.getByRole('button', { name: '展开报告', exact: true })).toBeFocused()
   await canvasTab.click()
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   await reportTab.click()
   await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
@@ -437,7 +466,7 @@ test('inline research reports refresh previews, expand safely, download Markdown
   await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
   await expect(report.getByText('已应用方案的调研报告', { exact: true })).toBeVisible()
   await canvasTab.click()
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   app.preview(undefined, markdown)
   await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()
@@ -606,7 +635,7 @@ test('the first preview fits a wide tree when its canvas becomes visible and nev
   await roadmap.getByRole('button', { name: '应用方案', exact: true }).click()
   await expect(roadmap.getByRole('button', { name: '重新调研', exact: true })).toBeEnabled()
   expect(app.state().boards[0].viewport).toEqual(chosenViewport)
-  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await researchAgain(roadmap)
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
   app.preview(undefined, undefined, proposed)
   await expect(roadmap.getByText('路线图预览', { exact: false })).toBeVisible()

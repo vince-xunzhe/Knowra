@@ -3,7 +3,7 @@
 from copy import deepcopy
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -112,6 +112,7 @@ class StartRequest(StrictModel):
     boardId: str
     revision: int = Field(ge=1)
     heights: dict[str, float] = Field(default_factory=dict)
+    relationPolicy: Literal["refresh", "clear", "preserve"] = "refresh"
 
 
 def find_board(row, board_id):
@@ -154,7 +155,8 @@ def start(body: StartRequest, db: Annotated[Session, Depends(get_db)]):
     ensure_no_research(db, body.boardId)
     heights = {n["id"]: min(10000, max(60, body.heights.get(n["id"], n["height"]))) for n in board["nodes"]}
     run = RoadmapRun(id=str(uuid4()), board_id=body.boardId, status="pending",
-                     snapshot={"board": deepcopy(board), "heights": heights})
+                     snapshot={"board": deepcopy(board), "heights": heights,
+                               "relationPolicy": body.relationPolicy})
     db.add(run)
     db.commit()
     try:

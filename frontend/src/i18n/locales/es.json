@@ -1429,5 +1429,12 @@
   "画布保存超时，请稍后重试。": "Se agotó el tiempo para guardar el lienzo. Reintenta en unos instantes.",
   "无法连接后端，请检查本地服务后重试保存。": "No se puede conectar al servidor. Comprueba el servicio local y reintenta guardar.",
   "后端暂时无法保存画布，请稍后重试。": "El servidor no puede guardar el lienzo ahora. Reintenta en unos instantes.",
-  "请先保存或重新加载画布": "Guarda o vuelve a cargar el lienzo antes de continuar."
+  "请先保存或重新加载画布": "Guarda o vuelve a cargar el lienzo antes de continuar.",
+  "是否需要清空历史关系？": "¿Borrar las relaciones anteriores?",
+  "论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。": "Se conservarán las tarjetas, notas, textos y grupos. Las conexiones bloqueadas siempre están protegidas.",
+  "保留历史关系": "Conservar relaciones anteriores",
+  "保留当前论文连线，再补充本轮调研发现的新关系。": "Conserva las conexiones actuales y añade las relaciones encontradas en esta investigación.",
+  "清空并重新生成": "Borrar y regenerar",
+  "清除未锁定的旧论文连线，按本轮调研结果重新生成。": "Elimina las conexiones anteriores sin bloquear y las regenera con los resultados de esta investigación.",
+  "这项选择只影响论文之间的历史连线。": "Esta elección solo afecta a las conexiones anteriores entre artículos."
 }

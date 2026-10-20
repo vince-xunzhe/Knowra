@@ -95,6 +95,37 @@ def test_regeneration_keeps_user_notes_groups_unselected_cards_and_locked_edges(
     assert result["protected"] == 1
 
 
+def test_rerun_can_preserve_or_clear_unlocked_history_while_protecting_locks_and_notes():
+    catalog = {pid: paper(pid, year) for pid, year in (("a", "2010"), ("b", "2020"), ("c", "2021"))}
+    raw = {
+        "papers": [{"id": pid, "reason": "A milestone", "branch": "Foundations"} for pid in catalog],
+        "edges": [
+            {"source": source, "target": target, "relation": "evolves_into", "reason": "Checked evolution",
+             "evidence": [{"paperId": target, "quote": f"The verified method {target} learns reusable visual representations."}]}
+            for source, target in (("a", "b"), ("b", "c"))
+        ],
+    }
+    first, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    old = first["board"]
+    relationships = [edge for edge in old["edges"] if not edge["roadmapStructure"]]
+    relationships[0]["locked"] = True
+    card = next(node for node in old["nodes"] if node.get("paperId") == "a")
+    card["text"] = "Keep this note"
+    rerun = {"papers": raw["papers"], "edges": []}
+
+    preserved, _ = research.proposal_for(old, {}, catalog, rerun, [], "preserve")
+    preserved_ids = {edge["id"] for edge in preserved["board"]["edges"]}
+    assert all(edge["id"] in preserved_ids for edge in relationships)
+    assert preserved["removed"] == 0
+
+    cleared, _ = research.proposal_for(old, {}, catalog, rerun, [], "clear")
+    cleared_ids = {edge["id"] for edge in cleared["board"]["edges"]}
+    assert relationships[0]["id"] in cleared_ids
+    assert relationships[1]["id"] not in cleared_ids
+    assert cleared["removed"] == 1
+    assert next(node for node in cleared["board"]["nodes"] if node["id"] == card["id"])["text"] == "Keep this note"
+
+
 def test_board_scoped_ids_are_stable_and_existing_arxiv_is_not_downgraded():
     candidate = paper("source-id", "2010")
     first = research.scope_catalog("board-a", [candidate], [])

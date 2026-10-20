@@ -869,6 +869,38 @@
 .domain-name-dialog footer {
   margin-top: 0;
 }
+.roadmap-research-dialog {
+  width: min(560px, 90vw);
+  gap: 18px;
+}
+.roadmap-research-choices {
+  display: grid;
+  gap: 10px;
+}
+.roadmap-research-choices button {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+  border-color: var(--domain-border);
+}
+.roadmap-research-choices button:focus-visible {
+  outline: 2px solid var(--color-indigo-400, #818cf8);
+  outline-offset: 2px;
+}
+.roadmap-research-choices strong {
+  font-size: 13px;
+  color: var(--domain-text);
+}
+.roadmap-research-choices span {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--domain-muted);
+}
+.roadmap-research-dialog footer {
+  gap: 16px;
+}
 .domain-error {
   padding: 8px 25px;
   background: #f59e0b15;

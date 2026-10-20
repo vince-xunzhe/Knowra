@@ -1429,5 +1429,12 @@
   "画布保存超时，请稍后重试。": "Saving the canvas timed out. Please retry shortly.",
   "无法连接后端，请检查本地服务后重试保存。": "Cannot connect to the backend. Check the local service and retry saving.",
   "后端暂时无法保存画布，请稍后重试。": "The backend cannot save the canvas right now. Please retry shortly.",
-  "请先保存或重新加载画布": "Save or reload the canvas before continuing."
+  "请先保存或重新加载画布": "Save or reload the canvas before continuing.",
+  "是否需要清空历史关系？": "Clear previous relationships?",
+  "论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。": "Paper cards, notes, text, and groups will be preserved. Locked connections are always protected.",
+  "保留历史关系": "Keep previous relationships",
+  "保留当前论文连线，再补充本轮调研发现的新关系。": "Keep current paper connections and add relationships found by this research run.",
+  "清空并重新生成": "Clear and regenerate",
+  "清除未锁定的旧论文连线，按本轮调研结果重新生成。": "Remove previous unlocked paper connections and regenerate them from this research run.",
+  "这项选择只影响论文之间的历史连线。": "This choice only affects previous connections between papers."
 }

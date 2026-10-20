@@ -319,14 +319,18 @@ def tree_nodes(board, catalog, selected):
     return proposed, papers, topic["id"], branches
 
 
-def instantiate_tree(board, papers, relations, topic_id, branches):
+def instantiate_tree(board, papers, relations, topic_id, branches, relation_policy="refresh"):
     """Keep organizational links distinct from evidence-backed paper evolution."""
     nodes = {node["id"]: node for node in board["nodes"]}
     by_paper = {}
     for node in board["nodes"]:
         if node["kind"] == "paper":
             by_paper.setdefault(node["paperId"], []).append(node)
-    edges = [deepcopy(edge) for edge in board["edges"] if edge["locked"]]
+    # Locked links are always protected. A rerun can additionally preserve all
+    # previous paper relationships; organizational links are regenerated so
+    # they continue to match the current topic and branch synthesis.
+    edges = [deepcopy(edge) for edge in board["edges"]
+             if edge["locked"] or (relation_policy == "preserve" and not edge.get("roadmapStructure"))]
     seen = {frozenset((nodes[edge["source"]]["paperId"], nodes[edge["target"]]["paperId"]))
             for edge in edges if not edge.get("roadmapStructure")}
     for relation in relations:
@@ -387,12 +391,14 @@ def instantiate_tree(board, papers, relations, topic_id, branches):
     return edges
 
 
-def proposal_for(board, heights, catalog, raw, warnings):
+def proposal_for(board, heights, catalog, raw, warnings, relation_policy="refresh"):
     from routers.domains import Board
 
     selected, relations, rejected = select_and_ground(raw, catalog)
     proposed, all_papers, topic_id, branches = tree_nodes(board, catalog, selected)
-    proposed["edges"] = instantiate_tree(proposed, all_papers, relations, topic_id, branches)
+    proposed["edges"] = instantiate_tree(
+        proposed, all_papers, relations, topic_id, branches, relation_policy,
+    )
     proposed = arrange_tree(proposed, all_papers, heights, topic_id, branches)
     proposed = Board.model_validate(proposed).model_dump()
     linked = {n["paperId"] for n in proposed["nodes"] if n["kind"] == "paper"
@@ -402,11 +408,15 @@ def proposal_for(board, heights, catalog, raw, warnings):
         notes.append({"paperId": "", "message": f"本次仅筛选出 {len(selected)} 篇可核验论文，未为凑足数量补造条目。"})
     notes.append({"paperId": "", "message": "仅在有可定位全文引文时支持原文明示；其余发展关系为 AI 推断。全文阅读覆盖和筛选缺口见调研报告。"})
     notes.append({"paperId": "", "message": "主题和分支之间的组织连线仅用于导览，不表示论文引用或学术继承关系。"})
+    previous_edge_ids = {edge["id"] for edge in board["edges"]}
+    proposed_edge_ids = {edge["id"] for edge in proposed["edges"]}
     result = {
         "board": proposed, "warnings": notes, "rejected": rejected,
         "unconnected": [{"paperId": p["id"], "title": p["title"]} for p in selected.values() if p["id"] not in linked],
-        "added": sum(not e["locked"] and not e["roadmapStructure"] for e in proposed["edges"]),
-        "removed": sum(not e["locked"] and not e.get("roadmapStructure") for e in board["edges"]),
+        "added": sum(not e["locked"] and not e["roadmapStructure"]
+                     and e["id"] not in previous_edge_ids for e in proposed["edges"]),
+        "removed": sum(not e["locked"] and not e.get("roadmapStructure")
+                       and e["id"] not in proposed_edge_ids for e in board["edges"]),
         "protected": sum(e["locked"] for e in proposed["edges"]),
     }
     from services.roadmap_state import PaperMetadata
@@ -519,10 +529,16 @@ def generate(ctx, payload):
         final_selected, final_relations, final_rejected = select_and_ground(raw, selected)
         accepted_raw = dict(raw, papers=[{key: p[key] for key in ("id", "reason", "branch", "milestone") if key in p}
                                         for p in final_selected.values()])
-        proposal, papers = proposal_for(board, snapshot.get("heights", {}), dict(catalog, **selected), accepted_raw, warnings)
+        relation_policy = snapshot.get("relationPolicy", "refresh")
+        proposal, papers = proposal_for(
+            board, snapshot.get("heights", {}), dict(catalog, **selected), accepted_raw, warnings,
+            relation_policy,
+        )
         proposal["rejected"] = screen_rejected + final_rejected
         if proposal["protected"]:
             proposal["warnings"].append({"paperId": "", "message": "已保留用户锁定连线；调研报告中的关系是本轮分析结果，锁定的画布关系仍以用户设置为准。"})
+        if relation_policy == "preserve":
+            proposal["warnings"].append({"paperId": "", "message": "本次按用户选择保留了历史论文关系，并在此基础上补充新的调研关系。"})
         ctx.phase("7/7 · 生成结构化 Markdown 调研报告")
         proposal["report"] = render_report(board["name"], plan, resolved, catalog, excluded,
                                             readings, evaluations, papers, final_relations,

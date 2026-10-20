@@ -38,6 +38,7 @@ import {
   type CanvasNode,
   type DomainBoard,
   type DomainPaper,
+  type ResearchRelationPolicy,
   type ReviewField,
 } from '../api/domains'
 import { roadmapApi } from '../api/roadmaps'
@@ -182,6 +183,7 @@ export default function DomainPage({
   const [category, setCategory] = useState('')
   const [search, setSearch] = useState('')
   const [nameDialog, setNameDialog] = useState<'new' | 'rename' | null>(null)
+  const [researchDialog, setResearchDialog] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [rubber, setRubber] = useState<{ start: Point; end: Point } | null>(null)
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({})
@@ -284,13 +286,14 @@ export default function DomainPage({
     return () => document.removeEventListener('pointerdown', outside)
   }, [active, popover])
   useEffect(() => {
-    if (!active || (!importOpen && !nameDialog)) return
+    if (!active || (!importOpen && !nameDialog && !researchDialog)) return
     const previous = document.activeElement as HTMLElement | null
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
         setImportOpen(false)
         setNameDialog(null)
+        setResearchDialog(false)
       }
       if (event.key !== 'Tab') return
       const controls = [
@@ -313,7 +316,7 @@ export default function DomainPage({
       document.removeEventListener('keydown', keydown)
       previous?.focus()
     }
-  }, [active, mode, importOpen, nameDialog])
+  }, [active, mode, importOpen, nameDialog, researchDialog])
 
   const isLocked = (n: CanvasNode, b = board) =>
     n.locked || !!b?.nodes.find((g) => g.id === n.groupId)?.locked
@@ -349,7 +352,8 @@ export default function DomainPage({
       if (
         (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"],[role="tablist"]') ||
         importOpen ||
-        nameDialog
+        nameDialog ||
+        researchDialog
       )
         return
       if (event.code === 'Space') {
@@ -762,11 +766,19 @@ export default function DomainPage({
   const noArxivCount = boardPapers.filter(p => !p.roadmap?.arxivId).length
   const downloadableCount = new Set(boardPapers.filter(p => p.roadmap?.arxivId && p.roadmap.libraryStatus !== 'in_library').map(p => p.roadmap!.arxivId)).size
   const importResult = imports.job?.result || imports.job?.progress
+  const startResearch = (relationPolicy: ResearchRelationPolicy = 'refresh') => {
+    if (!board || readOnly) return
+    setResearchDialog(false); setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
+    void agent.act(() => workspace.withSaved(snapshot => api.start(board.id, snapshot.revision,
+      Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])), relationPolicy)))
+  }
   const beginResearch = () => {
     if (!board || readOnly) return
-    setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
-    void agent.act(() => workspace.withSaved(snapshot => api.start(board.id, snapshot.revision,
-      Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])))))
+    if (isRoadmap && boardPapers.length) {
+      setResearchDialog(true)
+      return
+    }
+    startResearch()
   }
   const openReview = (paperId: string) => {
     const libraryId = isRoadmap ? paperMap.get(paperId)?.roadmap?.libraryPaperId : paperId
@@ -1680,6 +1692,41 @@ export default function DomainPage({
               </button>
             </footer>
           </form>
+        </div>
+      )}
+      {researchDialog && (
+        <div className="domain-modal-backdrop" onClick={() => setResearchDialog(false)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={tr('重新调研')}
+            className="domain-modal roadmap-research-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2>{tr('是否需要清空历史关系？')}</h2>
+                <p>{tr('论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。')}</p>
+              </div>
+              <button aria-label={tr('关闭')} onClick={() => setResearchDialog(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="roadmap-research-choices">
+              <button autoFocus onClick={() => startResearch('preserve')}>
+                <strong>{tr('保留历史关系')}</strong>
+                <span>{tr('保留当前论文连线，再补充本轮调研发现的新关系。')}</span>
+              </button>
+              <button className="domain-danger" onClick={() => startResearch('clear')}>
+                <strong>{tr('清空并重新生成')}</strong>
+                <span>{tr('清除未锁定的旧论文连线，按本轮调研结果重新生成。')}</span>
+              </button>
+            </div>
+            <footer>
+              <span>{tr('这项选择只影响论文之间的历史连线。')}</span>
+              <button onClick={() => setResearchDialog(false)}>{tr('取消')}</button>
+            </footer>
+          </section>
         </div>
       )}
     </section>
