@@ -155,6 +155,36 @@ def test_wide_roadmap_viewport_roundtrips_at_five_percent(env):
     assert env.client.put("/api/roadmaps", json=saved).status_code == 422
 
 
+def test_saved_roadmap_can_be_rearranged_without_starting_research(env):
+    add_catalog(env, metadata("a", year="2010"), metadata("b", year="2020"))
+    snap = env.client.get("/api/roadmaps").json()
+    board = snap["state"]["boards"][0]
+    board["nodes"] = [
+        {"id": "topic", "kind": "text", "roadmapRole": "topic", "text": "LLM", "x": 900, "y": 900},
+        {"id": "branch", "kind": "text", "roadmapRole": "branch", "text": "Architecture", "x": 100, "y": 1500},
+        node("a", "card-a", x=100, y=2000),
+        node("b", "card-b", x=100, y=2800),
+    ]
+    board["edges"] = [
+        {"id": "topic-branch", "source": "topic", "target": "branch", "label": "研究分支", "roadmapStructure": True},
+        {"id": "branch-card", "source": "branch", "target": "card-a", "label": "代表论文", "roadmapStructure": True},
+        {"id": "development", "source": "card-a", "target": "card-b", "label": "演进"},
+    ]
+    assert env.client.put("/api/roadmaps", json=snap).status_code == 200
+    saved = env.client.get("/api/roadmaps").json()
+    response = env.client.post("/api/roadmaps/layout", json={
+        "boardId": board["id"], "revision": saved["revision"], "heights": {},
+    })
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    arranged = payload["state"]["boards"][0]
+    mapped = {item["id"]: item for item in arranged["nodes"]}
+    assert mapped["topic"]["y"] < mapped["branch"]["y"] < mapped["card-a"]["y"] < mapped["card-b"]["y"]
+    assert payload["before"]["nodes"][0]["x"] == 900
+    assert payload["revision"] == saved["revision"] + 1
+    assert env.queue.latest("roadmap:" + board["id"]) is None
+
+
 def test_external_catalog_can_be_edited_without_downloading_and_saves_conflict(env):
     add_catalog(env, metadata())
     snap = saved_board(env, "classic")

@@ -44,3 +44,5 @@ export const getRoadmapReport = (boardId: string, signal?: AbortSignal) =>
   api.get<RoadmapReport | null>('/report', { params: { boardId }, signal }).then(r => r.data)
 export const exportRoadmapReport = (boardId: string) =>
   api.get<Blob>('/report/export', { params: { boardId }, responseType: 'blob' }).then(r => r.data)
+export const arrangeRoadmap = (boardId: string, revision: number, heights: Record<string, number>) =>
+  api.post<DomainSnapshot & { before: DomainBoard }>('/layout', { boardId, revision, heights }).then(r => r.data)

@@ -15,6 +15,7 @@ import {
   LockKeyhole,
   Maximize,
   MousePointer2,
+  Network,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -43,7 +44,7 @@ import {
   type ResearchRelationPolicy,
   type ReviewField,
 } from '../api/domains'
-import { roadmapApi } from '../api/roadmaps'
+import { arrangeRoadmap, roadmapApi } from '../api/roadmaps'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
@@ -157,7 +158,8 @@ export default function DomainPage({
   const boardIndex = state?.boards.findIndex((b) => b.id === state.activeId) ?? -1
   const liveBoard = state?.boards[boardIndex] ?? null
   const run = agent.runs.find(r => r.boardId === liveBoard?.id)
-  const readOnly = !agent.ready || agent.busy || run?.status === 'pending' || run?.status === 'preview'
+  const [layoutBusy, setLayoutBusy] = useState(false)
+  const readOnly = !agent.ready || agent.busy || layoutBusy || run?.status === 'pending' || run?.status === 'preview'
   const board = liveBoard && run?.status === 'preview' && run.proposal
     ? { ...run.proposal.board, name: liveBoard.name, category: liveBoard.category, viewport: liveBoard.viewport }
     : liveBoard
@@ -195,6 +197,7 @@ export default function DomainPage({
   const space = useRef(false)
   const loadSequence = useRef(0)
   const fittedPreviewRuns = useRef(new Set<string>())
+  const fitAfterLayout = useRef(false)
   const paperMap = new Map(papers.map((p) => [p.id, p]))
   const patchBoard = useCallback(
     (fn: (b: DomainBoard) => DomainBoard, record = true) => {
@@ -580,12 +583,13 @@ export default function DomainPage({
         },
       }
     }, false)
-  const fit = () => {
-    if (!board?.nodes.length) return
-    const minX = Math.min(...board.nodes.map((n) => n.x)),
-      minY = Math.min(...board.nodes.map((n) => n.y))
-    const maxX = Math.max(...board.nodes.map((n) => n.x + (sizes[n.id]?.width ?? n.width))),
-      maxY = Math.max(...board.nodes.map((n) => n.y + (sizes[n.id]?.height ?? n.height)))
+  const boardNodes = board?.nodes
+  const fit = useCallback(() => {
+    if (!boardNodes?.length) return
+    const minX = Math.min(...boardNodes.map((n) => n.x)),
+      minY = Math.min(...boardNodes.map((n) => n.y))
+    const maxX = Math.max(...boardNodes.map((n) => n.x + (sizes[n.id]?.width ?? n.width))),
+      maxY = Math.max(...boardNodes.map((n) => n.y + (sizes[n.id]?.height ?? n.height)))
     const zoom = clampZoom(
       Math.min((canvasSize.width - 120) / (maxX - minX), (canvasSize.height - 120) / (maxY - minY), 1.2),
       isRoadmap ? 0.05 : 0.15,
@@ -601,7 +605,13 @@ export default function DomainPage({
       }),
       false,
     )
-  }
+  }, [boardNodes, canvasSize, isRoadmap, patchBoard, sizes])
+  useEffect(() => {
+    if (!fitAfterLayout.current || !board?.nodes.length) return
+    fitAfterLayout.current = false
+    const frame = requestAnimationFrame(fit)
+    return () => cancelAnimationFrame(frame)
+  }, [board?.nodes, fit])
   const focusNode = (node: CanvasNode) => {
     patchBoard(
       (b) => ({
@@ -781,6 +791,21 @@ export default function DomainPage({
       return
     }
     startResearch()
+  }
+  const arrangeCanvas = () => {
+    if (!isRoadmap || !board || readOnly) return
+    setActionError('')
+    setLayoutBusy(true)
+    void workspace.withSaved(snapshot => arrangeRoadmap(
+      board.id,
+      snapshot.revision,
+      Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])),
+    )).then(result => {
+      fitAfterLayout.current = true
+      workspace.install(result)
+    }).catch(error => {
+      setActionError(error instanceof Error ? error.message : String(error))
+    }).finally(() => setLayoutBusy(false))
   }
   const openReview = (paperId: string) => {
     const libraryId = isRoadmap ? paperMap.get(paperId)?.roadmap?.libraryPaperId : paperId
@@ -1207,9 +1232,14 @@ export default function DomainPage({
                 return { ...run, status: 'applied', proposal: null }
               })}>{tr('应用方案')}</button>
               <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('放弃方案')}</button>
-            </> : <button className="domain-primary"
-              disabled={!board || readOnly || (!isRoadmap && new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2)}
-              onClick={beginResearch}><Sparkles size={16} />{tr(isRoadmap ? (boardPapers.length ? '重新调研' : '生成路线图') : 'agent代连')}</button>}
+            </> : <>
+              {isRoadmap && board?.nodes.some(node => node.roadmapRole === 'topic') && <button
+                disabled={readOnly}
+                onClick={arrangeCanvas}><Network size={16} />{tr(layoutBusy ? '正在整理布局…' : '整理布局')}</button>}
+              <button className="domain-primary"
+                disabled={!board || readOnly || (!isRoadmap && new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2)}
+                onClick={beginResearch}><Sparkles size={16} />{tr(isRoadmap ? (boardPapers.length ? '重新调研' : '生成路线图') : 'agent代连')}</button>
+            </>}
           </div>
           {rubber && (
             <div

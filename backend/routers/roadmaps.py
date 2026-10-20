@@ -1,5 +1,6 @@
 """Local discovery canvases, research previews and explicit batch adoption."""
 
+from collections import Counter
 from copy import deepcopy
 from io import BytesIO
 from types import SimpleNamespace
@@ -115,6 +116,12 @@ class StartRequest(StrictModel):
     relationPolicy: Literal["refresh", "clear", "preserve"] = "refresh"
 
 
+class LayoutRequest(StrictModel):
+    boardId: str
+    revision: int = Field(ge=1)
+    heights: dict[str, float] = Field(default_factory=dict)
+
+
 def find_board(row, board_id):
     board = next((b for b in row.state["boards"] if b["id"] == board_id), None)
     if not board:
@@ -143,6 +150,60 @@ def ensure_no_research(db, board_id):
         refresh_run(db, run)
         if run.status in BUSY:
             raise HTTPException(409, "请先应用、放弃或取消当前调研方案。")
+
+
+def branch_index(board, papers):
+    """Recover metadata branch names even when a user renamed the label."""
+    nodes = {node["id"]: node for node in board["nodes"]}
+    result, used = {}, set()
+    for branch in (node for node in board["nodes"] if node.get("roadmapRole") == "branch"):
+        candidates = []
+        for edge in board["edges"]:
+            target = nodes.get(edge["target"])
+            if edge.get("roadmapStructure") and edge["source"] == branch["id"] and target and target["kind"] == "paper":
+                name = papers.get(target.get("paperId"), {}).get("branch")
+                if name:
+                    candidates.append(name)
+        name = Counter(candidates).most_common(1)[0][0] if candidates else branch.get("text") or "其他"
+        if name in used:
+            name = branch.get("text") or branch["id"]
+        result[name] = branch["id"]
+        used.add(name)
+    return result
+
+
+@router.post("/layout")
+def layout(body: LayoutRequest, db: Annotated[Session, Depends(get_db)]):
+    """Rearrange the saved roadmap without starting a new research run."""
+    from services.roadmap_layout import arrange_tree
+
+    begin_write(db)
+    row = workspace(db, commit=False)
+    if row.revision != body.revision:
+        raise HTTPException(409, "路线图已变化，请重新加载后整理布局。")
+    board = find_board(row, body.boardId)
+    ensure_no_research(db, body.boardId)
+    topic = next((node for node in board["nodes"] if node.get("roadmapRole") == "topic"), None)
+    if topic is None:
+        raise HTTPException(422, "当前画布还没有可整理的路线图主题。")
+    paper_ids = {node["paperId"] for node in board["nodes"] if node["kind"] == "paper"}
+    papers = {paper.id: paper.data for paper in db.query(RoadmapPaper).filter(RoadmapPaper.id.in_(paper_ids)).all()}
+    branches = branch_index(board, papers)
+    if not branches:
+        raise HTTPException(422, "当前画布还没有可整理的研究分支。")
+    heights = {
+        node["id"]: min(10000, max(60, body.heights.get(node["id"], node["height"])))
+        for node in board["nodes"]
+    }
+    before = deepcopy(board)
+    arranged = Board.model_validate(arrange_tree(board, papers, heights, topic["id"], branches)).model_dump()
+    state = deepcopy(row.state)
+    next_board = find_board(SimpleNamespace(state=state), body.boardId)
+    next_board.update(nodes=arranged["nodes"], edges=arranged["edges"])
+    WorkspaceState.model_validate(state)
+    row.state, row.revision = state, row.revision + 1
+    db.commit()
+    return {"state": row.state, "revision": row.revision, "before": before}
 
 
 @router.post("/agent/runs", status_code=202)

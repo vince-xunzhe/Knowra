@@ -72,6 +72,7 @@ def test_preview_has_topic_branch_tree_and_distinct_evidence_backed_edges():
     assert all(n["groupId"] is None for n in cards)
     assert max(n["y"] for n in topics) < min(n["y"] for n in branches)
     assert max(n["y"] for n in branches) < min(n["y"] for n in cards)
+    assert len({n["x"] for n in branches}) == 2
     structures = [edge for edge in proposal["board"]["edges"] if edge["roadmapStructure"]]
     assert len(structures) == 4 and all(edge["analysis"] is None for edge in structures)
     assert {p["id"] for p in selected} == {"a", "b"}
@@ -202,8 +203,40 @@ def test_same_branch_connects_entry_papers_without_forcing_scholarly_chains():
     roots = {edge["target"] for edge in graph["edges"] if edge["source"] == branch["id"]}
     assert roots == {cards["a"]["id"], cards["c"]["id"]}
     assert cards["a"]["y"] < cards["b"]["y"]
+    assert cards["a"]["y"] == cards["c"]["y"]
+    assert cards["a"]["x"] != cards["c"]["x"]
     assert len([edge for edge in graph["edges"] if edge["analysis"]]) == 1
     assert result["unconnected"] == [{"paperId": "c", "title": catalog["c"]["title"]}]
+
+
+def test_legacy_blank_groups_become_compact_branch_lanes():
+    catalog = {pid: paper(pid, year) for pid, year in (("a", "2010"), ("b", "2020"), ("c", "2021"))}
+    raw = {
+        "papers": [{"id": pid, "reason": "A milestone", "branch": "Foundations"} for pid in catalog],
+        "edges": [
+            {"source": "a", "target": "b", "relation": "evolves_into", "reason": "Checked evolution",
+             "evidence": [{"paperId": "b", "quote": "The verified method b learns reusable visual representations."}]},
+        ],
+    }
+    first, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    old = first["board"]
+    cards = [node for node in old["nodes"] if node["kind"] == "paper"]
+    old["nodes"].append({"id": "legacy", "kind": "group", "x": 80, "y": 80,
+                         "width": 640, "height": 1800, "text": "Foundations"})
+    for index, card in enumerate(cards):
+        card.update(groupId="legacy", x=104, y=140 + index * 500)
+
+    result, _ = research.proposal_for(old, {}, catalog, raw, [])
+    graph = result["board"]
+    mapped = {node.get("paperId"): node for node in graph["nodes"] if node["kind"] == "paper"}
+    group = next(node for node in graph["nodes"] if node["id"] == "legacy")
+    branch = next(node for node in graph["nodes"] if node.get("roadmapRole") == "branch")
+    assert branch["y"] < group["y"] < mapped["a"]["y"]
+    assert mapped["a"]["y"] < mapped["b"]["y"]
+    assert mapped["a"]["y"] == mapped["c"]["y"]
+    assert mapped["a"]["x"] != mapped["c"]["x"]
+    assert group["height"] < 1800
+    assert all(group["y"] < card["y"] < group["y"] + group["height"] for card in mapped.values())
 
 
 def test_rerun_preserves_renamed_labels_user_groups_notes_and_all_locked_items():

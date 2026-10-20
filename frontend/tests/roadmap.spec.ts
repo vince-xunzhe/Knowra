@@ -44,6 +44,7 @@ async function setup(page: Page, populated = false) {
   let importJob: RoadmapImportJob | null = null
   let importPosts = 0
   let researchPosts = 0
+  let layoutPosts = 0
   let lastResearchPolicy: string | undefined
   let domainWrites = 0
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
@@ -77,6 +78,18 @@ async function setup(page: Page, populated = false) {
         state = body.state; revision++; json = { revision }
       } else json = { state, revision }
     } else if (path === '/api/roadmaps/papers') json = candidates
+    else if (path === '/api/roadmaps/layout') {
+      layoutPosts++
+      const body = route.request().postDataJSON()
+      expect(body.revision).toBe(revision)
+      const before = structuredClone(state.boards[0])
+      state.boards[0] = { ...before, nodes: before.nodes.map(node => ({
+        ...node,
+        x: node.roadmapRole === 'topic' ? 80 : node.roadmapRole === 'branch' ? 520 : node.x + 900,
+      })) }
+      revision++
+      json = { state, revision, before }
+    }
     else if (path === '/api/roadmaps/report') {
       if (reportFailures > 0) {
         reportFailures--
@@ -147,7 +160,7 @@ async function setup(page: Page, populated = false) {
   await expect(page.getByRole('combobox', { name: '领域', exact: true })).toHaveValue('roadmap-llm')
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
-    saveAttempts: () => saveAttempts, researchPosts: () => researchPosts,
+    saveAttempts: () => saveAttempts, researchPosts: () => researchPosts, layoutPosts: () => layoutPosts,
     lastResearchPolicy: () => lastResearchPolicy,
     zoomMinimum: (minimum: number) => { zoomMinimum = minimum },
     conflict: () => { revision++ },
@@ -587,6 +600,20 @@ test('development trees distinguish topic, branch and milestone nodes, route ver
   await expect(roadmap.getByRole('heading', { name: /连线解读/ })).toHaveCount(0)
   await page.screenshot({ path: '/tmp/knowra-shitu-development-tree.png' })
   expect(app.domainWrites()).toBe(0)
+  expect(app.errors()).toEqual([])
+})
+
+test('an existing roadmap can be arranged without running research again', async ({ page }) => {
+  const app = await setup(page, true)
+  app.developmentTree()
+  await page.reload()
+  await page.getByRole('navigation').getByRole('button', { name: '识途', exact: true }).click()
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  await roadmap.getByRole('button', { name: '整理布局', exact: true }).click()
+  await expect.poll(app.layoutPosts).toBe(1)
+  await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'topic')?.x).toBe(80)
+  await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'branch')?.x).toBe(520)
+  expect(app.researchPosts()).toBe(0)
   expect(app.errors()).toEqual([])
 })
 
