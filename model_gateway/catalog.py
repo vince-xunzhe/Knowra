@@ -94,8 +94,16 @@ TASK_SPECS.append({
     "recommended_model_id": "openai/gpt-4o",
 })
 
+TASK_SPECS.append({
+    "id": "roadmap_research", "label": "识途调研",
+    "description": "检索并核验经典论文，生成技术发展路线图预览",
+    "category": "识途", "task_type": "llm", "legacy_field": "vlm_model",
+    "recommended_model_id": "openai/gpt-4o",
+})
+
 
 TASK_BINDING_DEFAULTS = {
+    "roadmap_research": "openai/gpt-4o",
     "domain_connect": "openai/gpt-4o",
     "paper_extract": "openai/gpt-4o",
     "paper_chat": "openai/gpt-4o",
@@ -192,6 +200,7 @@ DEFAULT_PROVIDER_REGISTRY = [
 
 
 _OPENAI_CHAT_TASKS = [
+    "roadmap_research",
     "domain_connect",
     "recommend_rank",
     "paper_extract",
@@ -204,6 +213,7 @@ _OPENAI_CHAT_TASKS = [
 ]
 
 _OPENAI_TEXT_TASKS = [
+    "roadmap_research",
     "domain_connect",
     "recommend_rank",
     "wiki_compile",
@@ -213,6 +223,7 @@ _OPENAI_TEXT_TASKS = [
 ]
 
 _CODEX_ALL_NON_EMBED_TASKS = [
+    "roadmap_research",
     "domain_connect",
     "recommend_rank",
     "paper_extract",
@@ -225,6 +236,7 @@ _CODEX_ALL_NON_EMBED_TASKS = [
 ]
 
 _OPENAPI_LLM_TASKS = [
+    "roadmap_research",
     "domain_connect",
     "recommend_rank",
     "wiki_compile",

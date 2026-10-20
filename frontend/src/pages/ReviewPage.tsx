@@ -301,6 +301,40 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
     return [...m.entries()].sort((a, b) => catRank(a[0]) - catRank(b[0]))
   }, [filtered, categoryOptions, groupMode])
 
+  const paperListRef = useRef<HTMLDivElement>(null)
+  const selectedPaperRef = useRef<HTMLButtonElement>(null)
+  const selectedGroup = groupedFiltered.find(([, ps]) => ps.some(p => p.id === selectedId))?.[0]
+  const selectedGroupCollapsed = selectedGroup !== undefined && collapsedCats.has(selectedGroup)
+
+  const navigationKey = JSON.stringify([selectedId, selectedGroup, groupMode, paperListCollapsed, pdfOpenPaperId])
+  const [revealedNavigation, setRevealedNavigation] = useState(navigationKey)
+  // Adjust collapse state before rendering a new navigation target. Ordinary
+  // rerenders and manual group toggles must not force the reader back to it.
+  if (revealedNavigation !== navigationKey) {
+    setRevealedNavigation(navigationKey)
+    if (selectedGroup !== undefined && selectedGroupCollapsed && !paperListCollapsed && pdfOpenPaperId === null) {
+      const next = new Set(collapsedCats)
+      next.delete(selectedGroup)
+      setCollapsedCats(next)
+    }
+  }
+
+  useEffect(() => {
+    if (paperListCollapsed || pdfOpenPaperId !== null || selectedGroupCollapsed) return
+    const frame = requestAnimationFrame(() => {
+      const list = paperListRef.current
+      const paper = selectedPaperRef.current
+      if (!list || !paper) return
+      const viewport = list.getBoundingClientRect()
+      const row = paper.getBoundingClientRect()
+      // Scroll only the paper list, leaving the review and page position alone.
+      if (row.top < viewport.top || row.bottom > viewport.bottom) {
+        list.scrollTop += row.top - viewport.top - Math.max(0, (viewport.height - row.height) / 2)
+      }
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedId, selectedGroup, selectedGroupCollapsed, groupMode, paperListCollapsed, pdfOpenPaperId])
+
   const visibleDetail = selectedId !== null && detail?.id === selectedId ? detail : null
   const visibleProcessMeta = useMemo(
     () =>
@@ -533,7 +567,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={paperListRef} data-testid="review-paper-list" className="min-h-0 flex-1 overflow-y-auto">
           {loading ? (
             <p className="text-sm text-slate-500 p-6 text-center">{tr("加载中…")}</p>
           ) : loadError ? (
@@ -552,6 +586,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   <div key={cat}>
                     <button
                       onClick={() => toggleCat(cat)}
+                      aria-expanded={!collapsed}
                       className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-slate-300 hover:bg-slate-800/40"
                     >
                       {collapsed ? (
@@ -570,6 +605,8 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                           return (
                             <li key={p.id}>
                               <button
+                                ref={active ? selectedPaperRef : undefined}
+                                aria-current={active ? 'page' : undefined}
                                 onClick={() => selectPaper(p.id)}
                                 className={`w-full flex flex-col gap-1.5 py-3 pl-7 pr-4 text-left border-l-2 transition-colors ${learningStatusRowClass(learningStatus, active)}`}
                               >

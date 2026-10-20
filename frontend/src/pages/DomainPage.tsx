@@ -2,24 +2,35 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
+  ExternalLink,
+  FileText,
   Frame,
   Hand,
+  History,
   Link2,
   Loader2,
   LockKeyhole,
   Maximize,
   MousePointer2,
+  Network,
   Plus,
   Redo2,
+  RefreshCw,
   Search,
   Sparkles,
+  Star,
   Trash2,
   Type,
   Undo2,
   UnlockKeyhole,
+  Workflow,
   X,
   ZoomIn,
   ZoomOut,
@@ -27,20 +38,26 @@ import {
 import { t as tr } from '../i18n/catalog'
 import { useLocale } from '../i18n/preferences'
 import {
-  applyDomainRun,
-  discardDomainRun,
-  startDomainRun,
-  loadDomainPapers,
+  domainApi,
   newNode,
   freePosition,
   type CanvasNode,
   type DomainBoard,
   type DomainPaper,
+  type ResearchRelationPolicy,
   type ReviewField,
 } from '../api/domains'
+import { arrangeRoadmap, roadmapApi, type RoadmapLayoutOrientation } from '../api/roadmaps'
+import { localApiErrorMessage } from '../api/errors'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
+import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
+import { useRoadmapImport } from '../hooks/useRoadmapImport'
 import DomainEdgeEvidence from './DomainEdgeEvidence'
+import RoadmapPaperDetails, { RoadmapPaperStatus } from './RoadmapPaperDetails'
+import RoadmapReport from './RoadmapReport'
+import { sourceUrl } from '../utils/sourceUrl'
+import { roadmapEdgeGeometry } from '../lib/roadmapGeometry'
 import './DomainPage.css'
 
 const FIELDS: [ReviewField, string][] = [
@@ -50,7 +67,7 @@ const FIELDS: [ReviewField, string][] = [
   ['motivation', '研究动机'],
 ]
 const id = () => crypto.randomUUID()
-const clampZoom = (z: number) => Math.min(2.5, Math.max(0.15, z))
+const clampZoom = (z: number, minimum = 0.15) => Math.min(2.5, Math.max(minimum, z))
 type Point = { x: number; y: number }
 type Gesture = {
   mode: 'move' | 'pan' | 'select' | 'resize'
@@ -68,6 +85,7 @@ function CanvasItem({
   children,
   onStart,
   onSize,
+  roadmapRole,
 }: {
   node: CanvasNode
   selected: boolean
@@ -75,6 +93,7 @@ function CanvasItem({
   children: React.ReactNode
   onStart: (e: ReactPointerEvent, node: CanvasNode, resize?: boolean) => void
   onSize: (id: string, width: number, height: number) => void
+  roadmapRole?: CanvasNode['roadmapRole']
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -90,6 +109,7 @@ function CanvasItem({
       data-node-id={node.id}
       data-kind={node.kind}
       data-selected={selected}
+      data-roadmap-role={roadmapRole || undefined}
       className={`domain-node domain-${node.kind} ${selected ? 'is-selected' : ''} ${node.locked ? 'is-locked' : ''}`}
       style={{
         left: node.x,
@@ -115,22 +135,99 @@ function CanvasItem({
   )
 }
 
+function RoadmapKeywordField({
+  keywords,
+  disabled,
+  onChange,
+}: {
+  keywords: string[]
+  disabled: boolean
+  onChange: (keywords: string[]) => void
+}) {
+  useLocale()
+  const [draft, setDraft] = useState('')
+  const commit = (raw: string) => {
+    const next = [...keywords]
+    const seen = new Set(next.map(keyword => keyword.toLocaleLowerCase()))
+    for (const value of raw.split(/[,，;；\n]+/)) {
+      const keyword = value.trim().replace(/\s+/g, ' ').slice(0, 80)
+      const key = keyword.toLocaleLowerCase()
+      if (keyword && !seen.has(key) && next.length < 6) {
+        next.push(keyword)
+        seen.add(key)
+      }
+    }
+    setDraft('')
+    if (next.length !== keywords.length) onChange(next)
+  }
+  return (
+    <div className="roadmap-keywords" role="group" aria-label={tr('关注关键词')}>
+      <span className="roadmap-keywords-label">{tr('关键词')}</span>
+      <div className="roadmap-keywords-values">
+        {keywords.map(keyword => <span className="roadmap-keyword" key={keyword}>
+          {keyword}
+          <button
+            type="button"
+            disabled={disabled}
+            aria-label={tr('删除关键词：{0}', { 0: keyword })}
+            onClick={() => onChange(keywords.filter(value => value !== keyword))}
+          ><X size={11} /></button>
+        </span>)}
+        <input
+          value={draft}
+          disabled={disabled || keywords.length >= 6}
+          maxLength={80}
+          aria-label={tr('添加关注关键词')}
+          placeholder={keywords.length ? tr('继续添加') : tr('添加关注方向')}
+          title={tr('输入关键词后按回车；最多添加 6 个。')}
+          onChange={event => setDraft(event.target.value)}
+          onBlur={() => commit(draft)}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ',' || event.key === '，' || event.key === ';') {
+              event.preventDefault()
+              commit(draft)
+            } else if (event.key === 'Backspace' && !draft && keywords.length) {
+              onChange(keywords.slice(0, -1))
+            } else if (event.key === 'Escape') {
+              setDraft('')
+            }
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
 export default function DomainPage({
   active,
   onOpenReview,
+  mode = 'domain',
 }: {
   active: boolean
   onOpenReview: (paperId: string) => void
+  mode?: 'domain' | 'roadmap'
 }) {
   useLocale()
-  const workspace = useDomainWorkspace()
-  const agent = useDomainAgent()
+  const isRoadmap = mode === 'roadmap'
+  const api = isRoadmap ? roadmapApi : domainApi
+  const pageTitle = isRoadmap ? '识途' : '索骥'
+  const {
+    bodyRef: domainBodyRef, width: inspectorWidth, min: inspectorMin, max: inspectorMax,
+    resizing: inspectorResizing, onPointerDown: beginInspectorResize,
+    onPointerMove: moveInspectorResize, onPointerUp: finishInspectorResize,
+    endDrag: endInspectorResize, reset: resetInspectorWidth, onKeyDown: resizeInspectorWithKey,
+    collapsed: inspectorCollapsed, toggleCollapsed: toggleInspector, expand: expandInspector,
+  } = useDomainInspectorResize(mode)
+  const workspace = useDomainWorkspace(api)
+  const agent = useDomainAgent(api.runs)
   const refreshWorkspace = workspace.refresh
   const { state, update, checkpoint } = workspace
   const boardIndex = state?.boards.findIndex((b) => b.id === state.activeId) ?? -1
   const liveBoard = state?.boards[boardIndex] ?? null
   const run = agent.runs.find(r => r.boardId === liveBoard?.id)
-  const readOnly = !agent.ready || agent.busy || run?.status === 'pending' || run?.status === 'preview'
+  const [layoutBusy, setLayoutBusy] = useState(false)
+  const [layoutMenu, setLayoutMenu] = useState(false)
+  const readOnly = !agent.ready || agent.busy || layoutBusy || run?.status === 'pending' || run?.status === 'preview'
   const board = liveBoard && run?.status === 'preview' && run.proposal
     ? { ...run.proposal.board, name: liveBoard.name, category: liveBoard.category, viewport: liveBoard.viewport }
     : liveBoard
@@ -142,9 +239,13 @@ export default function DomainPage({
   const [papers, setPapers] = useState<DomainPaper[]>([])
   const [paperError, setPaperError] = useState(false)
   const [papersLoading, setPapersLoading] = useState(true)
+  const [actionError, setActionError] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
   const [tool, setTool] = useState<'select' | 'hand'>('select')
+  const [roadmapView, setRoadmapView] = useState<'canvas' | 'report'>('canvas')
+  const showReport = isRoadmap && roadmapView === 'report'
+  const canvasActive = active && !showReport
   const [linkSource, setLinkSource] = useState<string | null>(null)
   const [popover, setPopover] = useState<string | null>(null)
   const [tab, setTab] = useState<ReviewField>('core_contribution')
@@ -154,6 +255,7 @@ export default function DomainPage({
   const [category, setCategory] = useState('')
   const [search, setSearch] = useState('')
   const [nameDialog, setNameDialog] = useState<'new' | 'rename' | null>(null)
+  const [researchDialog, setResearchDialog] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
   const [rubber, setRubber] = useState<{ start: Point; end: Point } | null>(null)
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({})
@@ -162,6 +264,8 @@ export default function DomainPage({
   const gesture = useRef<Gesture | null>(null)
   const space = useRef(false)
   const loadSequence = useRef(0)
+  const fittedPreviewRuns = useRef(new Set<string>())
+  const fitAfterLayout = useRef(false)
   const paperMap = new Map(papers.map((p) => [p.id, p]))
   const patchBoard = useCallback(
     (fn: (b: DomainBoard) => DomainBoard, record = true) => {
@@ -170,6 +274,7 @@ export default function DomainPage({
     [update],
   )
   const onSize = useCallback((key: string, width: number, height: number) => {
+    if (!width || !height) return
     setSizes((s) =>
       s[key]?.width === width && s[key]?.height === height ? s : { ...s, [key]: { width, height } },
     )
@@ -177,7 +282,7 @@ export default function DomainPage({
   const refreshPapers = useCallback(async () => {
     const seq = ++loadSequence.current
     try {
-      const result = await loadDomainPapers()
+      const result = await api.papers()
       if (seq === loadSequence.current) {
         setPapers(result)
         setPaperError(false)
@@ -187,7 +292,14 @@ export default function DomainPage({
     } finally {
       if (seq === loadSequence.current) setPapersLoading(false)
     }
-  }, [])
+  }, [api])
+  const imports = useRoadmapImport(isRoadmap ? liveBoard?.id ?? null : null, active && isRoadmap, refreshPapers)
+  // Preview can change candidate descriptions; discarding restores the saved ones.
+  useEffect(() => {
+    if (!isRoadmap || !run?.status) return
+    const timer = setTimeout(() => void refreshPapers(), 0)
+    return () => clearTimeout(timer)
+  }, [isRoadmap, run?.id, run?.status, refreshPapers])
   useEffect(() => {
     if (!active) return
     const focus = () => {
@@ -206,12 +318,38 @@ export default function DomainPage({
   useEffect(() => {
     const element = canvas.current
     if (!element) return
-    const observer = new ResizeObserver(() =>
-      setCanvasSize({ width: element.clientWidth, height: element.clientHeight }),
-    )
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth && element.clientHeight) {
+        setCanvasSize({ width: element.clientWidth, height: element.clientHeight })
+      }
+    })
     observer.observe(element)
     return () => observer.disconnect()
   }, [active, loaded])
+  useEffect(() => {
+    const proposal = run?.proposal?.board
+    if (!isRoadmap || !canvasActive || agent.busy || liveBoard?.nodes.length !== 0 ||
+      run?.status !== 'preview' || !proposal?.nodes.length || fittedPreviewRuns.current.has(run.id)) return
+    // Wait for registered paper titles so their rendered card heights are known.
+    if (!paperError && proposal.nodes.some(n => n.kind === 'paper' && !papers.some(p => p.id === n.paperId))) return
+    const frame = requestAnimationFrame(() => {
+      const element = canvas.current
+      if (!element?.clientWidth || !element.clientHeight) return
+      const measured = new Map(Array.from(element.querySelectorAll<HTMLElement>('[data-node-id]'))
+        .map(node => [node.dataset.nodeId, { width: node.offsetWidth, height: node.offsetHeight }]))
+      const minX = Math.min(...proposal.nodes.map(n => n.x)), minY = Math.min(...proposal.nodes.map(n => n.y))
+      const maxX = Math.max(...proposal.nodes.map(n => n.x + (measured.get(n.id)?.width || n.width))),
+        maxY = Math.max(...proposal.nodes.map(n => n.y + (measured.get(n.id)?.height || n.height)))
+      const zoom = clampZoom(Math.min((element.clientWidth - 120) / (maxX - minX),
+        (element.clientHeight - 120) / (maxY - minY), 1.2), 0.05)
+      fittedPreviewRuns.current.add(run.id)
+      patchBoard(b => ({ ...b, viewport: { zoom,
+        x: (element.clientWidth - (maxX - minX) * zoom) / 2 - minX * zoom,
+        y: (element.clientHeight - (maxY - minY) * zoom) / 2 - minY * zoom,
+      } }), false)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [isRoadmap, canvasActive, agent.busy, liveBoard?.nodes.length, run, papers, paperError, canvasSize, patchBoard])
   useEffect(() => {
     if (!active || !popover) return
     const outside = (event: PointerEvent) => {
@@ -221,18 +359,34 @@ export default function DomainPage({
     return () => document.removeEventListener('pointerdown', outside)
   }, [active, popover])
   useEffect(() => {
-    if (!importOpen && !nameDialog) return
+    if (!active || !layoutMenu) return
+    const outside = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest('.roadmap-layout-picker')) setLayoutMenu(false)
+    }
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLayoutMenu(false)
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', keydown)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', keydown)
+    }
+  }, [active, layoutMenu])
+  useEffect(() => {
+    if (!active || (!importOpen && !nameDialog && !researchDialog)) return
     const previous = document.activeElement as HTMLElement | null
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault()
         setImportOpen(false)
         setNameDialog(null)
+        setResearchDialog(false)
       }
       if (event.key !== 'Tab') return
       const controls = [
         ...document.querySelectorAll<HTMLElement>(
-          '.domain-modal button:not(:disabled), .domain-modal input:not(:disabled), .domain-modal select:not(:disabled)',
+          `.domain-page[data-domain-mode="${mode}"] .domain-modal :is(button,input,select):not(:disabled)`,
         ),
       ]
       const first = controls[0],
@@ -250,13 +404,20 @@ export default function DomainPage({
       document.removeEventListener('keydown', keydown)
       previous?.focus()
     }
-  }, [importOpen, nameDialog])
+  }, [active, mode, importOpen, nameDialog, researchDialog])
 
   const isLocked = (n: CanvasNode, b = board) =>
     n.locked || !!b?.nodes.find((g) => g.id === n.groupId)?.locked
   const removeSelection = () => {
     if (!board || readOnly) return
     const removed = new Set(board.nodes.filter((n) => selected.has(n.id) && !isLocked(n)).map((n) => n.id))
+    if (
+      removed.size > 0 &&
+      removed.size === board.nodes.length &&
+      !window.confirm(tr('确认删除当前画布的全部元素（共 {0} 个，含连线）？论文库中的论文不会被删除，删除后可通过撤销恢复。', {
+        0: board.nodes.length + board.edges.length,
+      }))
+    ) return
     patchBoard((b) => ({
       ...b,
       nodes: b.nodes
@@ -271,12 +432,16 @@ export default function DomainPage({
     if (popover && removed.has(popover)) setPopover(null)
   }
   useEffect(() => {
-    if (!active) return
+    if (!canvasActive) {
+      space.current = false
+      return
+    }
     const keydown = (event: KeyboardEvent) => {
       if (
-        (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]') ||
+        (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"],[role="tablist"]') ||
         importOpen ||
-        nameDialog
+        nameDialog ||
+        researchDialog
       )
         return
       if (event.code === 'Space') {
@@ -316,7 +481,7 @@ export default function DomainPage({
   })
   useEffect(() => {
     const element = canvas.current
-    if (!element || !active) return
+    if (!element || !canvasActive) return
     const wheel = (event: WheelEvent) => {
       if ((event.target as HTMLElement).closest('.domain-popover')) return
       event.preventDefault()
@@ -324,7 +489,7 @@ export default function DomainPage({
       patchBoard((b) => {
         const v = b.viewport
         if (event.ctrlKey || event.metaKey) {
-          const zoom = clampZoom(v.zoom * Math.exp(-event.deltaY * 0.008))
+          const zoom = clampZoom(v.zoom * Math.exp(-event.deltaY * 0.008), isRoadmap ? 0.05 : 0.15)
           const x = event.clientX - rect.left,
             y = event.clientY - rect.top
           return {
@@ -337,7 +502,7 @@ export default function DomainPage({
     }
     element.addEventListener('wheel', wheel, { passive: false })
     return () => element.removeEventListener('wheel', wheel)
-  }, [active, patchBoard, loaded])
+  }, [canvasActive, patchBoard, loaded, isRoadmap])
 
   const localPoint = (e: { clientX: number; clientY: number }): Point => {
     const rect = canvas.current!.getBoundingClientRect()
@@ -362,7 +527,7 @@ export default function DomainPage({
     canvas.current?.setPointerCapture(e.pointerId)
   }
   const beginNode = (e: ReactPointerEvent, node: CanvasNode, resize = false) => {
-    if ((e.target as HTMLElement).closest('button,input,textarea') && !resize) {
+    if ((e.target as HTMLElement).closest('button,a,input,textarea') && !resize) {
       e.stopPropagation()
       return
     }
@@ -373,6 +538,7 @@ export default function DomainPage({
       return
     }
     if (e.button !== 0) return
+    expandInspector()
     if (!readOnly && linkSource && node.kind === 'paper') {
       connect(node.id)
       return
@@ -458,20 +624,37 @@ export default function DomainPage({
     setRubber(null)
     if (canvas.current?.hasPointerCapture(e.pointerId)) canvas.current.releasePointerCapture(e.pointerId)
   }
+  const canConnect = (target: string) => {
+    if (!isRoadmap || !linkSource || linkSource === target) return true
+    const sourceNode = board?.nodes.find(n => n.id === linkSource)
+    const targetNode = board?.nodes.find(n => n.id === target)
+    return (sourceNode?.kind === 'paper' && targetNode?.kind === 'paper') ||
+      (sourceNode?.roadmapRole === 'topic' && targetNode?.roadmapRole === 'branch') ||
+      (sourceNode?.roadmapRole === 'branch' && targetNode?.kind === 'paper')
+  }
   const connect = (target: string) => {
+    if (readOnly || !canConnect(target)) return
+    expandInspector()
     if (!linkSource || linkSource === target) {
       setLinkSource(target)
       return
     }
-    patchBoard((b) => ({
-      ...b,
-      edges: [...b.edges, { id: id(), source: linkSource, target, label: '', locked: false }],
-    }))
+    patchBoard((b) => {
+      const sourceRole = b.nodes.find(n => n.id === linkSource)?.roadmapRole
+      const structure = isRoadmap && (sourceRole === 'topic' || sourceRole === 'branch')
+      return {
+        ...b,
+        edges: [...b.edges, { id: id(), source: linkSource, target,
+          label: structure ? tr(sourceRole === 'topic' ? '研究分支' : '代表论文') : '', locked: false,
+          ...(structure ? { roadmapStructure: true, analysis: null } : {}),
+        }],
+      }
+    })
     setLinkSource(null)
   }
   const zoomBy = (factor: number) =>
     patchBoard((b) => {
-      const zoom = clampZoom(b.viewport.zoom * factor),
+      const zoom = clampZoom(b.viewport.zoom * factor, isRoadmap ? 0.05 : 0.15),
         x = canvasSize.width / 2,
         y = canvasSize.height / 2
       return {
@@ -483,14 +666,16 @@ export default function DomainPage({
         },
       }
     }, false)
-  const fit = () => {
-    if (!board?.nodes.length) return
-    const minX = Math.min(...board.nodes.map((n) => n.x)),
-      minY = Math.min(...board.nodes.map((n) => n.y))
-    const maxX = Math.max(...board.nodes.map((n) => n.x + (sizes[n.id]?.width ?? n.width))),
-      maxY = Math.max(...board.nodes.map((n) => n.y + (sizes[n.id]?.height ?? n.height)))
+  const boardNodes = board?.nodes
+  const fit = useCallback(() => {
+    if (!boardNodes?.length) return
+    const minX = Math.min(...boardNodes.map((n) => n.x)),
+      minY = Math.min(...boardNodes.map((n) => n.y))
+    const maxX = Math.max(...boardNodes.map((n) => n.x + (sizes[n.id]?.width ?? n.width))),
+      maxY = Math.max(...boardNodes.map((n) => n.y + (sizes[n.id]?.height ?? n.height)))
     const zoom = clampZoom(
       Math.min((canvasSize.width - 120) / (maxX - minX), (canvasSize.height - 120) / (maxY - minY), 1.2),
+      isRoadmap ? 0.05 : 0.15,
     )
     patchBoard(
       (b) => ({
@@ -503,7 +688,13 @@ export default function DomainPage({
       }),
       false,
     )
-  }
+  }, [boardNodes, canvasSize, isRoadmap, patchBoard, sizes])
+  useEffect(() => {
+    if (!fitAfterLayout.current || !board?.nodes.length) return
+    fitAfterLayout.current = false
+    const frame = requestAnimationFrame(fit)
+    return () => cancelAnimationFrame(frame)
+  }, [board?.nodes, fit])
   const focusNode = (node: CanvasNode) => {
     patchBoard(
       (b) => ({
@@ -521,6 +712,7 @@ export default function DomainPage({
   }
   const addElement = (kind: 'text' | 'group') => {
     if (!board) return
+    expandInspector()
     const p = worldPoint({ x: canvasSize.width / 2 - 140, y: canvasSize.height / 2 - 80 }, board)
     const node = newNode(kind, p.x, p.y)
     node.text = tr(kind === 'text' ? '在右侧编辑文字' : '新分组')
@@ -635,6 +827,7 @@ export default function DomainPage({
     setSelectedEdge(null)
   }
   const one = board?.nodes.find((n) => selected.size === 1 && selected.has(n.id))
+  const selectedPaper = one?.paperId ? paperMap.get(one.paperId) : undefined
   const edge = board?.edges.find((e) => e.id === selectedEdge)
   const popNode = board?.nodes.find((n) => n.id === popover)
   const popPaper = popNode?.paperId ? paperMap.get(popNode.paperId) : undefined
@@ -659,6 +852,59 @@ export default function DomainPage({
       (!category || p.category === category) &&
       `${p.title} ${p.year}`.toLowerCase().includes(query.toLowerCase()),
   )
+  const selectableImports = visibleImports.filter((p) => p.eligible)
+  const selectedVisibleCount = selectableImports.filter((p) => importSelected.has(p.id)).length
+  const allVisibleSelected = selectableImports.length > 0 && selectedVisibleCount === selectableImports.length
+  const boardPapers = [...new Set(board?.nodes.filter(n => n.kind === 'paper').map(n => n.paperId) ?? [])]
+    .flatMap(paperId => { const paper = paperMap.get(paperId ?? ''); return paper ? [paper] : [] })
+  const inLibraryCount = boardPapers.filter(p => p.roadmap?.libraryStatus === 'in_library').length
+  const noArxivCount = boardPapers.filter(p => !p.roadmap?.arxivId).length
+  const downloadableCount = new Set(boardPapers.filter(p => p.roadmap?.arxivId && p.roadmap.libraryStatus !== 'in_library').map(p => p.roadmap!.arxivId)).size
+  const importResult = imports.job?.result || imports.job?.progress
+  const startResearch = (relationPolicy: ResearchRelationPolicy = 'refresh') => {
+    if (!board || readOnly) return
+    setResearchDialog(false); setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
+    void agent.act(() => workspace.withSaved(snapshot => api.start(board.id, snapshot.revision,
+      Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])), relationPolicy)))
+  }
+  const beginResearch = () => {
+    if (!board || readOnly) return
+    if (isRoadmap && boardPapers.length) {
+      setResearchDialog(true)
+      return
+    }
+    startResearch()
+  }
+  const arrangeCanvas = (orientation: RoadmapLayoutOrientation) => {
+    if (!isRoadmap || !board || readOnly) return
+    setLayoutMenu(false)
+    setActionError('')
+    setLayoutBusy(true)
+    void workspace.withSaved(snapshot => arrangeRoadmap(
+      board.id,
+      snapshot.revision,
+      Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])),
+      orientation,
+    )).then(result => {
+      fitAfterLayout.current = true
+      workspace.install(result)
+    }).catch(error => {
+      setActionError(localApiErrorMessage(error, '布局整理失败，请重试。'))
+    }).finally(() => setLayoutBusy(false))
+  }
+  const openReview = (paperId: string) => {
+    const libraryId = isRoadmap ? paperMap.get(paperId)?.roadmap?.libraryPaperId : paperId
+    if (!libraryId) return
+    void workspace.flush()
+    onOpenReview(libraryId)
+  }
+  const collectPaper = (paperId: string) => {
+    if (!board || readOnly || imports.busy || !imports.ready) return
+    setActionError('')
+    void workspace.withSaved(snapshot => imports.start(board.id, snapshot.revision, [paperId])).catch(error => {
+      setActionError(localApiErrorMessage(error, '论文下载启动失败，请重试。'))
+    })
+  }
   const statuses = {
     loading: '加载中…',
     saved: '已保存到本机',
@@ -669,12 +915,12 @@ export default function DomainPage({
   }
 
   return (
-    <section className="domain-page" aria-label={tr('索骥')}>
+    <section className={`domain-page${isRoadmap ? ' roadmap-page' : ''}`} data-domain-mode={mode} aria-label={tr(pageTitle)}>
       <header className="domain-header">
         <div>
-          <span className="domain-eyebrow">DOMAIN</span>
-          <h1>{tr('索骥')}</h1>
-          <p>{tr('连接论文，梳理你的研究脉络。')}</p>
+          <span className="domain-eyebrow">{isRoadmap ? 'ROADMAP' : 'DOMAIN'}</span>
+          <h1>{tr(pageTitle)}</h1>
+          <p>{tr(isRoadmap ? '调研经典论文，发现技术方向的发展路线。' : '连接论文，梳理你的研究脉络。')}</p>
         </div>
         <div className={`domain-save ${workspace.status}`} role="status">
           {workspace.status === 'saving' ? (
@@ -682,7 +928,7 @@ export default function DomainPage({
           ) : workspace.status === 'saved' ? (
             <Check size={14} />
           ) : null}
-          {tr(statuses[workspace.status])}
+          <span>{tr(statuses[workspace.status])}{workspace.saveError && <> · {tr(workspace.saveError)}</>}</span>
           {workspace.status === 'error' && <button onClick={workspace.retry}>{tr('重试')}</button>}
           {workspace.status === 'conflict' && (
             <button
@@ -694,7 +940,20 @@ export default function DomainPage({
             </button>
           )}
         </div>
-        <button
+        {isRoadmap ? <button
+          className="domain-primary"
+          disabled={!board || readOnly || imports.busy || !imports.ready || paperError || papersLoading || !downloadableCount}
+          onClick={() => {
+            if (!board) return
+            setActionError('')
+            void workspace.withSaved(snapshot => imports.start(board.id, snapshot.revision)).catch(error => {
+              setActionError(localApiErrorMessage(error, '论文下载启动失败，请重试。'))
+            })
+          }}
+        >
+          {imports.busy ? <Loader2 size={16} className="spin" /> : <Download size={16} />}
+          {tr(imports.busy ? '正在下载入库' : '一键下载 arXiv')}
+        </button> : <button
           className="domain-primary"
           disabled={!board || readOnly}
           onClick={() => {
@@ -707,17 +966,26 @@ export default function DomainPage({
         >
           <Download size={16} />
           {tr('导入论文')}
-        </button>
+        </button>}
       </header>
-      <div className="domain-tabs" role="tablist" aria-label={tr('领域')}>
-        {state?.boards.map((b) => (
-          <button key={b.id} role="tab" aria-selected={b.id === board?.id} onClick={() => selectBoard(b.id)}>
-            {b.name}
-            <span>{b.nodes.filter((n) => n.kind === 'paper').length}</span>
-          </button>
-        ))}
+      <div className="domain-selector">
+        <label className="domain-selector-field">
+          <span>{tr('领域')}</span>
+          <select
+            value={board?.id ?? ''}
+            disabled={!state?.boards.length}
+            onChange={(event) => selectBoard(event.target.value)}
+          >
+            {!state?.boards.length && <option value="">{state ? '—' : tr('加载中…')}</option>}
+            {state?.boards.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
-          className="domain-new-tab"
+          className="domain-new-board"
           aria-label={tr('新建领域')}
           disabled={!state || agent.busy || !agent.ready}
           onClick={() => {
@@ -727,18 +995,70 @@ export default function DomainPage({
         >
           <Plus size={15} />
         </button>
+        {isRoadmap && board && <RoadmapKeywordField
+          key={board.id}
+          keywords={board.researchKeywords ?? []}
+          disabled={readOnly}
+          onChange={researchKeywords => patchBoard(current => ({ ...current, researchKeywords }))}
+        />}
+        {board && <span className="domain-imported-count" data-testid={`${mode}-imported-count`} aria-live="polite">
+          {isRoadmap ? tr('共 {0} 篇 · 已入库 {1} 篇 · 非 arXiv {2} 篇', { 0: boardPapers.length, 1: inLibraryCount, 2: noArxivCount })
+            : tr('已导入：{0} 张卡片', { 0: board.nodes.filter((n) => n.kind === 'paper').length })}
+        </span>}
+        {isRoadmap && <div className="roadmap-view-tabs" role="tablist" aria-label={tr('识途')}
+          onKeyDown={event => {
+            const next = event.key === 'Home' ? 'canvas' : event.key === 'End' ? 'report'
+              : event.key === 'ArrowLeft' || event.key === 'ArrowRight' ? (showReport ? 'canvas' : 'report') : null
+            if (!next) return
+            event.preventDefault()
+            setRoadmapView(next)
+            event.currentTarget.querySelector<HTMLButtonElement>(`#roadmap-${next}-tab`)?.focus()
+          }}>
+          <button id="roadmap-canvas-tab" role="tab" aria-selected={!showReport}
+            aria-controls="roadmap-canvas-panel" tabIndex={showReport ? -1 : 0}
+            onClick={() => setRoadmapView('canvas')}>
+            <Workflow size={15} />{tr('路线图')}
+          </button>
+          <button id="roadmap-report-tab" role="tab" aria-selected={showReport}
+            aria-controls="roadmap-report-panel" tabIndex={showReport ? 0 : -1}
+            onClick={() => setRoadmapView('report')}>
+            <FileText size={15} />{tr('研报')}
+          </button>
+        </div>}
       </div>
       {paperError && (
         <div className="domain-error" role="alert">
-          {tr('论文回顾加载失败，暂时无法导入。')}
+          {tr(isRoadmap ? '调研论文加载失败，请重试。' : '论文回顾加载失败，暂时无法导入。')}
           <button onClick={() => void refreshPapers()}>{tr('重试')}</button>
         </div>
       )}
-      {agent.error && <div className="domain-error" role="alert">{agent.error}<button onClick={() => void agent.refresh()}>{tr('重试')}</button></div>}
-      <div className="domain-body">
+      {agent.error && <div className="domain-error" role="alert">{tr(agent.error)}<button onClick={() => {
+        if (workspace.status === 'error') workspace.retry()
+        agent.clearError()
+        void agent.refresh()
+      }}>{tr('重试')}</button></div>}
+      {isRoadmap && <div className="roadmap-research-notice">
+        <span>{tr('先筛选经典论文，再评估关键论文全文；按证据等级梳理关系，报告中标明全文缺口。')}</span>
+        <span>{tr('下载仅保存论文到库，不自动生成回顾。')}</span>
+      </div>}
+      {isRoadmap && (imports.error || actionError) && <div className="domain-error" role="alert">
+        {tr(actionError || imports.error)}<button onClick={() => { setActionError(''); imports.refresh() }}>{tr('重试')}</button>
+      </div>}
+      {isRoadmap && imports.job && <div className="roadmap-import-progress" role="status">
+        <span>{imports.busy ? (imports.job.progress.label || tr('正在下载入库'))
+          : imports.job.status === 'completed' ? tr('本次下载：入库 {0} 篇 · 已有 {1} 篇 · 失败 {2} 篇', {
+            0: importResult?.imported ?? 0, 1: importResult?.skipped ?? 0, 2: importResult?.failed ?? 0,
+          }) : (imports.job.error || tr('下载任务已停止，可重试未入库论文。'))}</span>
+        {!!importResult?.failed && <span>{tr('再次点击一键下载，将跳过已入库论文并重试失败项。')}</span>}
+      </div>}
+      {isRoadmap && board && <RoadmapReport key={board.id} boardId={board.id} boardName={board.name}
+        active={active && showReport} visible={showReport} runKey={`${run?.id ?? ''}:${run?.status ?? ''}`} />}
+      <div ref={domainBodyRef} className={`domain-body${inspectorResizing ? ' is-resizing' : ''}`}
+        hidden={showReport} id={isRoadmap ? 'roadmap-canvas-panel' : undefined}
+        role={isRoadmap ? 'tabpanel' : undefined} aria-labelledby={isRoadmap ? 'roadmap-canvas-tab' : undefined}>
         <div
           ref={canvas}
-          data-testid="domain-canvas"
+          data-testid={`${mode}-canvas`}
           className={`domain-canvas ${tool === 'hand' ? 'hand-tool' : ''}`}
           onPointerDown={beginCanvas}
           onPointerMove={movePointer}
@@ -747,7 +1067,7 @@ export default function DomainPage({
           onContextMenu={(e) => e.preventDefault()}
           style={{
             backgroundPosition: `${board?.viewport.x ?? 0}px ${board?.viewport.y ?? 0}px`,
-            backgroundSize: `${24 * (board?.viewport.zoom ?? 1)}px ${24 * (board?.viewport.zoom ?? 1)}px`,
+            backgroundSize: `${Math.max(isRoadmap ? 12 : 0, 24 * (board?.viewport.zoom ?? 1))}px ${Math.max(isRoadmap ? 12 : 0, 24 * (board?.viewport.zoom ?? 1))}px`,
           }}
         >
           {board && (
@@ -755,7 +1075,7 @@ export default function DomainPage({
               <svg className="domain-edges">
                 <defs>
                   <marker
-                    id="domain-arrow"
+                    id={`${mode}-arrow`}
                     viewBox="0 0 10 10"
                     refX="9"
                     refY="5"
@@ -773,27 +1093,33 @@ export default function DomainPage({
                     const source = board.nodes.find((n) => n.id === e.source),
                       target = board.nodes.find((n) => n.id === e.target)
                     if (!source || !target) return null
-                    const forward = target.x >= source.x
-                    const sx = source.x + (forward ? source.width : 0),
-                      tx = target.x + (forward ? 0 : target.width)
-                    const sy = source.y + Math.min(sizes[source.id]?.height ?? source.height, 160) / 2,
-                      ty = target.y + Math.min(sizes[target.id]?.height ?? target.height, 160) / 2
-                    const bend = Math.max(60, Math.abs(tx - sx) / 2) * (forward ? 1 : -1)
-                    const d = `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`
+                    const geometry = isRoadmap ? roadmapEdgeGeometry(source, target,
+                      sizes[source.id]?.height ?? source.height, sizes[target.id]?.height ?? target.height) : (() => {
+                      const forward = target.x >= source.x
+                      const sx = source.x + (forward ? source.width : 0), tx = target.x + (forward ? 0 : target.width)
+                      const sy = source.y + Math.min(sizes[source.id]?.height ?? source.height, 160) / 2,
+                        ty = target.y + Math.min(sizes[target.id]?.height ?? target.height, 160) / 2
+                      const bend = Math.max(60, Math.abs(tx - sx) / 2) * (forward ? 1 : -1)
+                      return { sx, sy, tx, ty, vertical: false, d: `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}` }
+                    })()
+                    const { sx, sy, tx, ty, d, vertical } = geometry
                     return (
                       <g
                         key={e.id}
-                        className={selectedEdge === e.id ? 'selected-edge' : ''}
+                        className={`${selectedEdge === e.id ? 'selected-edge' : ''}${isRoadmap && e.roadmapStructure ? ' roadmap-structure-edge' : ''}`}
                         data-edge-id={e.id}
+                        data-roadmap-structure={isRoadmap && !!e.roadmapStructure}
+                        data-orientation={vertical ? 'vertical' : 'horizontal'}
                         onPointerDown={(event) => {
                           event.stopPropagation()
+                          expandInspector()
                           setSelectedEdge(e.id)
                           setSelected(new Set())
                           setPopover(null)
                         }}
                       >
                         <path className="domain-edge-hit" d={d} />
-                        <path className="domain-edge-line" d={d} markerEnd="url(#domain-arrow)" />
+                        <path className="domain-edge-line" d={d} markerEnd={`url(#${mode}-arrow)`} />
                         {e.label && (
                           <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 14 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
@@ -814,6 +1140,7 @@ export default function DomainPage({
                               onClick={(event) => {
                                 event.stopPropagation()
                                 if (readOnly) return
+                                expandInspector()
                                 setSelectedEdge(e.id)
                                 setSelected(new Set())
                                 setPopover(null)
@@ -848,48 +1175,92 @@ export default function DomainPage({
                       readOnly={readOnly}
                       onStart={beginNode}
                       onSize={onSize}
+                      roadmapRole={isRoadmap ? n.roadmapRole : undefined}
                     >
                       {n.kind === 'group' ? (
                         <div className="domain-group-heading">
                           <Frame size={14} />
                           {n.text}
                         </div>
+                      ) : n.kind === 'text' && isRoadmap && (n.roadmapRole === 'topic' || n.roadmapRole === 'branch') ? (
+                        <>
+                          <span className="roadmap-node-role">{tr(n.roadmapRole === 'topic' ? '研究主题' : '研究分支')}</span>
+                          <h3 className="roadmap-node-title">{n.text}</h3>
+                          <div className="domain-card-footer">
+                            <button aria-label={tr('连接节点')} disabled={readOnly || !canConnect(n.id)}
+                              className={linkSource === n.id ? 'connecting' : ''} onClick={() => connect(n.id)}>
+                              <Link2 size={14} />{tr(linkSource && linkSource !== n.id ? '连接到这里' : '连线')}
+                            </button>
+                          </div>
+                        </>
                       ) : n.kind === 'text' ? (
                         <div className="domain-text-content">{n.text}</div>
                       ) : (
                         <>
                           <div className="domain-paper-head">
-                            <span>{paperMap.get(n.paperId!)?.year || tr('年份未知')}</span>
-                            <button
-                              className="domain-review-plus"
-                              aria-label={tr('查看论文回顾：{0}', {
-                                0: paperMap.get(n.paperId!)?.title ?? '',
-                              })}
-                              aria-expanded={popover === n.id}
-                              onClick={() => {
-                                setPopover(popover === n.id ? null : n.id)
-                                setSelected(new Set([n.id]))
-                                setSelectedEdge(null)
-                                setTab('core_contribution')
-                              }}
-                            >
-                              <Plus size={17} />
-                            </button>
+                            <span className="roadmap-paper-year">{paperMap.get(n.paperId!)?.year || tr('年份未知')}
+                              {isRoadmap && n.roadmapRole === 'milestone' && <span className="roadmap-milestone" title={tr('关键里程碑')}>
+                                <Star size={12} aria-label={tr('关键里程碑')} />{tr('里程碑')}
+                              </span>}
+                            </span>
+                            <div className="domain-paper-actions">
+                              <button
+                                className="domain-review-jump"
+                                title={tr('打开完整回顾')}
+                                aria-label={tr('打开完整回顾：{0}', { 0: paperMap.get(n.paperId!)?.title ?? '' })}
+                                disabled={!n.paperId || !paperMap.has(n.paperId) || (isRoadmap && !paperMap.get(n.paperId)?.roadmap?.libraryPaperId)}
+                                onKeyDown={(event) => {
+                                  if (event.code === 'Space' || event.key === 'Enter') event.stopPropagation()
+                                }}
+                                onClick={() => {
+                                  expandInspector()
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setLinkSource(null)
+                                  setPopover(null)
+                                  openReview(n.paperId!)
+                                }}
+                              >
+                                <ExternalLink size={14} />
+                              </button>
+                              <button
+                                className="domain-review-plus"
+                                aria-label={tr(isRoadmap ? '查看调研信息：{0}' : '查看论文回顾：{0}', {
+                                  0: paperMap.get(n.paperId!)?.title ?? '',
+                                })}
+                                aria-expanded={popover === n.id}
+                                onClick={() => {
+                                  expandInspector()
+                                  setPopover(popover === n.id ? null : n.id)
+                                  setSelected(new Set([n.id]))
+                                  setSelectedEdge(null)
+                                  setTab('core_contribution')
+                                }}
+                              >
+                                <Plus size={17} />
+                              </button>
+                            </div>
                           </div>
                           <h3>{paperMap.get(n.paperId!)?.title ?? tr('论文不可用')}</h3>
-                          {paperMap.get(n.paperId!)?.incomplete && (
+                          {isRoadmap && paperMap.has(n.paperId!) && <RoadmapPaperStatus paper={paperMap.get(n.paperId!)!} />}
+                          {!isRoadmap && paperMap.get(n.paperId!)?.incomplete && (
                             <span className="domain-incomplete">{tr('回顾内容不完整')}</span>
                           )}
                           <div className="domain-card-footer">
                             <button
                               aria-label={tr('连接论文')}
-                              disabled={readOnly}
+                              disabled={readOnly || !canConnect(n.id)}
                               className={linkSource === n.id ? 'connecting' : ''}
                               onClick={() => connect(n.id)}
                             >
                               <Link2 size={14} />
                               {tr(linkSource && linkSource !== n.id ? '连接到这里' : '连线')}
                             </button>
+                            {isRoadmap && sourceUrl(paperMap.get(n.paperId!)?.roadmap?.sourceUrl) && <a
+                              href={sourceUrl(paperMap.get(n.paperId!)?.roadmap?.sourceUrl)!}
+                              target="_blank" rel="noopener noreferrer"
+                              aria-label={tr('查看论文来源：{0}', { 0: paperMap.get(n.paperId!)?.title ?? '' })}
+                            ><ExternalLink size={12} />{tr('来源')}</a>}
                           </div>
                           {n.text && <div className="domain-attached-note">{n.text}</div>}
                         </>
@@ -900,11 +1271,13 @@ export default function DomainPage({
               {!board.nodes.length && (
                 <div className="domain-empty">
                   <Frame size={36} />
-                  <h2>{tr('从几篇论文开始，连接一条研究脉络。')}</h2>
-                  <p>{tr('导入已有论文，拖动卡片，自由连线并记录你的理解。')}</p>
+                  <h2>{tr(isRoadmap ? '从经典论文出发，看清一个方向的来路。' : '从几篇论文开始，连接一条研究脉络。')}</h2>
+                  <p>{tr(isRoadmap ? '选择技术方向，筛选约 20–30 篇经典论文，评估关键论文全文并生成路线图与调研报告。' : '导入已有论文，拖动卡片，自由连线并记录你的理解。')}</p>
                   <button
                     className="domain-primary"
+                    disabled={readOnly}
                     onClick={() => {
+                      if (isRoadmap) { beginResearch(); return }
                       setImportOpen(true)
                       setImportSelected(new Set())
                       setQuery('')
@@ -912,7 +1285,7 @@ export default function DomainPage({
                       void refreshPapers()
                     }}
                   >
-                    {tr('导入论文')}
+                    {tr(isRoadmap ? '调研这个方向' : '导入论文')}
                   </button>
                 </div>
               )}
@@ -934,26 +1307,50 @@ export default function DomainPage({
           <div className="domain-agent-bar" onPointerDown={e => e.stopPropagation()}>
             {run?.status === 'pending' ? <>
               <Loader2 size={16} className="spin" />
-              <span>{run.progress.label || tr('代连任务已排队')} · {tr('当前类别只读')}</span>
-              <button disabled={agent.busy} onClick={() => void agent.act(() => discardDomainRun(run.id))}>{tr('取消生成')}</button>
+              <span>{run.progress.label || tr(isRoadmap ? '调研任务已排队' : '代连任务已排队')} · {tr('当前类别只读')}</span>
+              <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('取消生成')}</button>
             </> : run?.status === 'preview' ? <>
-              <span>{tr('代连方案预览')} · {tr('当前类别只读')}</span>
+              <span>{tr(isRoadmap ? '路线图预览' : '代连方案预览')} · {tr('当前类别只读')}</span>
               <button className="domain-primary" disabled={agent.busy} onClick={() => void agent.act(async () => {
                 await workspace.withSaved(async () => {
-                  const result = await applyDomainRun(run.id)
+                  const result = await api.apply(run.id)
                   workspace.install(result)
                 })
                 return { ...run, status: 'applied', proposal: null }
               })}>{tr('应用方案')}</button>
-              <button disabled={agent.busy} onClick={() => void agent.act(() => discardDomainRun(run.id))}>{tr('放弃方案')}</button>
-            </> : <button className="domain-primary"
-              disabled={!board || readOnly || new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2}
-              onClick={() => {
-                if (!board) return
-                setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
-                void agent.act(() => workspace.withSaved(snapshot => startDomainRun(board.id, snapshot.revision,
-                  Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])))))
-              }}><Sparkles size={16} />{tr('agent代连')}</button>}
+              <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('放弃方案')}</button>
+            </> : <>
+              {isRoadmap && board?.nodes.some(node => node.roadmapRole === 'topic') && <div className="roadmap-layout-picker">
+                <button
+                  aria-haspopup="menu"
+                  aria-expanded={layoutMenu}
+                  disabled={readOnly}
+                  onClick={() => setLayoutMenu(open => !open)}
+                >
+                  <Network size={16} />{tr(layoutBusy ? '正在整理布局…' : '整理布局')}
+                  {!layoutBusy && <ChevronDown size={14} />}
+                </button>
+                {layoutMenu && <div className="roadmap-layout-menu" role="menu" aria-label={tr('整理布局')}>
+                  <button role="menuitem" onClick={() => arrangeCanvas('horizontal')}>
+                    <ArrowDown size={18} />
+                    <span className="roadmap-layout-copy">
+                      <strong>{tr('横向排列')}</strong>
+                      <small>{tr('研究分支横向展开，论文向下演进。')}</small>
+                    </span>
+                  </button>
+                  <button role="menuitem" onClick={() => arrangeCanvas('vertical')}>
+                    <ArrowRight size={18} />
+                    <span className="roadmap-layout-copy">
+                      <strong>{tr('竖直排列')}</strong>
+                      <small>{tr('研究分支纵向展开，论文向右演进。')}</small>
+                    </span>
+                  </button>
+                </div>}
+              </div>}
+              <button className="domain-primary"
+                disabled={!board || readOnly || (!isRoadmap && new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2)}
+                onClick={beginResearch}><Sparkles size={16} />{tr(isRoadmap ? (boardPapers.length ? '重新调研' : '生成路线图') : 'agent代连')}</button>
+            </>}
           </div>
           {rubber && (
             <div
@@ -1019,9 +1416,9 @@ export default function DomainPage({
           {popNode && popVisible && (
             <div
               className="domain-popover"
-              data-testid="domain-review-popover"
+              data-testid={`${mode}-review-popover`}
               role="dialog"
-              aria-label={tr('论文回顾')}
+              aria-label={tr(isRoadmap ? '调研信息' : '论文回顾')}
               style={{
                 left: Math.max(8, Math.min(popLeft, canvasSize.width - 392)),
                 top: Math.max(8, Math.min(popY, canvasSize.height - 340)),
@@ -1029,11 +1426,13 @@ export default function DomainPage({
               onPointerDown={(e) => e.stopPropagation()}
             >
               <div className="domain-popover-heading">
-                <span>{tr('论文回顾')}</span>
+                <span>{tr(isRoadmap ? '调研信息' : '论文回顾')}</span>
                 <button aria-label={tr('关闭')} onClick={() => setPopover(null)}>
                   <X size={16} />
                 </button>
               </div>
+              {isRoadmap ? popPaper && <RoadmapPaperDetails paper={popPaper} onOpenReview={onOpenReview}
+                onCollect={collectPaper} collectDisabled={readOnly || imports.busy || !imports.ready} /> : <>
               <div role="tablist" className="domain-review-tabs">
                 {FIELDS.map(([key, label]) => (
                   <button key={key} role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
@@ -1049,26 +1448,62 @@ export default function DomainPage({
                 className="domain-full-review"
                 disabled={!popPaper}
                 onClick={() => {
-                  void workspace.flush()
-                  onOpenReview(popNode.paperId!)
+                  openReview(popNode.paperId!)
                 }}
               >
                 {tr('打开完整回顾')} ↗
               </button>
+              </>}
             </div>
           )}
         </div>
-        <aside className="domain-inspector">
+        <button
+          className="domain-inspector-dock-toggle"
+          style={{ right: inspectorCollapsed ? 10 : Math.max(0, inspectorWidth - 12) }}
+          aria-label={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          title={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          aria-expanded={!inspectorCollapsed}
+          aria-controls={`${mode}-inspector`}
+          onClick={toggleInspector}
+        >
+          {inspectorCollapsed ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}
+        </button>
+        <div
+          className="domain-pane-divider"
+          hidden={inspectorCollapsed}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={tr('调整研究工作区宽度')}
+          aria-valuemin={inspectorMin}
+          aria-valuemax={inspectorMax}
+          aria-valuenow={Math.round(inspectorWidth)}
+          tabIndex={0}
+          title={tr('拖动调整宽度，双击恢复默认')}
+          onPointerDown={beginInspectorResize}
+          onPointerMove={moveInspectorResize}
+          onPointerUp={finishInspectorResize}
+          onPointerCancel={endInspectorResize}
+          onLostPointerCapture={endInspectorResize}
+          onKeyDown={resizeInspectorWithKey}
+          onDoubleClick={resetInspectorWidth}
+        />
+        <aside id={`${mode}-inspector`} className="domain-inspector" hidden={inspectorCollapsed} style={{ width: inspectorWidth }}>
           {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
           {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
             <h2>{tr('方案概览')}</h2>
             <p>{tr('新增 {0} 条 · 替换 {1} 条 · 保护 {2} 条', { 0: run.proposal.added, 1: run.proposal.removed, 2: run.proposal.protected })}</p>
-            <p>{tr('选中连线查看理由与证据；应用后可整体撤销。')}</p>
+            <p>{tr(isRoadmap ? '选中连线查看理由与证据；应用后可撤销画布调整。' : '选中连线查看理由与证据；应用后可整体撤销。')}</p>
             {run.proposal.warnings.length > 0 && <details><summary>{tr('材料提示')}</summary>{run.proposal.warnings.map((w, i) => <p key={i}>{paperMap.get(w.paperId)?.title}：{w.message}</p>)}</details>}
             {run.proposal.unconnected.length > 0 && <details><summary>{tr('未连接论文')}</summary>{run.proposal.unconnected.map(p => <p key={p.paperId}>{p.title}</p>)}</details>}
             {run.proposal.rejected > 0 && <p>{tr('已过滤 {0} 条无有效证据的建议', { 0: run.proposal.rejected })}</p>}
           </section>}
-          {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={onOpenReview} />}
+          {isRoadmap && selectedPaper && <RoadmapPaperDetails paper={selectedPaper} onOpenReview={onOpenReview}
+            onCollect={collectPaper} collectDisabled={readOnly || imports.busy || !imports.ready} />}
+          {edge?.analysis && <DomainEdgeEvidence key={edge.id} analysis={edge.analysis} paperMap={paperMap} onOpenReview={openReview} roadmap={isRoadmap} />}
+          {isRoadmap && edge?.roadmapStructure && <section className="domain-edge-evidence roadmap-structure-explanation">
+            <h2>{tr('结构连线')}</h2>
+            <p>{tr('用于组织主题、分支与代表论文，不表示论文之间的证据关系。')}</p>
+          </section>}
           <label className="domain-search">
             <Search size={15} />
             <input
@@ -1099,7 +1534,9 @@ export default function DomainPage({
           <fieldset disabled={readOnly} className="domain-edit-fields">
           <h2>
             {tr(
-              one?.kind === 'group'
+              isRoadmap && one?.roadmapRole === 'topic' ? '编辑主题'
+                : isRoadmap && one?.roadmapRole === 'branch' ? '编辑分支'
+                : one?.kind === 'group'
                 ? '编辑分组'
                 : one?.kind === 'text'
                   ? '编辑文字'
@@ -1115,7 +1552,9 @@ export default function DomainPage({
               <textarea
                 maxLength={50000}
                 aria-label={tr(
-                  one.kind === 'group' ? '分组名称' : one.kind === 'text' ? '独立文本' : '卡片备注',
+                  isRoadmap && one.roadmapRole === 'topic' ? '主题名称'
+                    : isRoadmap && one.roadmapRole === 'branch' ? '分支名称'
+                    : one.kind === 'group' ? '分组名称' : one.kind === 'text' ? '独立文本' : '卡片备注',
                 )}
                 disabled={isLocked(one)}
                 value={one.text}
@@ -1148,7 +1587,8 @@ export default function DomainPage({
                 }
               />
               <div className="domain-presets">
-                {['改进', '基于', '对比', '待验证'].map((label) => (
+                {(isRoadmap ? edge.roadmapStructure ? ['研究分支', '代表论文'] : ['演进', '分化', '突破推动', '融合', '待验证']
+                  : ['改进', '基于', '对比', '待验证']).map((label) => (
                   <button
                     key={label}
                     disabled={edge.locked}
@@ -1300,6 +1740,31 @@ export default function DomainPage({
                 ))}
               </select>
             </div>
+            <div className="domain-import-selection">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  ref={(input) => {
+                    if (input) input.indeterminate = selectedVisibleCount > 0 && !allVisibleSelected
+                  }}
+                  disabled={papersLoading || paperError || readOnly || selectableImports.length === 0}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setImportSelected((selected) => {
+                      const next = new Set(selected)
+                      selectableImports.forEach((p) => {
+                        if (checked) next.add(p.id)
+                        else next.delete(p.id)
+                      })
+                      return next
+                    })
+                  }}
+                />
+                {tr('全选')}
+              </label>
+              <span>{tr('仅选择当前筛选结果中可导入的论文')}</span>
+            </div>
             <div className="domain-import-list">
               {papersLoading ? (
                 <p>{tr('加载中…')}</p>
@@ -1383,6 +1848,47 @@ export default function DomainPage({
               </button>
             </footer>
           </form>
+        </div>
+      )}
+      {researchDialog && (
+        <div className="domain-modal-backdrop" onClick={() => setResearchDialog(false)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label={tr('重新调研')}
+            className="domain-modal roadmap-research-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <h2>{tr('是否需要清空历史关系？')}</h2>
+                <p>{tr('论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。')}</p>
+              </div>
+              <button aria-label={tr('关闭')} onClick={() => setResearchDialog(false)}>
+                <X size={18} />
+              </button>
+            </header>
+            <div className="roadmap-research-choices">
+              <button autoFocus onClick={() => startResearch('preserve')}>
+                <span className="roadmap-research-choice-icon keep" aria-hidden="true"><History size={17} /></span>
+                <span className="roadmap-research-choice-copy">
+                  <strong>{tr('保留历史关系')}</strong>
+                  <span>{tr('保留当前论文连线，再补充本轮调研发现的新关系。')}</span>
+                </span>
+              </button>
+              <button className="domain-danger" onClick={() => startResearch('clear')}>
+                <span className="roadmap-research-choice-icon clear" aria-hidden="true"><RefreshCw size={17} /></span>
+                <span className="roadmap-research-choice-copy">
+                  <strong>{tr('清空并重新生成')}</strong>
+                  <span>{tr('清除未锁定的旧论文连线，按本轮调研结果重新生成。')}</span>
+                </span>
+              </button>
+            </div>
+            <footer>
+              <span>{tr('这项选择只影响论文之间的历史连线。')}</span>
+              <button onClick={() => setResearchDialog(false)}>{tr('取消')}</button>
+            </footer>
+          </section>
         </div>
       )}
     </section>

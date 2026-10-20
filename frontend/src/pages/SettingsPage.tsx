@@ -223,7 +223,7 @@ export default function SettingsPage() {
   // per-task bindings (the backend resolves per task), but one picker drives
   // the main task group together.
   const mainTaskIds = useMemo(
-    () => taskSpecs.filter(task => task.task_type !== 'embedding' && !['recommend_rank', 'domain_connect'].includes(task.id)).map(task => task.id),
+    () => taskSpecs.filter(task => task.task_type !== 'embedding' && !['recommend_rank', 'domain_connect', 'roadmap_research'].includes(task.id)).map(task => task.id),
     [taskSpecs],
   )
   const embeddingTask = useMemo(
@@ -279,13 +279,15 @@ export default function SettingsPage() {
         id: '__main__',
         label: tr("主模型", {}, locale),
         category: tr("通用"),
-        description: tr("论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量、论文精选与索骥代连单独配置。"),
+        description: tr("论文抽取 / 追问、Wiki 编译、Ask 问答与生成、概念精选与健康检查共用此模型。需支持视觉（论文抽取要读首页图）。图谱向量、论文精选、索骥代连与识途调研单独配置。"),
       })
     }
     if (embeddingTask) list.push(embeddingTask)
     if (recommendationTask) list.push(recommendationTask)
     const domainTask = taskSpecs.find(task => task.id === 'domain_connect')
     if (domainTask) list.push(domainTask)
+    const roadmapTask = taskSpecs.find(task => task.id === 'roadmap_research')
+    if (roadmapTask) list.push(roadmapTask)
     return list
   }, [taskSpecs, mainRepTaskId, embeddingTask, recommendationTask, locale])
 
@@ -500,7 +502,7 @@ export default function SettingsPage() {
             <div className="mb-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">{tr("任务配置")}</p>
               <p className="mt-1 text-base font-semibold text-slate-100">{tr("模型选择")}</p>
-              <p className="text-xs text-slate-500 mt-1">{tr("主模型、图谱向量、论文精选和索骥代连分别配置；更换主模型不会改变其他任务的调用方式。")}</p>
+              <p className="text-xs text-slate-500 mt-1">{tr("主模型、图谱向量、论文精选、索骥代连和识途调研分别配置；更换主模型不会改变其他任务的调用方式。")}</p>
             </div>
 
             <div className="grid grid-cols-1 gap-3">

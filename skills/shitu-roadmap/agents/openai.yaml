@@ -1,0 +1,4 @@
+interface:
+  display_name: "识途 · 技术路线图"
+  short_description: "Verified papers and editable technical research roadmaps"
+  default_prompt: "Use $shitu-roadmap to research the foundational papers and development branches of my chosen technical field."
