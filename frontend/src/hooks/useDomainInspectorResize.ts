@@ -1,22 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import type { KeyboardEvent, PointerEvent } from 'react'
 
-const STORAGE_KEY = 'knowra.domain.inspectorWidth'
-const COLLAPSED_KEY = 'knowra.domain.inspectorCollapsed'
 const DEFAULT_WIDTH = 250
 const DIVIDER_WIDTH = 8
 
-export function useDomainInspectorResize() {
+export function useDomainInspectorResize(namespace = 'domain') {
+  const storageKey = `knowra.${namespace}.inspectorWidth`
+  const collapsedKey = `knowra.${namespace}.inspectorCollapsed`
   const bodyRef = useRef<HTMLDivElement>(null)
   const drag = useRef<{ pointerId: number; x: number; width: number } | null>(null)
   const [resizing, setResizing] = useState(false)
   const [collapsed, setCollapsed] = useState(() => {
-    try { return localStorage.getItem(COLLAPSED_KEY) === 'true' } catch { return false }
+    try { return localStorage.getItem(collapsedKey) === 'true' } catch { return false }
   })
   const [bodyWidth, setBodyWidth] = useState(1000)
   const [preferredWidth, setPreferredWidth] = useState(() => {
     try {
-      const stored = Number(localStorage.getItem(STORAGE_KEY))
+      const stored = Number(localStorage.getItem(storageKey))
       return Number.isFinite(stored) && stored >= 200 ? stored : DEFAULT_WIDTH
     } catch { return DEFAULT_WIDTH }
   })
@@ -27,8 +27,8 @@ export function useDomainInspectorResize() {
   const width = clamp(preferredWidth)
 
   useEffect(() => {
-    try { localStorage.setItem(COLLAPSED_KEY, String(collapsed)) } catch { /* Session toggling still works. */ }
-  }, [collapsed])
+    try { localStorage.setItem(collapsedKey, String(collapsed)) } catch { /* Session toggling still works. */ }
+  }, [collapsed, collapsedKey])
   useEffect(() => {
     const body = bodyRef.current
     if (!body) return
@@ -42,10 +42,10 @@ export function useDomainInspectorResize() {
   useEffect(() => {
     // Persist the preference, not the temporary clamp used for a smaller window.
     const timer = window.setTimeout(() => {
-      try { localStorage.setItem(STORAGE_KEY, String(preferredWidth)) } catch { /* Session resizing still works. */ }
+      try { localStorage.setItem(storageKey, String(preferredWidth)) } catch { /* Session resizing still works. */ }
     }, 150)
     return () => window.clearTimeout(timer)
-  }, [preferredWidth])
+  }, [preferredWidth, storageKey])
 
   const endDrag = () => {
     drag.current = null

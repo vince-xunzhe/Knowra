@@ -151,7 +151,7 @@ class TaskStore:
         # Running requests finish cooperatively; their Domain preview lease is
         # already cancelled, so no late result can be applied.
         with self.connect() as db:
-            db.execute("UPDATE jobs SET status='cancelled', updated=? WHERE id=? AND kind='domain' AND status='queued'",
+            db.execute("UPDATE jobs SET status='cancelled', updated=? WHERE id=? AND kind IN ('domain','roadmap') AND status='queued'",
                        (time.time(), job_id))
 
     def publish(self, job_id, channel, state):

@@ -21,7 +21,7 @@ def content(board):
     # comparable to the current workspace (e.g. discussion=None on old edges).
     from routers.domains import Board
 
-    return Board.model_validate(board).model_dump(include={"nodes", "edges"})
+    return Board.model_validate(board).model_dump(include={"nodes", "edges", "researchKeywords"})
 
 
 def refresh_run(db, run):

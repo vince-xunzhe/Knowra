@@ -154,6 +154,23 @@ async function setup(page: Page, inherited = false) {
     },
   }
 }
+
+test('domain keeps the header compact so the canvas starts near the top', async ({ page }) => {
+  await setup(page)
+  const domain = page.getByRole('region', { name: '索骥', exact: true })
+  const [headerBox, selectorBox, canvasBox] = await Promise.all([
+    domain.locator('.domain-header').boundingBox(),
+    domain.locator('.domain-selector').boundingBox(),
+    domain.getByTestId('domain-canvas').boundingBox(),
+  ])
+
+  expect(headerBox).not.toBeNull()
+  expect(selectorBox).not.toBeNull()
+  expect(canvasBox).not.toBeNull()
+  expect(headerBox!.height).toBeLessThanOrEqual(64)
+  expect(selectorBox!.height).toBeLessThanOrEqual(48)
+  expect(canvasBox!.y).toBeLessThanOrEqual(150)
+})
 async function importPaper(page: Page, title = reviews[0].title) {
   await page.locator('.domain-header').getByRole('button', { name: '导入论文', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '导入论文', exact: true })
@@ -319,20 +336,34 @@ test('research workspace collapses, preserves width and content, and stays usabl
   const panel = page.locator('.domain-inspector')
   const canvas = page.getByTestId('domain-canvas')
   const divider = page.getByRole('separator', { name: '调整研究工作区宽度' })
+  const collapseButton = page.getByRole('button', { name: '收起研究工作区', exact: true })
   await divider.focus()
   await page.keyboard.press('Shift+ArrowLeft')
   await expect(panel).toHaveCSS('width', '300px')
+  await expect(collapseButton).toHaveCSS('width', '32px')
+  await expect(collapseButton).toHaveCSS('height', '32px')
+  await expect(collapseButton).toHaveCSS('border-radius', '999px')
+  await expect.poll(async () => {
+    const dividerBox = (await divider.boundingBox())!
+    const collapseBox = (await collapseButton.boundingBox())!
+    return Math.abs(collapseBox.x + collapseBox.width / 2 - dividerBox.x - dividerBox.width / 2)
+  }).toBeLessThan(1)
   const canvasWidth = (await canvas.boundingBox())!.width
   await expect.poll(() => context.snapshot().boards[0].nodes.length).toBe(2)
   const before = structuredClone(context.snapshot().boards[0])
   await page.getByRole('textbox', { name: '搜索画布中的论文' }).fill('Attention')
-  await page.getByRole('button', { name: '收起研究工作区', exact: true }).click()
+  await collapseButton.click()
   await expect(panel).toBeHidden()
   await expect(divider).toHaveCount(0)
   expect((await canvas.boundingBox())!.width).toBeCloseTo(canvasWidth + 308, 0)
   const expand = page.getByRole('button', { name: '展开研究工作区', exact: true })
   await expect(expand).toHaveAttribute('aria-expanded', 'false')
   await expect(expand).toBeFocused()
+  await expect.poll(async () => {
+    const collapsedCanvasBox = (await canvas.boundingBox())!
+    const expandBox = (await expand.boundingBox())!
+    return collapsedCanvasBox.x + collapsedCanvasBox.width - expandBox.x - expandBox.width
+  }).toBeCloseTo(10, 0)
   await page.keyboard.press('Enter')
   await expect(panel).toHaveCSS('width', '300px')
   await expect(page.getByRole('textbox', { name: '搜索画布中的论文' })).toHaveValue('Attention')
@@ -671,8 +702,7 @@ test('conflict preserves unsaved content until explicit reload and modal escape 
 test('navigation order and inherited system categories preserve edits on taxonomy refresh', async ({ page }) => {
   const context = await setup(page, true)
   const labels = (await page.getByRole('navigation').getByRole('button').allTextContents()).map((label) => label.trim())
-  expect(labels.indexOf('索骥')).toBe(labels.indexOf('推荐') - 1)
-  expect(labels.indexOf('索骥')).toBeGreaterThan(labels.indexOf('回顾'))
+  expect(labels.slice(0, 7)).toEqual(['知识', '识途', '索骥', '回顾', '推荐', '资料', '看板'])
   const selector = page.getByRole('combobox', { name: '领域', exact: true })
   await expect(selector.getByRole('option')).toHaveCount(7)
   await expect(page.getByTestId('domain-imported-count')).toHaveText('已导入：0 张卡片')
@@ -786,15 +816,15 @@ test('discarding an agent preview leaves original cards unchanged', async ({ pag
   expect(context.snapshot().boards[0]).toEqual(before)
 })
 
-test('Domain model can be selected independently and changing main model preserves it', async ({ page }) => {
+test('Domain and Roadmap models can be selected independently and changing main model preserves them', async ({ page }) => {
   await setup(page)
-  const tasks = ['paper_extract', 'paper_chat', 'domain_connect']
+  const tasks = ['paper_extract', 'paper_chat', 'domain_connect', 'roadmap_research']
   let config = {
     scan_directory: '/test', similarity_threshold: 0.6,
     model_gateway: {
       providers: [{ id: 'openai', label: 'OpenAI', provider_type: 'openai', api_key: '', base_url: '', enabled: true }],
       models: ['first', 'second'].map(id => ({ id: `openai/${id}`, label: id, provider_id: 'openai', upstream_model: id, model_kind: 'chat', supports_vision: true, supported_tasks: tasks })),
-      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
+      task_specs: tasks.map(id => ({ id, label: id === 'domain_connect' ? '索骥代连' : id === 'roadmap_research' ? '识途调研' : id, category: '索骥', task_type: 'llm', description: '', recommended_model_id: 'openai/first' })),
       task_bindings: Object.fromEntries(tasks.map(id => [id, { model_id: 'openai/first', reasoning_effort: 'medium' }])),
       available_provider_types: [],
     },
@@ -808,13 +838,17 @@ test('Domain model can be selected independently and changing main model preserv
   await page.getByRole('button', { name: /^任务模型/ }).click()
   const section = (name: string) => page.locator('.rounded-xl').filter({ has: page.locator('p').filter({ hasText: new RegExp(`^${name}$`) }) }).last()
   const domain = section('索骥代连')
+  const roadmap = section('识途调研')
   const main = section('主模型')
   await expect(domain).toBeVisible()
   await domain.locator('select').nth(3).selectOption('openai/second')
+  await roadmap.locator('select').nth(3).selectOption('openai/second')
   await main.locator('select').nth(3).selectOption('openai/second')
   await main.locator('select').nth(3).selectOption('openai/first')
   await expect(domain.locator('select').nth(3)).toHaveValue('openai/second')
+  await expect(roadmap.locator('select').nth(3)).toHaveValue('openai/second')
   await page.getByRole('button', { name: '保存设置' }).click()
   await expect.poll(() => config.model_gateway.task_bindings.domain_connect.model_id).toBe('openai/second')
+  expect(config.model_gateway.task_bindings.roadmap_research.model_id).toBe('openai/second')
   expect(config.model_gateway.task_bindings.paper_extract.model_id).toBe('openai/first')
 })

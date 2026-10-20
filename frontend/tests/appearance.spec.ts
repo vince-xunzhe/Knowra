@@ -7,7 +7,7 @@ import en from '../src/i18n/locales/en.json' with { type: 'json' }
 import ja from '../src/i18n/locales/ja.json' with { type: 'json' }
 import es from '../src/i18n/locales/es.json' with { type: 'json' }
 
-async function mockBackend(page: Page, options: { offlineLanguage?: boolean; outdatedBackend?: boolean; graph?: boolean; initialLocale?: string; pipelineBacklog?: boolean } = {}) {
+async function mockBackend(page: Page, options: { offlineLanguage?: boolean; outdatedBackend?: boolean; graph?: boolean; initialLocale?: string; pipelineBacklog?: boolean; backgroundJobs?: boolean } = {}) {
   let locale = options.initialLocale ?? 'zh'
   const mutations: string[] = []
   const prompts: Record<string, string> = { zh: '中文抽取模板', en: 'English extraction template', ja: '日本語の抽出テンプレート', es: 'Plantilla de extracción en español' }
@@ -49,6 +49,10 @@ async function mockBackend(page: Page, options: { offlineLanguage?: boolean; out
     else if (path === '/wiki/lint/job') body = { running: false, phase: 'idle' }
     else if (path === '/wiki/lint/status') body = { exists: false, stale: false }
     else if (path === '/wiki/status' || path === '/promotion/status') body = { running: false, phase: 'idle' }
+    else if (path === '/jobs') body = options.backgroundJobs ? [{
+      job_id: 'roadmap-1', kind: 'roadmap', channel: 'roadmap:world-models', status: 'running',
+      progress: { label: '正在调研经典论文' }, error: null, result: null, worker_online: true,
+    }] : []
     return route.fulfill({ json: body })
   })
   return { mutations, prompts }
@@ -206,6 +210,27 @@ test('Spanish Light settings fit a narrow desktop window', async ({ page }) => {
   await expect(panel).toBeVisible()
   expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBeTruthy()
   await page.screenshot({ path: 'test-results/settings-light-es-narrow.png', animations: 'disabled' })
+})
+
+test('background tasks live at the bottom of the sidebar and open beside it', async ({ page }) => {
+  await mockBackend(page, { backgroundJobs: true })
+  await page.goto('/')
+  const nav = page.getByRole('navigation')
+  const tasks = page.getByTestId('background-tasks')
+  await expect(tasks).toBeVisible()
+  const [navBox, taskBox] = await Promise.all([nav.boundingBox(), tasks.boundingBox()])
+  expect(navBox).not.toBeNull()
+  expect(taskBox).not.toBeNull()
+  expect(taskBox!.x).toBeGreaterThanOrEqual(navBox!.x)
+  expect(taskBox!.x + taskBox!.width).toBeLessThanOrEqual(navBox!.x + navBox!.width)
+  expect(navBox!.y + navBox!.height - (taskBox!.y + taskBox!.height)).toBeLessThanOrEqual(20)
+
+  await tasks.getByRole('button', { name: /后台任务/ }).click()
+  const panel = page.getByTestId('background-tasks-panel')
+  await expect(panel).toBeVisible()
+  const panelBox = await panel.boundingBox()
+  expect(panelBox).not.toBeNull()
+  expect(panelBox!.x).toBeGreaterThanOrEqual(navBox!.x + navBox!.width)
 })
 
 

@@ -4,7 +4,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from fastapi import HTTPException
-from models import DomainWorkspace
+from models import DomainWorkspace, RoadmapWorkspace
 from sqlalchemy.orm import Session
 
 
@@ -53,7 +53,12 @@ def reconcile_categories(state: dict, categories: list[str]) -> dict:
 
 def rename_category_canvas(db: Session, old: str, new: str) -> None:
     """Join the caller's category-rename transaction; never create a workspace."""
-    row = db.get(DomainWorkspace, 1)
+    for model in (DomainWorkspace, RoadmapWorkspace):
+        _rename_workspace(db, model, old, new)
+
+
+def _rename_workspace(db, model, old, new):
+    row = db.get(model, 1)
     if row is None:
         return
     state = deepcopy(row.state)
@@ -68,7 +73,7 @@ def rename_category_canvas(db: Session, old: str, new: str) -> None:
         # Row version is incremented with the change so an open editor cannot
         # overwrite the rename with a stale autosave.
         updated = (
-            db.query(DomainWorkspace)
+            db.query(model)
             .filter_by(id=1, revision=row.revision)
             .update(
                 {"state": state, "revision": row.revision + 1},

@@ -10,8 +10,21 @@ export interface DomainPaper {
   eligible: boolean
   reason: 'not_reviewed' | 'empty_review' | null
   incomplete: boolean
+  roadmap?: {
+    arxivId: string | null
+    doi: string | null
+    sourceUrl: string
+    reason: string
+    branch: string
+    libraryPaperId: string | null
+    libraryStatus: 'in_library' | 'not_imported' | 'no_arxiv'
+    downloadStatus: null | 'queued' | 'running' | 'failed'
+    downloadError: string | null
+    reviewReady?: boolean
+  }
 }
 export interface CanvasNode {
+  roadmapRole?: 'topic' | 'branch' | 'milestone' | null
   id: string
   kind: 'paper' | 'text' | 'group'
   x: number
@@ -24,6 +37,7 @@ export interface CanvasNode {
   locked: boolean
 }
 export interface CanvasEdge {
+  roadmapStructure?: boolean
   analysis?: DomainAnalysis | null
   id: string
   source: string
@@ -40,6 +54,7 @@ export interface DomainBoard {
   id: string
   name: string
   category?: string | null
+  researchKeywords?: string[]
   nodes: CanvasNode[]
   edges: CanvasEdge[]
   viewport: Viewport
@@ -96,7 +111,7 @@ export interface DomainEvidence {
   quote: string
 }
 export interface DomainAnalysis {
-  relation: 'builds_on' | 'improves' | 'inspired_by' | 'compares' | 'cites'
+  relation: 'builds_on' | 'improves' | 'inspired_by' | 'compares' | 'cites' | 'evolves_into' | 'branches_into' | 'enables' | 'unifies'
   certainty: 'explicit' | 'inferred'
   reason: string
   evidence: DomainEvidence[]
@@ -127,9 +142,25 @@ export interface DomainAgentRun {
     unconnected: { paperId: string; title: string }[]
   }
 }
+export type ResearchRelationPolicy = 'refresh' | 'clear' | 'preserve'
 export const listDomainRuns = () => api.get<DomainAgentRun[]>('/agent/runs').then(r => r.data)
-export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>) =>
-  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights }).then(r => r.data)
+export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>, relationPolicy?: ResearchRelationPolicy) =>
+  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights, relationPolicy }).then(r => r.data)
 export const discardDomainRun = (id: string) => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data)
 export const applyDomainRun = (id: string) =>
   api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data)
+
+/** The two editors share canvas interactions, but never persistence or jobs. */
+export interface DomainApi {
+  load: typeof loadDomains
+  save: typeof saveDomains
+  papers: typeof loadDomainPapers
+  runs: typeof listDomainRuns
+  start: typeof startDomainRun
+  discard: typeof discardDomainRun
+  apply: typeof applyDomainRun
+}
+export const domainApi: DomainApi = {
+  load: loadDomains, save: saveDomains, papers: loadDomainPapers,
+  runs: listDomainRuns, start: startDomainRun, discard: discardDomainRun, apply: applyDomainRun,
+}

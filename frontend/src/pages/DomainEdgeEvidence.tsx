@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import type { DomainAnalysis, DomainEvidence, DomainPaper } from '../api/domains'
 import { t as tr } from '../i18n/catalog'
+import { sourceUrl } from '../utils/sourceUrl'
 
 const aspectLabel = (aspect: 'purpose' | 'assessment' | 'comparison') =>
   tr(aspect === 'purpose' ? '引用用途' : aspect === 'assessment' ? '作者评价' : '与本文的异同')
@@ -11,10 +12,11 @@ const locationKey = (e: DomainEvidence) => JSON.stringify([
   e.paperId, e.source, e.page, e.page === null ? e.locator.trim() : '',
 ])
 
-export default function DomainEdgeEvidence({ analysis, paperMap, onOpenReview }: {
+export default function DomainEdgeEvidence({ analysis, paperMap, onOpenReview, roadmap = false }: {
   analysis: DomainAnalysis
   paperMap: Map<string, DomainPaper>
   onOpenReview: (paperId: string) => void
+  roadmap?: boolean
 }) {
   const sources = useRef(new Map<string, HTMLDetailsElement>())
   const groups: { key: string; evidence: DomainEvidence; quotes: string[]; uses: Set<string> }[] = []
@@ -49,6 +51,9 @@ export default function DomainEdgeEvidence({ analysis, paperMap, onOpenReview }:
   return <section className="domain-edge-evidence">
     <h2>{tr('连线解读')} · {tr(analysis.certainty === 'explicit' ? '原文明示' : 'AI推断')}</h2>
     <p>{analysis.reason}</p>
+    {roadmap && <p className="domain-help">{tr(analysis.certainty === 'explicit'
+      ? '关系由所列原文片段支持；可打开来源核对。'
+      : '关系为 AI 推断；请结合所列证据与报告中的全文缺口判断。')}</p>}
     {references(analysis.evidence)}
     {discussion && <div className="domain-citation-discussion">
       <h3>{tr('引用语境深读')}</h3>
@@ -77,11 +82,15 @@ export default function DomainEdgeEvidence({ analysis, paperMap, onOpenReview }:
       <p className="domain-help">{tr('编号对应上方解读；同一出处的摘录合并展示。')}</p>
       {groups.map(({ key, evidence: e, quotes, uses }, i) => <details key={key}
         ref={element => { if (element) sources.current.set(key, element); else sources.current.delete(key) }}>
-        <summary>{tr('证据 {0}', { 0: i + 1 })} · {tr(e.source === 'review' ? '论文回顾' : e.source === 'wiki' ? '论文Wiki' : '原文')} · {e.locator}</summary>
+        <summary>{tr('证据 {0}', { 0: i + 1 })} · {roadmap
+          ? e.page != null ? tr('原文 · PDF 第 {0} 页', { 0: e.page })
+            : e.locator.endsWith('#fulltext') ? tr('原文全文 · 页码未知') : tr('来源元数据')
+          : tr(e.source === 'review' ? '论文回顾' : e.source === 'wiki' ? '论文Wiki' : '原文')}{!roadmap && ` · ${e.locator}`}</summary>
         <p>{paperMap.get(e.paperId)?.title}</p>
         <p className="domain-evidence-uses">{tr('支持：{0}', { 0: [...uses].join(' · ') })}</p>
         {quotes.map((quote, j) => <blockquote key={j}>{quote}</blockquote>)}
-        <button onClick={() => onOpenReview(e.paperId)}>{tr('打开完整回顾')} ↗</button>
+        {roadmap && sourceUrl(e.locator) && <a href={sourceUrl(e.locator)!} target="_blank" rel="noopener noreferrer">{tr('查看论文来源')} ↗</a>}
+        {(!roadmap || paperMap.get(e.paperId)?.roadmap?.libraryPaperId) && <button onClick={() => onOpenReview(e.paperId)}>{tr('打开完整回顾')} ↗</button>}
       </details>)}
     </div>
   </section>
