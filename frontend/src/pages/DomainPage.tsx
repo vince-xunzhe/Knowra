@@ -30,6 +30,7 @@ import {
   Type,
   Undo2,
   UnlockKeyhole,
+  Workflow,
   X,
   ZoomIn,
   ZoomOut,
@@ -1015,12 +1016,12 @@ export default function DomainPage({
           <button id="roadmap-canvas-tab" role="tab" aria-selected={!showReport}
             aria-controls="roadmap-canvas-panel" tabIndex={showReport ? -1 : 0}
             onClick={() => setRoadmapView('canvas')}>
-            <Frame size={15} />{tr('路线图')}
+            <Workflow size={15} />{tr('路线图')}
           </button>
           <button id="roadmap-report-tab" role="tab" aria-selected={showReport}
             aria-controls="roadmap-report-panel" tabIndex={showReport ? 0 : -1}
             onClick={() => setRoadmapView('report')}>
-            <FileText size={15} />{tr('总体调研报告')}
+            <FileText size={15} />{tr('研报')}
           </button>
         </div>}
         {!showReport && <button

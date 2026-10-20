@@ -232,6 +232,26 @@ async function researchAgain(roadmap: Locator, choice: '清空并重新生成' |
   await dialog.getByRole('button', { name: choice, exact: false }).click()
 }
 
+test('roadmap navigation uses a mind-map icon and keeps the canvas close to the top', async ({ page }) => {
+  await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const canvasTab = roadmap.getByRole('tab', { name: '路线图', exact: true })
+  await expect(canvasTab.locator('svg.lucide-workflow')).toBeVisible()
+  await expect(roadmap.getByRole('tab', { name: '研报', exact: true })).toBeVisible()
+
+  const [headerBox, noticeBox, canvasBox] = await Promise.all([
+    roadmap.locator('.domain-header').boundingBox(),
+    roadmap.locator('.roadmap-research-notice').boundingBox(),
+    roadmap.getByTestId('roadmap-canvas').boundingBox(),
+  ])
+  expect(headerBox).not.toBeNull()
+  expect(noticeBox).not.toBeNull()
+  expect(canvasBox).not.toBeNull()
+  expect(headerBox!.height).toBeLessThanOrEqual(64)
+  expect(noticeBox!.height).toBeLessThanOrEqual(32)
+  expect(canvasBox!.y).toBeLessThanOrEqual(190)
+})
+
 test('rerun asks whether to keep previous relationships before starting research', async ({ page }) => {
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
@@ -488,8 +508,8 @@ test('discarding new research restores saved descriptions and leaves the existin
 test('inline research reports refresh previews, expand safely, download Markdown, and restore applied reports after discard', async ({ page }) => {
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
-  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
-  const reportTab = roadmap.getByRole('tab', { name: '总体调研报告', exact: true })
+  const report = roadmap.getByRole('tabpanel', { name: '研报', exact: true })
+  const reportTab = roadmap.getByRole('tab', { name: '研报', exact: true })
   const canvasTab = roadmap.getByRole('tab', { name: '路线图', exact: true })
   const dialog = page.getByRole('dialog', { name: '调研报告', exact: true })
   await expect(canvasTab).toHaveAttribute('aria-selected', 'true')
@@ -556,11 +576,11 @@ test('inline research reports refresh previews, expand safely, download Markdown
 test('report view handles empty categories and retries loading failures without showing another field’s report', async ({ page }) => {
   const app = await setup(page, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
-  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
-  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  const report = roadmap.getByRole('tabpanel', { name: '研报', exact: true })
+  await roadmap.getByRole('tab', { name: '研报', exact: true }).click()
   await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toBeVisible()
   await roadmap.getByRole('combobox', { name: '领域', exact: true }).selectOption('roadmap-vlm')
-  await expect(report.getByRole('heading', { name: 'VLM · 总体调研报告', exact: true })).toBeVisible()
+  await expect(report.getByRole('heading', { name: 'VLM · 研报', exact: true })).toBeVisible()
   await expect(report.getByText('暂无调研报告。请先生成路线图，完成后可查看和下载。', { exact: true })).toBeVisible()
   await expect(report.getByRole('heading', { name: 'Saved research report', exact: true })).toHaveCount(0)
   await expect(report.getByRole('button', { name: '展开报告', exact: true })).toBeDisabled()
@@ -581,10 +601,10 @@ test('reading the report preserves the mounted canvas, selection and undo histor
   const app = await setup(page, true)
   app.savedReport('# A long research report\n\n' + Array.from({ length: 35 }, (_, i) => `## Paper ${i + 1}\n\nResearch evidence and limitations.\n\n`).join(''))
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
-  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  const report = roadmap.getByRole('tabpanel', { name: '研报', exact: true })
   const canvas = roadmap.getByTestId('roadmap-canvas')
   const node = canvas.locator('[data-node-id="node-1"]')
-  const reportTab = roadmap.getByRole('tab', { name: '总体调研报告', exact: true })
+  const reportTab = roadmap.getByRole('tab', { name: '研报', exact: true })
   const canvasTab = roadmap.getByRole('tab', { name: '路线图', exact: true })
   await roadmap.getByRole('button', { name: '缩小', exact: true }).click()
   await expect.poll(() => app.state().boards[0].viewport.zoom).toBe(0.8)
@@ -711,9 +731,9 @@ test('the first preview fits a wide tree when its canvas becomes visible and nev
   const initialViewport = structuredClone(app.state().boards[0].viewport)
   await roadmap.getByRole('button', { name: '生成路线图', exact: true }).click()
   await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
-  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  await roadmap.getByRole('tab', { name: '研报', exact: true }).click()
   app.preview(undefined, undefined, proposed)
-  await expect(roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true }).getByText('预览报告 · 应用方案后保存', { exact: true })).toBeVisible()
+  await expect(roadmap.getByRole('tabpanel', { name: '研报', exact: true }).getByText('预览报告 · 应用方案后保存', { exact: true })).toBeVisible()
   expect(app.state().boards[0].viewport).toEqual(initialViewport)
   await roadmap.getByRole('tab', { name: '路线图', exact: true }).click()
   await expect.poll(() => app.state().boards[0].viewport.zoom).toBeLessThan(0.15)
@@ -731,7 +751,7 @@ test('the first preview fits a wide tree when its canvas becomes visible and nev
   await roadmap.getByRole('button', { name: '放大', exact: true }).click()
   await expect.poll(() => app.state().boards[0].viewport.zoom).toBe(fittedZoom * 1.25)
   const chosenViewport = structuredClone(app.state().boards[0].viewport)
-  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
+  await roadmap.getByRole('tab', { name: '研报', exact: true }).click()
   await roadmap.getByRole('tab', { name: '路线图', exact: true }).click()
   await page.setViewportSize({ width: 1180, height: 850 })
   await roadmap.getByRole('button', { name: '应用方案', exact: true }).click()
@@ -753,8 +773,8 @@ test('narrative reports render bounded flowcharts and verified local figures, an
   const markdown = '# 技术发展叙事\n\n从注意力架构到预训练目标，关键变化在于学习方式。\n\n```mermaid\nflowchart TB\n topic["语言模型"] --> branch["注意力与预训练"]\n branch --> p1["Transformer"]\n p1 -->|演进| p2["BERT"]\n```\n\n## 原文架构图\n\n![Transformer 原文架构图](' + asset + ')\n\n来源：论文第 3 页。\n\n![外部图](https://tracking.invalid/figure.png)\n\n![无效资产](/api/roadmaps/report-assets/unverified.png)\n\n<img src="https://tracking.invalid/raw.png">\n\n```mermaid\nflowchart TB\n A --> B\n click A "https://tracking.invalid/click"\n```'
   app.savedReport(markdown, true)
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
-  await roadmap.getByRole('tab', { name: '总体调研报告', exact: true }).click()
-  const report = roadmap.getByRole('tabpanel', { name: '总体调研报告', exact: true })
+  await roadmap.getByRole('tab', { name: '研报', exact: true }).click()
+  const report = roadmap.getByRole('tabpanel', { name: '研报', exact: true })
   const flowchart = report.getByRole('img', { name: '技术发展流程图', exact: true })
   await expect(flowchart.locator('svg')).toBeVisible({ timeout: 15000 })
   await expect(flowchart).toContainText('语言模型')

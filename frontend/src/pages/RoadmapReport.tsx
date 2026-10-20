@@ -110,7 +110,7 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
       className="roadmap-report-panel" hidden={!visible}>
       <header className="roadmap-report-panel-header">
         <div>
-          <h2><FileText size={19} />{boardName} · {tr('总体调研报告')}</h2>
+          <h2><FileText size={19} />{boardName} · {tr('研报')}</h2>
           <p>{status}</p>
         </div>
         <div className="roadmap-report-actions">
@@ -124,7 +124,7 @@ export default function RoadmapReport({ boardId, boardName, active, visible, run
         </div>
       </header>
       {exportError && <p role="alert" className="domain-error">{exportError}</p>}
-      <div className="roadmap-report-body" tabIndex={0} aria-label={tr('总体调研报告')}>
+      <div className="roadmap-report-body" tabIndex={0} aria-label={tr('研报')}>
         <article className="roadmap-report-document">{content}</article>
       </div>
       <footer className="roadmap-report-panel-footer">{tr('全文未获取或证据不足的部分，会在报告中列为缺口。')}</footer>

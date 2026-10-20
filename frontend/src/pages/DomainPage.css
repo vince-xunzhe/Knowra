@@ -182,6 +182,33 @@
   color: var(--domain-muted);
   font-size: 12px;
 }
+.roadmap-page .domain-header {
+  gap: 14px;
+  padding: 9px 26px;
+}
+.roadmap-page .domain-header > div:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+.roadmap-page .domain-eyebrow {
+  font-size: 9px;
+  white-space: nowrap;
+}
+.roadmap-page .domain-header h1 {
+  margin: 0;
+  font-size: 20px;
+  white-space: nowrap;
+}
+.roadmap-page .domain-header p {
+  margin-left: 2px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.roadmap-page .domain-header .domain-primary {
+  padding: 8px 13px;
+}
 .domain-save {
   margin-left: auto;
   display: flex;
@@ -217,6 +244,33 @@
   align-items: center;
   border-bottom: 1px solid var(--domain-border);
   flex-shrink: 0;
+}
+.roadmap-page .domain-selector {
+  gap: 6px;
+  padding: 6px 26px;
+}
+.roadmap-page .domain-selector select,
+.roadmap-page .domain-selector input {
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+.roadmap-page .roadmap-keywords-values {
+  min-height: 32px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.roadmap-page .roadmap-view-tabs {
+  padding: 2px;
+}
+.roadmap-page .roadmap-view-tabs button,
+.roadmap-page .domain-inspector-toggle {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.roadmap-page .roadmap-research-notice {
+  gap: 4px 18px;
+  padding: 5px 28px;
+  line-height: 1.35;
 }
 .domain-selector-field {
   display: flex;
