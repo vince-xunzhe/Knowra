@@ -106,7 +106,6 @@
 .roadmap-view-tabs { display: flex; gap: 4px; margin-left: auto; padding: 3px; border: 1px solid var(--domain-border); border-radius: 9px; }
 .roadmap-view-tabs button { white-space: nowrap; }
 .roadmap-view-tabs button[aria-selected="true"] { background: rgba(129, 140, 248, 0.15); color: var(--color-indigo-300, #a5b4fc); }
-.domain-selector .roadmap-view-tabs + .domain-inspector-toggle { margin-left: 8px; }
 .roadmap-report-panel { display: flex; flex: 1; min-height: 0; flex-direction: column; overflow: hidden; }
 .roadmap-report-panel-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--domain-border); }
 .roadmap-report-panel-header h2 { display: flex; align-items: center; gap: 9px; font-size: 16px; font-weight: 600; }
@@ -262,8 +261,7 @@
 .roadmap-page .roadmap-view-tabs {
   padding: 2px;
 }
-.roadmap-page .roadmap-view-tabs button,
-.roadmap-page .domain-inspector-toggle {
+.roadmap-page .roadmap-view-tabs button {
   padding-top: 6px;
   padding-bottom: 6px;
 }
@@ -361,12 +359,30 @@
   display: flex;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
-.domain-selector .domain-inspector-toggle {
-  margin-left: auto;
-  border: 1px solid var(--domain-border);
-  background: var(--domain-panel);
-  white-space: nowrap;
+.domain-page .domain-inspector-dock-toggle {
+  position: absolute;
+  top: 22px;
+  z-index: 8;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #5eead4;
+  border-radius: 999px;
+  color: var(--color-indigo-200, #c7d2fe);
+  background: #111827;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.26), 0 6px 18px rgba(2, 6, 23, 0.42);
+  transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+.domain-page .domain-inspector-dock-toggle:hover {
+  color: white;
+  border-color: #6ee7b7;
+  background: #1e1b4b;
+}
+.domain-page .domain-inspector-dock-toggle:focus-visible {
+  outline: 2px solid var(--color-indigo-300, #a5b4fc);
+  outline-offset: 3px;
 }
 .domain-inspector[hidden], .domain-pane-divider[hidden], .domain-body[hidden], .roadmap-report-panel[hidden] {
   display: none;

@@ -319,20 +319,34 @@ test('research workspace collapses, preserves width and content, and stays usabl
   const panel = page.locator('.domain-inspector')
   const canvas = page.getByTestId('domain-canvas')
   const divider = page.getByRole('separator', { name: '调整研究工作区宽度' })
+  const collapseButton = page.getByRole('button', { name: '收起研究工作区', exact: true })
   await divider.focus()
   await page.keyboard.press('Shift+ArrowLeft')
   await expect(panel).toHaveCSS('width', '300px')
+  await expect(collapseButton).toHaveCSS('width', '32px')
+  await expect(collapseButton).toHaveCSS('height', '32px')
+  await expect(collapseButton).toHaveCSS('border-radius', '999px')
+  await expect.poll(async () => {
+    const dividerBox = (await divider.boundingBox())!
+    const collapseBox = (await collapseButton.boundingBox())!
+    return Math.abs(collapseBox.x + collapseBox.width / 2 - dividerBox.x - dividerBox.width / 2)
+  }).toBeLessThan(1)
   const canvasWidth = (await canvas.boundingBox())!.width
   await expect.poll(() => context.snapshot().boards[0].nodes.length).toBe(2)
   const before = structuredClone(context.snapshot().boards[0])
   await page.getByRole('textbox', { name: '搜索画布中的论文' }).fill('Attention')
-  await page.getByRole('button', { name: '收起研究工作区', exact: true }).click()
+  await collapseButton.click()
   await expect(panel).toBeHidden()
   await expect(divider).toHaveCount(0)
   expect((await canvas.boundingBox())!.width).toBeCloseTo(canvasWidth + 308, 0)
   const expand = page.getByRole('button', { name: '展开研究工作区', exact: true })
   await expect(expand).toHaveAttribute('aria-expanded', 'false')
   await expect(expand).toBeFocused()
+  await expect.poll(async () => {
+    const collapsedCanvasBox = (await canvas.boundingBox())!
+    const expandBox = (await expand.boundingBox())!
+    return collapsedCanvasBox.x + collapsedCanvasBox.width - expandBox.x - expandBox.width
+  }).toBeCloseTo(10, 0)
   await page.keyboard.press('Enter')
   await expect(panel).toHaveCSS('width', '300px')
   await expect(page.getByRole('textbox', { name: '搜索画布中的论文' })).toHaveValue('Attention')

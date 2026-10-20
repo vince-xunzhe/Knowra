@@ -6,6 +6,8 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Download,
   ExternalLink,
   FileText,
@@ -18,8 +20,6 @@ import {
   Maximize,
   MousePointer2,
   Network,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
   Redo2,
   RefreshCw,
@@ -1025,17 +1025,6 @@ export default function DomainPage({
             <FileText size={15} />{tr('研报')}
           </button>
         </div>}
-        {!showReport && <button
-          className="domain-inspector-toggle"
-          aria-label={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
-          title={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
-          aria-expanded={!inspectorCollapsed}
-          aria-controls={`${mode}-inspector`}
-          onClick={toggleInspector}
-        >
-          {inspectorCollapsed ? <PanelRightOpen size={17} /> : <PanelRightClose size={17} />}
-          {tr('研究工作区')}
-        </button>}
       </div>
       {paperError && (
         <div className="domain-error" role="alert">
@@ -1468,6 +1457,17 @@ export default function DomainPage({
             </div>
           )}
         </div>
+        <button
+          className="domain-inspector-dock-toggle"
+          style={{ right: inspectorCollapsed ? 10 : Math.max(0, inspectorWidth - 12) }}
+          aria-label={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          title={inspectorCollapsed ? tr('展开研究工作区') : tr('收起研究工作区')}
+          aria-expanded={!inspectorCollapsed}
+          aria-controls={`${mode}-inspector`}
+          onClick={toggleInspector}
+        >
+          {inspectorCollapsed ? <ChevronLeft size={17} /> : <ChevronRight size={17} />}
+        </button>
         <div
           className="domain-pane-divider"
           hidden={inspectorCollapsed}
