@@ -9,6 +9,7 @@ import {
   FileText,
   Frame,
   Hand,
+  History,
   Link2,
   Loader2,
   LockKeyhole,
@@ -18,6 +19,7 @@ import {
   PanelRightOpen,
   Plus,
   Redo2,
+  RefreshCw,
   Search,
   Sparkles,
   Star,
@@ -1714,12 +1716,18 @@ export default function DomainPage({
             </header>
             <div className="roadmap-research-choices">
               <button autoFocus onClick={() => startResearch('preserve')}>
-                <strong>{tr('保留历史关系')}</strong>
-                <span>{tr('保留当前论文连线，再补充本轮调研发现的新关系。')}</span>
+                <span className="roadmap-research-choice-icon keep" aria-hidden="true"><History size={17} /></span>
+                <span className="roadmap-research-choice-copy">
+                  <strong>{tr('保留历史关系')}</strong>
+                  <span>{tr('保留当前论文连线，再补充本轮调研发现的新关系。')}</span>
+                </span>
               </button>
               <button className="domain-danger" onClick={() => startResearch('clear')}>
-                <strong>{tr('清空并重新生成')}</strong>
-                <span>{tr('清除未锁定的旧论文连线，按本轮调研结果重新生成。')}</span>
+                <span className="roadmap-research-choice-icon clear" aria-hidden="true"><RefreshCw size={17} /></span>
+                <span className="roadmap-research-choice-copy">
+                  <strong>{tr('清空并重新生成')}</strong>
+                  <span>{tr('清除未锁定的旧论文连线，按本轮调研结果重新生成。')}</span>
+                </span>
               </button>
             </div>
             <footer>

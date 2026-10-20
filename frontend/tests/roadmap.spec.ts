@@ -208,6 +208,7 @@ test('rerun asks whether to keep previous relationships before starting research
   await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
   const dialog = roadmap.getByRole('dialog', { name: '重新调研', exact: true })
   await expect(dialog).toContainText('论文卡片、备注、文字和分组都会保留。已锁定连线始终受保护。')
+  await expect(dialog.locator('.roadmap-research-choice-icon')).toHaveCount(2)
   await page.screenshot({ path: '/tmp/knowra-shitu-rerun-relations.png' })
   expect(app.researchPosts()).toBe(0)
   await dialog.getByRole('button', { name: '取消', exact: true }).click()
