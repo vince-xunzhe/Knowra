@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowDown,
+  ArrowRight,
   ArrowUp,
   Check,
+  ChevronDown,
   Download,
   ExternalLink,
   FileText,
@@ -44,7 +46,7 @@ import {
   type ResearchRelationPolicy,
   type ReviewField,
 } from '../api/domains'
-import { arrangeRoadmap, roadmapApi } from '../api/roadmaps'
+import { arrangeRoadmap, roadmapApi, type RoadmapLayoutOrientation } from '../api/roadmaps'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
@@ -159,6 +161,7 @@ export default function DomainPage({
   const liveBoard = state?.boards[boardIndex] ?? null
   const run = agent.runs.find(r => r.boardId === liveBoard?.id)
   const [layoutBusy, setLayoutBusy] = useState(false)
+  const [layoutMenu, setLayoutMenu] = useState(false)
   const readOnly = !agent.ready || agent.busy || layoutBusy || run?.status === 'pending' || run?.status === 'preview'
   const board = liveBoard && run?.status === 'preview' && run.proposal
     ? { ...run.proposal.board, name: liveBoard.name, category: liveBoard.category, viewport: liveBoard.viewport }
@@ -290,6 +293,21 @@ export default function DomainPage({
     document.addEventListener('pointerdown', outside)
     return () => document.removeEventListener('pointerdown', outside)
   }, [active, popover])
+  useEffect(() => {
+    if (!active || !layoutMenu) return
+    const outside = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest('.roadmap-layout-picker')) setLayoutMenu(false)
+    }
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setLayoutMenu(false)
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', keydown)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', keydown)
+    }
+  }, [active, layoutMenu])
   useEffect(() => {
     if (!active || (!importOpen && !nameDialog && !researchDialog)) return
     const previous = document.activeElement as HTMLElement | null
@@ -792,14 +810,16 @@ export default function DomainPage({
     }
     startResearch()
   }
-  const arrangeCanvas = () => {
+  const arrangeCanvas = (orientation: RoadmapLayoutOrientation) => {
     if (!isRoadmap || !board || readOnly) return
+    setLayoutMenu(false)
     setActionError('')
     setLayoutBusy(true)
     void workspace.withSaved(snapshot => arrangeRoadmap(
       board.id,
       snapshot.revision,
       Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])),
+      orientation,
     )).then(result => {
       fitAfterLayout.current = true
       workspace.install(result)
@@ -1233,9 +1253,33 @@ export default function DomainPage({
               })}>{tr('应用方案')}</button>
               <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('放弃方案')}</button>
             </> : <>
-              {isRoadmap && board?.nodes.some(node => node.roadmapRole === 'topic') && <button
-                disabled={readOnly}
-                onClick={arrangeCanvas}><Network size={16} />{tr(layoutBusy ? '正在整理布局…' : '整理布局')}</button>}
+              {isRoadmap && board?.nodes.some(node => node.roadmapRole === 'topic') && <div className="roadmap-layout-picker">
+                <button
+                  aria-haspopup="menu"
+                  aria-expanded={layoutMenu}
+                  disabled={readOnly}
+                  onClick={() => setLayoutMenu(open => !open)}
+                >
+                  <Network size={16} />{tr(layoutBusy ? '正在整理布局…' : '整理布局')}
+                  {!layoutBusy && <ChevronDown size={14} />}
+                </button>
+                {layoutMenu && <div className="roadmap-layout-menu" role="menu" aria-label={tr('整理布局')}>
+                  <button role="menuitem" onClick={() => arrangeCanvas('horizontal')}>
+                    <ArrowDown size={18} />
+                    <span className="roadmap-layout-copy">
+                      <strong>{tr('横向排列')}</strong>
+                      <small>{tr('研究分支横向展开，论文向下演进。')}</small>
+                    </span>
+                  </button>
+                  <button role="menuitem" onClick={() => arrangeCanvas('vertical')}>
+                    <ArrowRight size={18} />
+                    <span className="roadmap-layout-copy">
+                      <strong>{tr('竖直排列')}</strong>
+                      <small>{tr('研究分支纵向展开，论文向右演进。')}</small>
+                    </span>
+                  </button>
+                </div>}
+              </div>}
               <button className="domain-primary"
                 disabled={!board || readOnly || (!isRoadmap && new Set(board.nodes.filter(n => n.kind === 'paper').map(n => n.paperId)).size < 2)}
                 onClick={beginResearch}><Sparkles size={16} />{tr(isRoadmap ? (boardPapers.length ? '重新调研' : '生成路线图') : 'agent代连')}</button>

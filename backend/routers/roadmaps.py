@@ -120,6 +120,7 @@ class LayoutRequest(StrictModel):
     boardId: str
     revision: int = Field(ge=1)
     heights: dict[str, float] = Field(default_factory=dict)
+    orientation: Literal["horizontal", "vertical"] = "horizontal"
 
 
 def find_board(row, board_id):
@@ -196,7 +197,9 @@ def layout(body: LayoutRequest, db: Annotated[Session, Depends(get_db)]):
         for node in board["nodes"]
     }
     before = deepcopy(board)
-    arranged = Board.model_validate(arrange_tree(board, papers, heights, topic["id"], branches)).model_dump()
+    arranged = Board.model_validate(
+        arrange_tree(board, papers, heights, topic["id"], branches, body.orientation)
+    ).model_dump()
     state = deepcopy(row.state)
     next_board = find_board(SimpleNamespace(state=state), body.boardId)
     next_board.update(nodes=arranged["nodes"], edges=arranged["edges"])

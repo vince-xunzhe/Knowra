@@ -1,4 +1,4 @@
-"""Deterministic top-down roadmap layout around protected user content."""
+"""Deterministic roadmap layouts around protected user content."""
 
 import math
 from collections import Counter, defaultdict
@@ -13,21 +13,25 @@ BRANCH_GAP = 140
 SIBLING_GAP = 70
 SIBLING_ROW_GAP = 44
 MAX_SIBLINGS_PER_ROW = 2
+MAX_SIBLINGS_PER_COLUMN = 2
 RANK_GAP = 100
 BLOCK_GAP = 90
 GROUP_PADDING = 24
 GROUP_HEADER = 62
 
 
-def arrange_tree(board, papers, heights, topic_id, branches):
+def arrange_tree(board, papers, heights, topic_id, branches, orientation="horizontal"):
     """Lay out a topic, its branch lanes and each lane's evidence graph.
 
-    The topic fans into one row of research branches. Within each branch,
-    evidence-backed development flows downward and parallel work shares a row.
+    Horizontal layout fans branches across a row and develops papers downward.
+    Vertical layout stacks branches and develops papers from left to right.
     Locked items, notes, and user groups containing annotations remain exactly
     where the user put them. Empty, unlocked paper-only groups from the legacy
     roadmap layout are safe to migrate and become branch-lane containers.
     """
+
+    if orientation not in {"horizontal", "vertical"}:
+        raise ValueError(f"Unsupported roadmap layout orientation: {orientation}")
 
     result = deepcopy(board)
     nodes = {node["id"]: node for node in result["nodes"]}
@@ -157,7 +161,7 @@ def arrange_tree(board, papers, heights, topic_id, branches):
             )
         )
 
-    def block_metrics(group, block_cards):
+    def horizontal_block_metrics(group, block_cards):
         buckets = defaultdict(list)
         for card in block_cards:
             buckets[ranks[card["id"]]].append(card)
@@ -190,27 +194,87 @@ def arrange_tree(board, papers, heights, topic_id, branches):
             )
         return buckets, content_width, max(180, content_height)
 
+    def vertical_block_metrics(group, block_cards):
+        buckets = defaultdict(list)
+        for card in block_cards:
+            buckets[ranks[card["id"]]].append(card)
+        for bucket in buckets.values():
+            bucket.sort(key=lambda card: (year(card), card["id"]))
+        columns = {
+            rank: [
+                bucket[index:index + MAX_SIBLINGS_PER_COLUMN]
+                for index in range(0, len(bucket), MAX_SIBLINGS_PER_COLUMN)
+            ]
+            for rank, bucket in buckets.items()
+        }
+        rank_widths = [
+            sum(
+                max((card["width"] for card in column), default=0)
+                for column in columns[rank]
+            )
+            + SIBLING_ROW_GAP * max(0, len(columns[rank]) - 1)
+            for rank in sorted(columns)
+        ]
+        content_width = sum(rank_widths) + RANK_GAP * max(0, len(rank_widths) - 1)
+        content_height = max(
+            (
+                sum(measured_height(card) for card in column)
+                + SIBLING_GAP * max(0, len(column) - 1)
+                for rank_columns in columns.values()
+                for column in rank_columns
+            ),
+            default=180,
+        )
+        if group:
+            return buckets, max(640, content_width + GROUP_PADDING * 2), max(
+                220, content_height + GROUP_HEADER + GROUP_PADDING * 2,
+            )
+        return buckets, max(280, content_width), content_height
+
+    metrics = vertical_block_metrics if orientation == "vertical" else horizontal_block_metrics
     lane_data = []
     for branch, branch_id in branches.items():
         block_data = []
         for group, block_cards in blocks_by_branch[branch]:
-            buckets, block_width, block_height = block_metrics(group, block_cards)
+            buckets, block_width, block_height = metrics(group, block_cards)
             block_data.append((group, buckets, block_width, block_height))
         branch_node = nodes[branch_id]
-        lane_width = max([branch_node["width"] + 80, *(item[2] for item in block_data)], default=360)
-        content_height = sum(item[3] for item in block_data) + BLOCK_GAP * max(0, len(block_data) - 1)
-        lane_height = measured_height(branch_node) + BRANCH_CONTENT_GAP + max(180, content_height)
+        if orientation == "vertical":
+            content_width = (
+                sum(item[2] for item in block_data)
+                + BLOCK_GAP * max(0, len(block_data) - 1)
+            )
+            lane_width = branch_node["width"] + BRANCH_CONTENT_GAP + max(280, content_width)
+            lane_height = max(
+                [measured_height(branch_node) + 80, *(item[3] for item in block_data)],
+                default=220,
+            )
+        else:
+            lane_width = max([branch_node["width"] + 80, *(item[2] for item in block_data)], default=360)
+            content_height = sum(item[3] for item in block_data) + BLOCK_GAP * max(0, len(block_data) - 1)
+            lane_height = measured_height(branch_node) + BRANCH_CONTENT_GAP + max(180, content_height)
         lane_data.append((branch, branch_id, block_data, lane_width, lane_height))
 
     # Keep the generated tree clear of protected user material. If the topic
     # itself is locked it remains the anchor and the rest grows from it.
     topic = nodes[topic_id]
-    planned_width = sum(item[3] for item in lane_data) + BRANCH_GAP * max(0, len(lane_data) - 1)
-    planned_height = measured_height(topic) + TOPIC_GAP + max((item[4] for item in lane_data), default=220)
+    if orientation == "vertical":
+        planned_width = topic["width"] + TOPIC_GAP + max((item[3] for item in lane_data), default=360)
+        planned_height = (
+            sum(item[4] for item in lane_data)
+            + BRANCH_GAP * max(0, len(lane_data) - 1)
+        )
+    else:
+        planned_width = sum(item[3] for item in lane_data) + BRANCH_GAP * max(0, len(lane_data) - 1)
+        planned_height = measured_height(topic) + TOPIC_GAP + max((item[4] for item in lane_data), default=220)
     origin_x, origin_y = ORIGIN_X, ORIGIN_Y
     if topic.get("locked"):
-        origin_x = topic["x"] + topic["width"] / 2 - planned_width / 2
-        origin_y = topic["y"]
+        if orientation == "vertical":
+            origin_x = topic["x"]
+            origin_y = topic["y"] + measured_height(topic) / 2 - planned_height / 2
+        else:
+            origin_x = topic["x"] + topic["width"] / 2 - planned_width / 2
+            origin_y = topic["y"]
     fixed_rects = [
         (node["x"], node["y"], node["width"], measured_height(node))
         for node in result["nodes"]
@@ -226,7 +290,58 @@ def arrange_tree(board, papers, heights, topic_id, branches):
             and origin_y + planned_height + 80 > rect[1]
         ]
         if collisions:
-            origin_y = max(rect[1] + rect[3] for rect in collisions) + 180
+            if orientation == "vertical":
+                origin_x = max(rect[0] + rect[2] for rect in collisions) + 180
+            else:
+                origin_y = max(rect[1] + rect[3] for rect in collisions) + 180
+
+    if orientation == "vertical":
+        branch_x = origin_x + topic["width"] + TOPIC_GAP
+        cursor_y = origin_y
+        for _branch, branch_id, block_data, _lane_width, lane_height in lane_data:
+            branch_node = nodes[branch_id]
+            if not fixed(branch_node):
+                branch_node.update(
+                    x=branch_x,
+                    y=cursor_y + (lane_height - measured_height(branch_node)) / 2,
+                )
+            block_x = branch_x + branch_node["width"] + BRANCH_CONTENT_GAP
+            for group, buckets, block_width, block_height in block_data:
+                block_y = cursor_y + (lane_height - block_height) / 2
+                content_left = block_x + (GROUP_PADDING if group else 0)
+                content_top = block_y + (GROUP_HEADER + GROUP_PADDING if group else 0)
+                card_x = content_left
+                for _rank, bucket in sorted(buckets.items()):
+                    columns = [
+                        bucket[index:index + MAX_SIBLINGS_PER_COLUMN]
+                        for index in range(0, len(bucket), MAX_SIBLINGS_PER_COLUMN)
+                    ]
+                    for column in columns:
+                        column_width = max((card["width"] for card in column), default=0)
+                        column_height = (
+                            sum(measured_height(card) for card in column)
+                            + SIBLING_GAP * max(0, len(column) - 1)
+                        )
+                        reserved_header = GROUP_HEADER + GROUP_PADDING * 2 if group else 0
+                        card_y = content_top + (
+                            block_height - reserved_header - column_height
+                        ) / 2
+                        for card in column:
+                            card.update(x=card_x, y=card_y)
+                            card_y += measured_height(card) + SIBLING_GAP
+                        card_x += column_width + SIBLING_ROW_GAP
+                    card_x += RANK_GAP - (SIBLING_ROW_GAP if columns else 0)
+                if group:
+                    group.update(x=block_x, y=block_y, width=block_width, height=block_height)
+                block_x += block_width + BLOCK_GAP
+            cursor_y += lane_height + BRANCH_GAP
+
+        if not fixed(topic):
+            topic.update(
+                x=origin_x,
+                y=origin_y + (planned_height - measured_height(topic)) / 2,
+            )
+        return result
 
     branch_y = origin_y + measured_height(topic) + TOPIC_GAP
     cursor_x = origin_x

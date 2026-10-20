@@ -79,6 +79,26 @@ def test_preview_has_topic_branch_tree_and_distinct_evidence_backed_edges():
     assert proposal["board"]["edges"][0]["analysis"]["certainty"] == "inferred"
 
 
+def test_vertical_layout_stacks_branches_and_develops_papers_to_the_right():
+    from services.roadmap_layout import arrange_tree
+
+    catalog = {pid: paper(pid, year) for pid, year in (("a", "2010"), ("b", "2012"), ("c", "2020"))}
+    raw = {
+        "papers": [{"id": pid, "reason": "A milestone", "branch": "Foundations"} for pid in catalog],
+        "edges": [{"source": "a", "target": "c", "relation": "evolves_into", "reason": "A checked evolution",
+                   "evidence": [{"paperId": "c", "quote": catalog["c"]["abstract"]}]}],
+    }
+    proposal, _ = research.proposal_for(board(), {}, catalog, raw, [])
+    graph = proposal["board"]
+    topic = next(node for node in graph["nodes"] if node["roadmapRole"] == "topic")
+    branch = next(node for node in graph["nodes"] if node["roadmapRole"] == "branch")
+    arranged = arrange_tree(graph, catalog, {}, topic["id"], {"Foundations": branch["id"]}, "vertical")
+    nodes = {node.get("paperId") or node["id"]: node for node in arranged["nodes"]}
+    assert nodes[topic["id"]]["x"] < nodes[branch["id"]]["x"] < nodes["a"]["x"] < nodes["c"]["x"]
+    assert nodes["a"]["x"] == nodes["b"]["x"]
+    assert nodes["a"]["y"] != nodes["b"]["y"]
+
+
 def test_regeneration_keeps_user_notes_groups_unselected_cards_and_locked_edges():
     catalog = {"a": paper("a", "2010"), "b": paper("b", "2020")}
     preview, _ = research.proposal_for(board(), {}, catalog, synthesis(), [])

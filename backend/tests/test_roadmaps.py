@@ -184,6 +184,18 @@ def test_saved_roadmap_can_be_rearranged_without_starting_research(env):
     assert payload["revision"] == saved["revision"] + 1
     assert env.queue.latest("roadmap:" + board["id"]) is None
 
+    vertical = env.client.post("/api/roadmaps/layout", json={
+        "boardId": board["id"], "revision": payload["revision"], "heights": {},
+        "orientation": "vertical",
+    })
+    assert vertical.status_code == 200, vertical.text
+    mapped = {item["id"]: item for item in vertical.json()["state"]["boards"][0]["nodes"]}
+    assert mapped["topic"]["x"] < mapped["branch"]["x"] < mapped["card-a"]["x"] < mapped["card-b"]["x"]
+    assert env.client.post("/api/roadmaps/layout", json={
+        "boardId": board["id"], "revision": vertical.json()["revision"], "heights": {},
+        "orientation": "diagonal",
+    }).status_code == 422
+
 
 def test_external_catalog_can_be_edited_without_downloading_and_saves_conflict(env):
     add_catalog(env, metadata())

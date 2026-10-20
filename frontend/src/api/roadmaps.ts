@@ -22,6 +22,7 @@ export interface RoadmapReport {
   status: 'preview' | 'applied'
   hasAssets?: boolean
 }
+export type RoadmapLayoutOrientation = 'horizontal' | 'vertical'
 
 const api = axios.create({ baseURL: '/api/roadmaps', timeout: 30000 })
 
@@ -44,5 +45,11 @@ export const getRoadmapReport = (boardId: string, signal?: AbortSignal) =>
   api.get<RoadmapReport | null>('/report', { params: { boardId }, signal }).then(r => r.data)
 export const exportRoadmapReport = (boardId: string) =>
   api.get<Blob>('/report/export', { params: { boardId }, responseType: 'blob' }).then(r => r.data)
-export const arrangeRoadmap = (boardId: string, revision: number, heights: Record<string, number>) =>
-  api.post<DomainSnapshot & { before: DomainBoard }>('/layout', { boardId, revision, heights }).then(r => r.data)
+export const arrangeRoadmap = (
+  boardId: string,
+  revision: number,
+  heights: Record<string, number>,
+  orientation: RoadmapLayoutOrientation,
+) => api.post<DomainSnapshot & { before: DomainBoard }>(
+  '/layout', { boardId, revision, heights, orientation },
+).then(r => r.data)

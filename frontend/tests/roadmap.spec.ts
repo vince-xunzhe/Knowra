@@ -45,6 +45,7 @@ async function setup(page: Page, populated = false) {
   let importPosts = 0
   let researchPosts = 0
   let layoutPosts = 0
+  let lastLayoutOrientation: string | undefined
   let lastResearchPolicy: string | undefined
   let domainWrites = 0
   let appliedReport: RoadmapReport | null = populated ? { boardId: 'roadmap-llm', runId: 'previous-research', status: 'applied', markdown: '# Saved research report\n\n## Evidence gaps\n\nSome full texts were unavailable.' } : null
@@ -82,10 +83,13 @@ async function setup(page: Page, populated = false) {
       layoutPosts++
       const body = route.request().postDataJSON()
       expect(body.revision).toBe(revision)
+      lastLayoutOrientation = body.orientation
       const before = structuredClone(state.boards[0])
       state.boards[0] = { ...before, nodes: before.nodes.map(node => ({
         ...node,
-        x: node.roadmapRole === 'topic' ? 80 : node.roadmapRole === 'branch' ? 520 : node.x + 900,
+        ...(body.orientation === 'vertical'
+          ? { x: node.roadmapRole === 'topic' ? 80 : node.roadmapRole === 'branch' ? 520 : node.x + 900 }
+          : { y: node.roadmapRole === 'topic' ? 80 : node.roadmapRole === 'branch' ? 520 : node.y + 900 }),
       })) }
       revision++
       json = { state, revision, before }
@@ -161,6 +165,7 @@ async function setup(page: Page, populated = false) {
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
     saveAttempts: () => saveAttempts, researchPosts: () => researchPosts, layoutPosts: () => layoutPosts,
+    lastLayoutOrientation: () => lastLayoutOrientation,
     lastResearchPolicy: () => lastResearchPolicy,
     zoomMinimum: (minimum: number) => { zoomMinimum = minimum },
     conflict: () => { revision++ },
@@ -610,9 +615,21 @@ test('an existing roadmap can be arranged without running research again', async
   await page.getByRole('navigation').getByRole('button', { name: '识途', exact: true }).click()
   const roadmap = page.getByRole('region', { name: '识途', exact: true })
   await roadmap.getByRole('button', { name: '整理布局', exact: true }).click()
+  const menu = roadmap.getByRole('menu', { name: '整理布局', exact: true })
+  await expect(menu.getByRole('menuitem', { name: /横向排列/ })).toContainText('研究分支横向展开，论文向下演进。')
+  await expect(menu.getByRole('menuitem', { name: /竖直排列/ })).toContainText('研究分支纵向展开，论文向右演进。')
+  expect(app.layoutPosts()).toBe(0)
+  await menu.getByRole('menuitem', { name: /竖直排列/ }).click()
   await expect.poll(app.layoutPosts).toBe(1)
+  expect(app.lastLayoutOrientation()).toBe('vertical')
   await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'topic')?.x).toBe(80)
   await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'branch')?.x).toBe(520)
+  await roadmap.getByRole('button', { name: '整理布局', exact: true }).click()
+  await roadmap.getByRole('menuitem', { name: /横向排列/ }).click()
+  await expect.poll(app.layoutPosts).toBe(2)
+  expect(app.lastLayoutOrientation()).toBe('horizontal')
+  await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'topic')?.y).toBe(80)
+  await expect.poll(() => app.state().boards[0].nodes.find(node => node.id === 'branch')?.y).toBe(520)
   expect(app.researchPosts()).toBe(0)
   expect(app.errors()).toEqual([])
 })
