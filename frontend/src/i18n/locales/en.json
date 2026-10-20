@@ -1422,5 +1422,12 @@
   "原图暂时无法加载": "The source figure is temporarily unavailable",
   "论文原文图": "Original paper figure",
   "导出报告及图片失败，请重试。": "Could not export the report and figures. Please retry.",
-  "下载报告及图片": "Download report and figures"
+  "下载报告及图片": "Download report and figures",
+  "画布保存未完成，请重试。": "The canvas could not be saved. Please retry.",
+  "当前后端仍使用旧缩放限制，请重启本地后端后重试保存；请保留本页。": "The running backend still uses the old zoom limit. Restart the local backend, then retry saving. Keep this page open.",
+  "后端未接受画布数据，请保留本页并重试保存。": "The backend did not accept the canvas data. Keep this page open and retry saving.",
+  "画布保存超时，请稍后重试。": "Saving the canvas timed out. Please retry shortly.",
+  "无法连接后端，请检查本地服务后重试保存。": "Cannot connect to the backend. Check the local service and retry saving.",
+  "后端暂时无法保存画布，请稍后重试。": "The backend cannot save the canvas right now. Please retry shortly.",
+  "请先保存或重新加载画布": "Save or reload the canvas before continuing."
 }

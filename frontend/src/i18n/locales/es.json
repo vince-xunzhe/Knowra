@@ -1422,5 +1422,12 @@
   "原图暂时无法加载": "La figura original no está disponible temporalmente",
   "论文原文图": "Figura original del artículo",
   "导出报告及图片失败，请重试。": "No se pudo exportar el informe y las figuras. Vuelve a intentarlo.",
-  "下载报告及图片": "Descargar informe y figuras"
+  "下载报告及图片": "Descargar informe y figuras",
+  "画布保存未完成，请重试。": "No se pudo guardar el lienzo. Reintenta.",
+  "当前后端仍使用旧缩放限制，请重启本地后端后重试保存；请保留本页。": "El servidor sigue usando el límite de zoom anterior. Reinicia el servidor local y reintenta guardar. Mantén esta página abierta.",
+  "后端未接受画布数据，请保留本页并重试保存。": "El servidor no aceptó los datos del lienzo. Mantén esta página abierta y reintenta guardar.",
+  "画布保存超时，请稍后重试。": "Se agotó el tiempo para guardar el lienzo. Reintenta en unos instantes.",
+  "无法连接后端，请检查本地服务后重试保存。": "No se puede conectar al servidor. Comprueba el servicio local y reintenta guardar.",
+  "后端暂时无法保存画布，请稍后重试。": "El servidor no puede guardar el lienzo ahora. Reintenta en unos instantes.",
+  "请先保存或重新加载画布": "Guarda o vuelve a cargar el lienzo antes de continuar."
 }

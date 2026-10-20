@@ -50,6 +50,9 @@ async function setup(page: Page, populated = false) {
   let reportFailures = 0
   let exportFailures = 0
   let exportRequests = 0
+  let saveAttempts = 0
+  let zoomMinimum = 0.05
+  let saveFailure: { status: number; detail: unknown } | null = null
   const browserErrors: string[] = []
   page.on('pageerror', e => browserErrors.push(e.message))
   await page.route('**/api/**', async route => {
@@ -60,7 +63,15 @@ async function setup(page: Page, populated = false) {
     let json: unknown = {}
     if (path === '/api/roadmaps') {
       if (method === 'PUT') {
+        saveAttempts++
         const body = route.request().postDataJSON() as DomainSnapshot
+        if (saveFailure) return route.fulfill({ status: saveFailure.status, json: { detail: saveFailure.detail } })
+        const invalidBoard = body.state.boards.findIndex(b => b.viewport.zoom < zoomMinimum)
+        if (invalidBoard >= 0) return route.fulfill({ status: 422, json: { detail: [{
+          type: 'greater_than_equal', loc: ['body', 'state', 'boards', invalidBoard, 'viewport', 'zoom'],
+          msg: `Input should be greater than or equal to ${zoomMinimum}`, input: body.state.boards[invalidBoard].viewport.zoom,
+          ctx: { ge: zoomMinimum },
+        }] } })
         if (body.revision !== revision) return route.fulfill({ status: 409, json: { detail: 'Conflict' } })
         state = body.state; revision++; json = { revision }
       } else json = { state, revision }
@@ -88,6 +99,7 @@ async function setup(page: Page, populated = false) {
       if (method === 'POST') {
         researchPosts++
         const body = route.request().postDataJSON()
+        expect(body.revision).toBe(revision)
         const run: DomainAgentRun = { id: `research-${researchPosts}`, boardId: body.boardId, status: 'pending', jobId: 'research-job', error: null, proposal: null, progress: { label: '核验论文来源' } }
         runs = [run]; json = run
       } else json = runs
@@ -133,6 +145,10 @@ async function setup(page: Page, populated = false) {
   await expect(page.getByRole('combobox', { name: '领域', exact: true })).toHaveValue('roadmap-llm')
   return {
     state: () => state, errors: () => browserErrors, importPosts: () => importPosts, domainWrites: () => domainWrites,
+    saveAttempts: () => saveAttempts, researchPosts: () => researchPosts,
+    zoomMinimum: (minimum: number) => { zoomMinimum = minimum },
+    conflict: () => { revision++ },
+    failSave: (failure: typeof saveFailure) => { saveFailure = failure },
     failReportOnce: () => { reportFailures++ },
     failExportOnce: () => { exportFailures++ },
     exportRequests: () => exportRequests,
@@ -175,6 +191,89 @@ async function setup(page: Page, populated = false) {
     },
   }
 }
+
+for (const recovery of ['research', 'alert'] as const) test(`an old backend rejecting 8% zoom recovers through ${recovery} retry without losing edits`, async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const status = roadmap.locator('.domain-save')
+  const guidance = '当前后端仍使用旧缩放限制，请重启本地后端后重试保存；请保留本页。'
+  app.zoomMinimum(0.15)
+  await roadmap.locator('[data-node-id="node-0"] h3').click()
+  const note = roadmap.getByRole('textbox', { name: '卡片备注', exact: true })
+  await note.fill('Keep my unsaved research note')
+  await roadmap.getByTestId('roadmap-canvas').dispatchEvent('wheel', {
+    ctrlKey: true, deltaY: Math.log(1 / 0.08) / 0.008, clientX: 300, clientY: 300,
+  })
+  await expect(status).toContainText('保存失败，编辑仍保留在本页')
+  await expect(status).toContainText(guidance)
+  await expect(roadmap.getByText('8%', { exact: true })).toBeVisible()
+  expect(app.saveAttempts()).toBe(1)
+  expect(app.state().boards[0].nodes[0].text).toBe('')
+  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await expect(roadmap.getByRole('alert')).toContainText(guidance)
+  expect(app.saveAttempts()).toBe(2)
+  expect(app.researchPosts()).toBe(0)
+  await expect(note).toHaveValue('Keep my unsaved research note')
+
+  // The service now accepts the new schema; the same user action retries once.
+  app.zoomMinimum(0.05)
+  if (recovery === 'alert') {
+    await roadmap.getByRole('alert').getByRole('button', { name: '重试', exact: true }).click()
+    await expect(status).toContainText('已保存到本机')
+    await expect(roadmap.getByRole('alert')).toHaveCount(0)
+    expect(app.researchPosts()).toBe(0)
+    expect(app.state().boards[0].nodes[0].text).toBe('Keep my unsaved research note')
+  }
+  await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+  await expect(roadmap.getByText('核验论文来源', { exact: false })).toBeVisible()
+  await expect(status).toContainText('已保存到本机')
+  await expect(status).not.toContainText(guidance)
+  await expect(roadmap.getByRole('alert')).toHaveCount(0)
+  expect(app.saveAttempts()).toBe(3)
+  expect(app.researchPosts()).toBe(1)
+  expect(app.state().boards[0].viewport.zoom).toBeCloseTo(0.08)
+  expect(app.state().boards[0].nodes[0].text).toBe('Keep my unsaved research note')
+  expect(app.errors()).toEqual([])
+})
+
+test('retrying research after a revision conflict never retries a write or replaces local edits', async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  app.conflict()
+  await roadmap.locator('[data-node-id="node-0"] h3').click()
+  const note = roadmap.getByRole('textbox', { name: '卡片备注', exact: true })
+  await note.fill('Retain the conflicting local edit')
+  await expect(roadmap.locator('.domain-save')).toContainText('画布已在其他窗口更新，请重新加载')
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await roadmap.getByRole('button', { name: '重新调研', exact: true }).click()
+    await expect(roadmap.getByRole('alert')).toContainText('画布已在其他窗口更新，请重新加载')
+    await expect(note).toHaveValue('Retain the conflicting local edit')
+  }
+  await roadmap.getByRole('alert').getByRole('button', { name: '重试', exact: true }).click()
+  await expect(roadmap.getByRole('alert')).toHaveCount(0)
+  await expect(roadmap.locator('.domain-save')).toContainText('画布已在其他窗口更新，请重新加载')
+  await expect(note).toHaveValue('Retain the conflicting local edit')
+  expect(app.saveAttempts()).toBe(1)
+  expect(app.researchPosts()).toBe(0)
+  expect(app.state().boards[0].nodes[0].text).toBe('')
+  expect(app.errors()).toEqual([])
+})
+
+test('other save validation failures show a safe summary and explicit retry retains changes', async ({ page }) => {
+  const app = await setup(page, true)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  const diagnostic = 'internal diagnostic that must not appear in the interface'
+  app.failSave({ status: 422, detail: [{ loc: ['body', 'state'], msg: diagnostic }] })
+  await roadmap.locator('[data-node-id="node-0"] h3').click()
+  await roadmap.getByRole('textbox', { name: '卡片备注', exact: true }).fill('Preserved after validation failure')
+  await expect(roadmap.locator('.domain-save')).toContainText('后端未接受画布数据，请保留本页并重试保存。')
+  await expect(roadmap).not.toContainText(diagnostic)
+  app.failSave(null)
+  await roadmap.locator('.domain-save').getByRole('button', { name: '重试', exact: true }).click()
+  await expect(roadmap.locator('.domain-save')).toContainText('已保存到本机')
+  expect(app.state().boards[0].nodes[0].text).toBe('Preserved after validation failure')
+  expect(app.errors()).toEqual([])
+})
 
 test('research starts from an empty field, previews source-backed papers, and applies an editable roadmap', async ({ page }) => {
   const app = await setup(page)

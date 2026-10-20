@@ -6,6 +6,7 @@ export function useDomainAgent(loadRuns = listDomainRuns) {
   const [runs, setRuns] = useState<DomainAgentRun[]>([])
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
+  const clearError = useCallback(() => setError(''), [])
   const [loadError, setLoadError] = useState('')
   const fetching = useRef(false)
   const [busy, setBusy] = useState(false)
@@ -51,5 +52,5 @@ export function useDomainAgent(loadRuns = listDomainRuns) {
     window.addEventListener('focus', focus)
     return () => { clearTimeout(start); clearInterval(timer); window.removeEventListener('focus', focus) }
   }, [refresh])
-  return { runs, ready, error: error || loadError, busy, act, refresh }
+  return { runs, ready, error: error || loadError, busy, act, refresh, clearError }
 }

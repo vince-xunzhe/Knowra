@@ -797,7 +797,7 @@ export default function DomainPage({
           ) : workspace.status === 'saved' ? (
             <Check size={14} />
           ) : null}
-          {tr(statuses[workspace.status])}
+          <span>{tr(statuses[workspace.status])}{workspace.saveError && <> · {tr(workspace.saveError)}</>}</span>
           {workspace.status === 'error' && <button onClick={workspace.retry}>{tr('重试')}</button>}
           {workspace.status === 'conflict' && (
             <button
@@ -906,13 +906,17 @@ export default function DomainPage({
           <button onClick={() => void refreshPapers()}>{tr('重试')}</button>
         </div>
       )}
-      {agent.error && <div className="domain-error" role="alert">{agent.error}<button onClick={() => void agent.refresh()}>{tr('重试')}</button></div>}
+      {agent.error && <div className="domain-error" role="alert">{tr(agent.error)}<button onClick={() => {
+        if (workspace.status === 'error') workspace.retry()
+        agent.clearError()
+        void agent.refresh()
+      }}>{tr('重试')}</button></div>}
       {isRoadmap && <div className="roadmap-research-notice">
         <span>{tr('先筛选经典论文，再评估关键论文全文；按证据等级梳理关系，报告中标明全文缺口。')}</span>
         <span>{tr('下载仅保存论文到库，不自动生成回顾。')}</span>
       </div>}
       {isRoadmap && (imports.error || actionError) && <div className="domain-error" role="alert">
-        {actionError || imports.error}<button onClick={() => { setActionError(''); imports.refresh() }}>{tr('重试')}</button>
+        {tr(actionError || imports.error)}<button onClick={() => { setActionError(''); imports.refresh() }}>{tr('重试')}</button>
       </div>}
       {isRoadmap && imports.job && <div className="roadmap-import-progress" role="status">
         <span>{imports.busy ? (imports.job.progress.label || tr('正在下载入库'))
