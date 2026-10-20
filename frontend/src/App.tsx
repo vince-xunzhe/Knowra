@@ -115,6 +115,7 @@ function AppContent() {
             </button>
           )
         })}
+        <BackgroundTasks />
       </nav>
 
       {/* Main */}
@@ -151,7 +152,6 @@ function AppContent() {
       </main>
 
       <ProcessingStatus />
-      <BackgroundTasks />
       <WikiCompileStatus />
       <WikiLintStatus onOpen={() => { setPage('graph'); setLintOpen(true) }} />
     </div>
