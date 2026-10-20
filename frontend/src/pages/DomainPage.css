@@ -181,31 +181,31 @@
   color: var(--domain-muted);
   font-size: 12px;
 }
-.roadmap-page .domain-header {
+.domain-page .domain-header {
   gap: 14px;
   padding: 9px 26px;
 }
-.roadmap-page .domain-header > div:first-child {
+.domain-page .domain-header > div:first-child {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 10px;
 }
-.roadmap-page .domain-eyebrow {
+.domain-page .domain-eyebrow {
   font-size: 9px;
   white-space: nowrap;
 }
-.roadmap-page .domain-header h1 {
+.domain-page .domain-header h1 {
   margin: 0;
   font-size: 20px;
   white-space: nowrap;
 }
-.roadmap-page .domain-header p {
+.domain-page .domain-header p {
   margin-left: 2px;
   font-size: 11px;
   white-space: nowrap;
 }
-.roadmap-page .domain-header .domain-primary {
+.domain-page .domain-header .domain-primary {
   padding: 8px 13px;
 }
 .domain-save {
@@ -244,12 +244,12 @@
   border-bottom: 1px solid var(--domain-border);
   flex-shrink: 0;
 }
-.roadmap-page .domain-selector {
+.domain-page .domain-selector {
   gap: 6px;
   padding: 6px 26px;
 }
-.roadmap-page .domain-selector select,
-.roadmap-page .domain-selector input {
+.domain-page .domain-selector select,
+.domain-page .domain-selector input {
   padding-top: 7px;
   padding-bottom: 7px;
 }
@@ -518,6 +518,8 @@
   pointer-events: none;
 }
 .domain-group-heading {
+  position: relative;
+  z-index: 1;
   display: flex;
   gap: 8px;
   align-items: center;

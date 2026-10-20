@@ -154,6 +154,23 @@ async function setup(page: Page, inherited = false) {
     },
   }
 }
+
+test('domain keeps the header compact so the canvas starts near the top', async ({ page }) => {
+  await setup(page)
+  const domain = page.getByRole('region', { name: '索骥', exact: true })
+  const [headerBox, selectorBox, canvasBox] = await Promise.all([
+    domain.locator('.domain-header').boundingBox(),
+    domain.locator('.domain-selector').boundingBox(),
+    domain.getByTestId('domain-canvas').boundingBox(),
+  ])
+
+  expect(headerBox).not.toBeNull()
+  expect(selectorBox).not.toBeNull()
+  expect(canvasBox).not.toBeNull()
+  expect(headerBox!.height).toBeLessThanOrEqual(64)
+  expect(selectorBox!.height).toBeLessThanOrEqual(48)
+  expect(canvasBox!.y).toBeLessThanOrEqual(150)
+})
 async function importPaper(page: Page, title = reviews[0].title) {
   await page.locator('.domain-header').getByRole('button', { name: '导入论文', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '导入论文', exact: true })
