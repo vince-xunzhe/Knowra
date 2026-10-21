@@ -27,6 +27,17 @@ def context(monkeypatch):
         "services.paper_category_service._active_cache",
         ["LLM", "VLM", "VLA", "三维重建-静态", "三维重建-动态", "世界模型", "其他"],
     )
+
+    def set_categories(names):
+        cleaned = [name for name in names if name != "其他"] + ["其他"]
+        monkeypatch.setattr(
+            "services.paper_category_service._active_cache", cleaned
+        )
+        return cleaned
+
+    monkeypatch.setattr(
+        "services.domain_categories.set_active_categories", set_categories
+    )
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -259,6 +270,26 @@ def test_legacy_upgrade_promotes_local_domains_without_losing_content(
     assert client.get("/api/domains").json() == snapshot
     with session() as db:
         assert db.get(DomainWorkspace, 1).admitted == {"instance-1": "ready"}
+
+
+def test_global_category_read_adopts_a_legacy_roadmap_only_field(context):
+    from models import RoadmapWorkspace
+    from routers import papers
+    from routers.domains import Board, WorkspaceState
+
+    _, session = context
+    legacy = WorkspaceState(
+        boards=[Board(id="embodied-data", name="具身智能数据")],
+        activeId="embodied-data",
+    ).model_dump()
+    legacy["boards"][0].pop("category")
+    with session() as db:
+        db.add(RoadmapWorkspace(id=1, revision=1, state=legacy))
+        db.commit()
+        payload = papers.list_paper_categories(db)
+    names = [item["name"] for item in payload["categories"]]
+    assert "具身智能数据" in names
+    assert names[-1] == "其他"
 
 
 def test_category_rename_keeps_canvas_identity_and_delete_removes_it_globally(
