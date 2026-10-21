@@ -578,3 +578,26 @@ def test_category_rename_preserves_both_workspaces(research_db):
             assert row.state["boards"][0]["id"] == "vision"
             assert row.state["boards"][0]["name"] == "视觉生成"
             assert row.revision == 2
+
+
+def test_category_delete_removes_both_workspace_canvases(research_db):
+    from models import DomainWorkspace, RoadmapWorkspace
+    from services.domain_categories import delete_category_canvas
+
+    with research_db() as db:
+        db.add(
+            DomainWorkspace(
+                id=1,
+                revision=1,
+                state={"boards": [board()], "activeId": "vision"},
+                admitted={},
+            )
+        )
+        db.commit()
+        delete_category_canvas(db, "视觉")
+        db.commit()
+        for model in (DomainWorkspace, RoadmapWorkspace):
+            row = db.get(model, 1)
+            assert row.state["boards"] == []
+            assert row.state["activeId"] is None
+            assert row.revision == 2

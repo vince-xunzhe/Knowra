@@ -15,8 +15,10 @@ from models import RoadmapPaper, RoadmapRun, RoadmapWorkspace
 from pydantic import Field
 from services import task_runtime
 from services.domain_agent_state import begin_write, content
-from services.domain_categories import reconcile_categories
-from services.paper_category_service import get_active_categories
+from services.domain_categories import (
+    promote_workspace_categories,
+    reconcile_categories,
+)
 from services.roadmap_state import (
     BUSY,
     guard_readonly,
@@ -37,10 +39,11 @@ router = APIRouter(prefix="/api/roadmaps", tags=["roadmaps"])
 
 
 def workspace(db: Session, commit: bool = True) -> RoadmapWorkspace:
+    categories = promote_workspace_categories(db)
     row = db.get(RoadmapWorkspace, 1)
     if row is None:
         state = WorkspaceState.model_validate(reconcile_categories(
-            {"boards": [], "activeId": None}, get_active_categories()
+            {"boards": [], "activeId": None}, categories
         )).model_dump()
         row = RoadmapWorkspace(id=1, revision=1, state=state)
         db.add(row)
@@ -50,7 +53,7 @@ def workspace(db: Session, commit: bool = True) -> RoadmapWorkspace:
             db.rollback()
             row = db.get(RoadmapWorkspace, 1)
     for _ in range(3):
-        state = WorkspaceState.model_validate(reconcile_categories(row.state, get_active_categories())).model_dump()
+        state = WorkspaceState.model_validate(reconcile_categories(row.state, categories)).model_dump()
         if state == row.state:
             return row
         changed = db.query(RoadmapWorkspace).filter_by(id=1, revision=row.revision).update(

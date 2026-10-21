@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, defer
 from services.db_snapshot import finish_read_snapshot
-from services.domain_categories import rename_category_canvas
+from services.domain_categories import delete_category_canvas, rename_category_canvas
 from sqlalchemy.exc import SQLAlchemyError
 from database import get_db
 from services.paper_work_counts import paper_work_counts
@@ -1679,6 +1679,7 @@ def delete_paper_category(name: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
     if name not in active:
         raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
+    delete_category_canvas(db, name)
     set_active_categories([c for c in active if c != name])
     # Affected papers fall back (override/model cleared → effective re-derives).
     migrated = 0

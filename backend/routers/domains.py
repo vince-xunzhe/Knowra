@@ -11,11 +11,11 @@ from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
 from models import DomainWorkspace, Paper
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from services.domain_categories import reconcile_categories
-from services.paper_category_service import (
-    effective_paper_category,
-    get_active_categories,
+from services.domain_categories import (
+    promote_workspace_categories,
+    reconcile_categories,
 )
+from services.paper_category_service import effective_paper_category
 from services.vlm_service import parse_extraction_response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
@@ -236,11 +236,12 @@ def domain_papers(db: Annotated[Session, Depends(get_db)]):
 
 
 def workspace(db: Session, commit: bool = True) -> DomainWorkspace:
+    categories = promote_workspace_categories(db)
     row = db.get(DomainWorkspace, 1)
     if row is None:
         initial = WorkspaceState.model_validate(
             reconcile_categories(
-                {"boards": [], "activeId": None}, get_active_categories()
+                {"boards": [], "activeId": None}, categories
             )
         )
         row = DomainWorkspace(id=1, revision=1, state=initial.model_dump(), admitted={})
@@ -252,7 +253,7 @@ def workspace(db: Session, commit: bool = True) -> DomainWorkspace:
             row = db.get(DomainWorkspace, 1)
     for _ in range(3):
         state = WorkspaceState.model_validate(
-            reconcile_categories(row.state, get_active_categories())
+            reconcile_categories(row.state, categories)
         ).model_dump()
         if state == row.state:
             return row

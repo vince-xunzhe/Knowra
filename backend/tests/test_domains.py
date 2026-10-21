@@ -220,8 +220,11 @@ def test_dedupe_rewrites_all_instances_and_invalidates_stale_saves(context):
 
 
 @pytest.mark.parametrize("populated", [False, True])
-def test_legacy_upgrade_preserves_content_and_custom_domains(context, populated):
+def test_legacy_upgrade_promotes_local_domains_without_losing_content(
+    context, populated
+):
     from routers.domains import Board, WorkspaceState
+    from services.paper_category_service import get_active_categories
 
     client, session = context
     legacy = WorkspaceState(
@@ -247,14 +250,18 @@ def test_legacy_upgrade_preserves_content_and_custom_domains(context, populated)
     assert snapshot["revision"] == 8
     assert snapshot["state"]["activeId"] == "llm"
     assert snapshot["state"]["boards"][0]["nodes"] == legacy["boards"][0]["nodes"]
-    assert snapshot["state"]["boards"][-1]["id"] == "custom"
-    assert any(b["id"] == "3d" for b in snapshot["state"]["boards"]) == populated
+    custom = next(b for b in snapshot["state"]["boards"] if b["id"] == "custom")
+    assert custom["category"] == custom["name"] == "My topic"
+    legacy_3d = next(b for b in snapshot["state"]["boards"] if b["id"] == "3d")
+    assert legacy_3d["category"] == legacy_3d["name"] == "三维重建"
+    assert legacy_3d["nodes"] == legacy["boards"][1]["nodes"]
+    assert {"My topic", "三维重建"}.issubset(get_active_categories())
     assert client.get("/api/domains").json() == snapshot
     with session() as db:
         assert db.get(DomainWorkspace, 1).admitted == {"instance-1": "ready"}
 
 
-def test_category_add_rename_remove_keeps_canvas_identity_and_contents(
+def test_category_rename_keeps_canvas_identity_and_delete_removes_it_globally(
     context, monkeypatch
 ):
     from routers import papers
@@ -289,8 +296,8 @@ def test_category_add_rename_remove_keeps_canvas_identity_and_contents(
     set_categories(categories + ["Robotics"])
     added = client.get("/api/domains").json()
     assert any(b["category"] == "Robotics" for b in added["state"]["boards"])
-    set_categories([c for c in categories if c not in ("Language models", "VLM")])
+    with session() as db:
+        papers.delete_paper_category("Language models", db)
     removed = client.get("/api/domains").json()["state"]
-    kept = next(b for b in removed["boards"] if b["id"] == board["id"])
-    assert kept["category"] is None and kept["nodes"] == first["nodes"]
-    assert all(b["name"] != "VLM" for b in removed["boards"])
+    assert all(b["id"] != board["id"] for b in removed["boards"])
+    assert all(b["name"] != "Language models" for b in removed["boards"])
