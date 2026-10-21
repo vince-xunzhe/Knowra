@@ -464,8 +464,11 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   }, [papers])
 
   const filterCategoryOptions = useMemo(() => {
-    const configured = categoryOptions.filter(category => categoryCounts.has(category))
-    const configuredSet = new Set(configured)
+    // Keep the shared taxonomy visible even when a newly created field has no
+    // library papers yet. This makes category changes made in 识途/索骥
+    // immediately discoverable from the library filter.
+    const configured = [...categoryOptions]
+    const configuredSet = new Set(categoryOptions)
     const historical = [...categoryCounts.keys()]
       .filter(category => !configuredSet.has(category))
       .sort((a, b) => a.localeCompare(b, 'zh-CN'))

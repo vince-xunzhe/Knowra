@@ -14,7 +14,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, defer
 from services.db_snapshot import finish_read_snapshot
-from services.domain_categories import rename_category_canvas
+from services.domain_categories import (
+    delete_category_canvas,
+    promote_workspace_categories,
+    rename_category_canvas,
+)
 from sqlalchemy.exc import SQLAlchemyError
 from database import get_db
 from services.paper_work_counts import paper_work_counts
@@ -1595,7 +1599,9 @@ class BulkCategoryInput(BaseModel):
 
 
 def _category_payload(db: Session) -> dict:
-    active = get_active_categories()
+    # Reading the global taxonomy also adopts boards created by older builds,
+    # so opening 资料/回顾 directly cannot leave a legacy 识途 field orphaned.
+    active = promote_workspace_categories(db)
     counts = {c: 0 for c in active}
     for p in db.query(Paper).all():
         cat = effective_paper_category(p, _safe_parse(p.raw_llm_response))
@@ -1679,6 +1685,7 @@ def delete_paper_category(name: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
     if name not in active:
         raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
+    delete_category_canvas(db, name)
     set_active_categories([c for c in active if c != name])
     # Affected papers fall back (override/model cleared → effective re-derives).
     migrated = 0

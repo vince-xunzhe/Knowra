@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import axios from 'axios'
 import { domainApi, type DomainApi, type DomainState, type DomainSnapshot, type DomainBoard } from '../api/domains'
+import { PAPER_CATEGORIES_CHANGED_EVENT } from '../lib/paperCategoryEvents'
 
 function saveFailureMessage(error: unknown): string {
   if (!axios.isAxiosError(error)) return '画布保存未完成，请重试。'
@@ -221,6 +222,11 @@ export function useDomainWorkspace(api: Pick<DomainApi, 'load' | 'save'> = domai
     const start = setTimeout(() => void reload(), 0)
     return () => clearTimeout(start)
   }, [reload])
+  useEffect(() => {
+    const onCategoriesChanged = () => void refresh()
+    window.addEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    return () => window.removeEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+  }, [refresh])
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (current.current !== saved.current) {

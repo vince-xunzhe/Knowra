@@ -1451,5 +1451,8 @@
   "保留当前论文连线，再补充本轮调研发现的新关系。": "Keep current paper connections and add relationships found by this research run.",
   "清空并重新生成": "Clear and regenerate",
   "清除未锁定的旧论文连线，按本轮调研结果重新生成。": "Remove previous unlocked paper connections and regenerate them from this research run.",
-  "这项选择只影响论文之间的历史连线。": "This choice only affects previous connections between papers."
+  "这项选择只影响论文之间的历史连线。": "This choice only affects previous connections between papers.",
+  "删除全局领域「{0}」？该领域会从识途、索骥和其他页面移除；论文分类将回退，两个画布中的该领域内容也会删除。": "Delete the global field “{0}”? It will be removed from Roadmap, Domain, and other pages. Paper categories will fall back, and this field’s canvas content in both workspaces will also be deleted.",
+  "全局大类；这里的修改会同步到所有页面。": "Global category; changes here sync across all pages.",
+  "全局同步 · 仅保存在本机": "Synced globally · Stored locally only"
 }

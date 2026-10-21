@@ -27,6 +27,17 @@ def context(monkeypatch):
         "services.paper_category_service._active_cache",
         ["LLM", "VLM", "VLA", "三维重建-静态", "三维重建-动态", "世界模型", "其他"],
     )
+
+    def set_categories(names):
+        cleaned = [name for name in names if name != "其他"] + ["其他"]
+        monkeypatch.setattr(
+            "services.paper_category_service._active_cache", cleaned
+        )
+        return cleaned
+
+    monkeypatch.setattr(
+        "services.domain_categories.set_active_categories", set_categories
+    )
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
@@ -220,8 +231,11 @@ def test_dedupe_rewrites_all_instances_and_invalidates_stale_saves(context):
 
 
 @pytest.mark.parametrize("populated", [False, True])
-def test_legacy_upgrade_preserves_content_and_custom_domains(context, populated):
+def test_legacy_upgrade_promotes_local_domains_without_losing_content(
+    context, populated
+):
     from routers.domains import Board, WorkspaceState
+    from services.paper_category_service import get_active_categories
 
     client, session = context
     legacy = WorkspaceState(
@@ -247,14 +261,38 @@ def test_legacy_upgrade_preserves_content_and_custom_domains(context, populated)
     assert snapshot["revision"] == 8
     assert snapshot["state"]["activeId"] == "llm"
     assert snapshot["state"]["boards"][0]["nodes"] == legacy["boards"][0]["nodes"]
-    assert snapshot["state"]["boards"][-1]["id"] == "custom"
-    assert any(b["id"] == "3d" for b in snapshot["state"]["boards"]) == populated
+    custom = next(b for b in snapshot["state"]["boards"] if b["id"] == "custom")
+    assert custom["category"] == custom["name"] == "My topic"
+    legacy_3d = next(b for b in snapshot["state"]["boards"] if b["id"] == "3d")
+    assert legacy_3d["category"] == legacy_3d["name"] == "三维重建"
+    assert legacy_3d["nodes"] == legacy["boards"][1]["nodes"]
+    assert {"My topic", "三维重建"}.issubset(get_active_categories())
     assert client.get("/api/domains").json() == snapshot
     with session() as db:
         assert db.get(DomainWorkspace, 1).admitted == {"instance-1": "ready"}
 
 
-def test_category_add_rename_remove_keeps_canvas_identity_and_contents(
+def test_global_category_read_adopts_a_legacy_roadmap_only_field(context):
+    from models import RoadmapWorkspace
+    from routers import papers
+    from routers.domains import Board, WorkspaceState
+
+    _, session = context
+    legacy = WorkspaceState(
+        boards=[Board(id="embodied-data", name="具身智能数据")],
+        activeId="embodied-data",
+    ).model_dump()
+    legacy["boards"][0].pop("category")
+    with session() as db:
+        db.add(RoadmapWorkspace(id=1, revision=1, state=legacy))
+        db.commit()
+        payload = papers.list_paper_categories(db)
+    names = [item["name"] for item in payload["categories"]]
+    assert "具身智能数据" in names
+    assert names[-1] == "其他"
+
+
+def test_category_rename_keeps_canvas_identity_and_delete_removes_it_globally(
     context, monkeypatch
 ):
     from routers import papers
@@ -289,8 +327,8 @@ def test_category_add_rename_remove_keeps_canvas_identity_and_contents(
     set_categories(categories + ["Robotics"])
     added = client.get("/api/domains").json()
     assert any(b["category"] == "Robotics" for b in added["state"]["boards"])
-    set_categories([c for c in categories if c not in ("Language models", "VLM")])
+    with session() as db:
+        papers.delete_paper_category("Language models", db)
     removed = client.get("/api/domains").json()["state"]
-    kept = next(b for b in removed["boards"] if b["id"] == board["id"])
-    assert kept["category"] is None and kept["nodes"] == first["nodes"]
-    assert all(b["name"] != "VLM" for b in removed["boards"])
+    assert all(b["id"] != board["id"] for b in removed["boards"])
+    assert all(b["name"] != "Language models" for b in removed["boards"])

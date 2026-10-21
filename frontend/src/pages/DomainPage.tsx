@@ -49,6 +49,7 @@ import {
 } from '../api/domains'
 import { arrangeRoadmap, roadmapApi, type RoadmapLayoutOrientation } from '../api/roadmaps'
 import { localApiErrorMessage } from '../api/errors'
+import { addPaperCategory, deletePaperCategory, renamePaperCategory } from '../api/client'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
@@ -240,6 +241,8 @@ export default function DomainPage({
   const [paperError, setPaperError] = useState(false)
   const [papersLoading, setPapersLoading] = useState(true)
   const [actionError, setActionError] = useState('')
+  const [taxonomyBusy, setTaxonomyBusy] = useState(false)
+  const [taxonomyError, setTaxonomyError] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
   const [tool, setTool] = useState<'select' | 'hand'>('select')
@@ -780,26 +783,39 @@ export default function DomainPage({
     setImportOpen(false)
     setImportSelected(new Set())
   }
-  const selectBoard = (boardId: string) => {
+  const selectBoard = useCallback((boardId: string) => {
     update((s) => ({ ...s, activeId: boardId }), false)
     setSelected(new Set())
     setSelectedEdge(null)
     setPopover(null)
     setLinkSource(null)
     setSearch('')
-  }
-  const submitName = (e: React.FormEvent) => {
+  }, [update])
+  const pendingCategorySelection = useRef<string | null>(null)
+  const submitName = async (e: React.FormEvent) => {
     e.preventDefault()
     const name = nameDraft.trim()
-    if (!name) return
-    if (nameDialog === 'new') {
-      const next: DomainBoard = { id: id(), name, nodes: [], edges: [], viewport: { x: 80, y: 80, zoom: 1 } }
-      update((s) => ({ boards: [...s.boards, next], activeId: next.id }))
+    if (!name || taxonomyBusy) return
+    setTaxonomyBusy(true)
+    setTaxonomyError('')
+    try {
+      pendingCategorySelection.current = name
+      await workspace.withSaved(async () => {
+        if (nameDialog === 'new') await addPaperCategory(name)
+        else if (board?.category) await renamePaperCategory(board.category, name)
+        else throw new Error('当前领域尚未同步，请重新加载后重试。')
+      })
+      await refreshWorkspace()
       setSelected(new Set())
       setPopover(null)
       setSelectedEdge(null)
-    } else patchBoard((b) => (b.category ? b : { ...b, name }))
-    setNameDialog(null)
+      setNameDialog(null)
+    } catch (error) {
+      pendingCategorySelection.current = null
+      setTaxonomyError(localApiErrorMessage(error, '领域大类更新失败，请重试。'))
+    } finally {
+      setTaxonomyBusy(false)
+    }
   }
   const reorder = (offset: number) =>
     update((s) => {
@@ -811,20 +827,33 @@ export default function DomainPage({
       ;[boards[index], boards[target]] = [boards[target], boards[index]]
       return { ...s, boards }
     })
-  const deleteBoard = () => {
-    if (
-      !board ||
-      board.category ||
-      !window.confirm(tr('删除领域「{0}」及其画布内容？论文库中的论文不会被删除。', { 0: board.name }))
-    )
-      return
-    update((s) => {
-      const boards = s.boards.filter((b) => b.id !== s.activeId)
-      return { boards, activeId: boards[0]?.id ?? null }
-    })
-    setSelected(new Set())
-    setPopover(null)
-    setSelectedEdge(null)
+  useEffect(() => {
+    const category = pendingCategorySelection.current
+    if (!category) return
+    const target = state?.boards.find(item => item.category === category)
+    if (!target) return
+    pendingCategorySelection.current = null
+    selectBoard(target.id)
+  }, [selectBoard, state])
+  const deleteBoard = async () => {
+    if (!board?.category || board.category === '其他' || taxonomyBusy) return
+    if (!window.confirm(tr(
+      '删除全局领域「{0}」？该领域会从识途、索骥和其他页面移除；论文分类将回退，两个画布中的该领域内容也会删除。',
+      { 0: board.name },
+    ))) return
+    setTaxonomyBusy(true)
+    setTaxonomyError('')
+    try {
+      await workspace.withSaved(() => deletePaperCategory(board.category!))
+      await refreshWorkspace()
+      setSelected(new Set())
+      setPopover(null)
+      setSelectedEdge(null)
+    } catch (error) {
+      setTaxonomyError(localApiErrorMessage(error, '领域大类删除失败，请重试。'))
+    } finally {
+      setTaxonomyBusy(false)
+    }
   }
   const one = board?.nodes.find((n) => selected.size === 1 && selected.has(n.id))
   const selectedPaper = one?.paperId ? paperMap.get(one.paperId) : undefined
@@ -987,8 +1016,9 @@ export default function DomainPage({
         <button
           className="domain-new-board"
           aria-label={tr('新建领域')}
-          disabled={!state || agent.busy || !agent.ready}
+          disabled={!state || agent.busy || !agent.ready || taxonomyBusy}
           onClick={() => {
+            setTaxonomyError('')
             setNameDraft('')
             setNameDialog('new')
           }}
@@ -1032,6 +1062,7 @@ export default function DomainPage({
           <button onClick={() => void refreshPapers()}>{tr('重试')}</button>
         </div>
       )}
+      {taxonomyError && <div className="domain-error" role="alert">{tr(taxonomyError)}</div>}
       {agent.error && <div className="domain-error" role="alert">{tr(agent.error)}<button onClick={() => {
         if (workspace.status === 'error') workspace.retry()
         agent.clearError()
@@ -1662,10 +1693,11 @@ export default function DomainPage({
           )}
           <div className="domain-inspector-bottom">
             <h3>{tr('领域设置')}</h3>
-            {board?.category && <p>{tr('继承系统大类，请在知识页管理分类。')}</p>}
+            {board?.category && <p>{tr('全局大类；这里的修改会同步到所有页面。')}</p>}
             <button
-              disabled={!board || !!board.category}
+              disabled={!board?.category || board.category === '其他' || taxonomyBusy || readOnly}
               onClick={() => {
+                setTaxonomyError('')
                 setNameDraft(board?.name ?? '')
                 setNameDialog('rename')
               }}
@@ -1693,10 +1725,14 @@ export default function DomainPage({
                 {tr('后移')}
               </button>
             </div>
-            <button className="domain-danger" disabled={!board || !!board.category} onClick={deleteBoard}>
+            <button
+              className="domain-danger"
+              disabled={!board?.category || board.category === '其他' || taxonomyBusy || readOnly}
+              onClick={() => void deleteBoard()}
+            >
               {tr('删除领域')}
             </button>
-            <p>{tr('仅保存在本机')}</p>
+            <p>{tr('全局同步 · 仅保存在本机')}</p>
           </div>
           </fieldset>
         </aside>
@@ -1829,7 +1865,7 @@ export default function DomainPage({
             role="dialog"
             aria-modal="true"
             aria-label={tr(nameDialog === 'new' ? '新建领域' : '重命名领域')}
-            onSubmit={submitName}
+            onSubmit={(event) => void submitName(event)}
           >
             <h2>{tr(nameDialog === 'new' ? '新建领域' : '重命名领域')}</h2>
             <input
@@ -1840,11 +1876,12 @@ export default function DomainPage({
               onChange={(e) => setNameDraft(e.target.value)}
             />
             <footer>
-              <button type="button" onClick={() => setNameDialog(null)}>
+              <button type="button" disabled={taxonomyBusy} onClick={() => setNameDialog(null)}>
                 {tr('取消')}
               </button>
-              <button className="domain-primary" disabled={!nameDraft.trim()}>
-                {tr('保存')}
+              <button className="domain-primary" disabled={!nameDraft.trim() || taxonomyBusy}>
+                {taxonomyBusy ? <Loader2 size={14} className="spin" /> : null}
+                {tr(taxonomyBusy ? '正在保存' : '保存')}
               </button>
             </footer>
           </form>

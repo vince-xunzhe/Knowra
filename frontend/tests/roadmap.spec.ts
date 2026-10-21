@@ -38,6 +38,15 @@ function board(withPapers: boolean): DomainBoard {
 
 async function setup(page: Page, populated = false) {
   let state: DomainState = { activeId: 'roadmap-llm', boards: [board(populated), { ...board(false), id: 'roadmap-vlm', name: 'VLM', category: 'VLM' }] }
+  let domainState: DomainState = {
+    activeId: 'domain-llm',
+    boards: [
+      { ...board(false), id: 'domain-llm' },
+      { ...board(false), id: 'domain-vlm', name: 'VLM', category: 'VLM' },
+    ],
+  }
+  let domainRevision = 1
+  const categories = ['LLM', 'VLM']
   let revision = 1
   let candidates = populated ? structuredClone(papers) : []
   let runs: DomainAgentRun[] = []
@@ -153,13 +162,56 @@ async function setup(page: Page, populated = false) {
       }
       json = url.searchParams.get('boardId') === 'roadmap-vlm' ? null : importJob
     } else if (path === '/api/domains') {
-      if (method === 'PUT') domainWrites++
-      json = { state: { activeId: 'domain-llm', boards: [{ ...board(false), id: 'domain-llm' }] }, revision: 1 }
+      if (method === 'PUT') {
+        domainWrites++
+        const body = route.request().postDataJSON() as DomainSnapshot
+        domainState = body.state
+        domainRevision++
+      }
+      json = { state: domainState, revision: domainRevision }
     } else if (path === '/api/domains/papers' || path === '/api/domains/agent/runs') json = []
     else if (path === '/api/graph') json = { nodes: [], edges: [] }
     else if (path === '/api/papers') json = [{ id: 'library-transformer', title: papers[0].title, processed: false, filename: 'transformer.pdf', authors: [], paper_category: 'LLM', status: 'pending' }]
     else if (path === '/api/papers/library-transformer') json = { id: 'library-transformer', title: papers[0].title, processed: false, filename: 'transformer.pdf', authors: [], paper_category: 'LLM', knowledge_nodes: [], extraction: null, notes: '', chat: { messages: [] } }
-    else if (path === '/api/paper-categories') json = { categories: [{ name: 'LLM' }, { name: 'VLM' }] }
+    else if (path.startsWith('/api/paper-categories')) {
+      if (method === 'POST') {
+        const name = String(route.request().postDataJSON().name).trim()
+        if (!categories.includes(name)) categories.push(name)
+        if (!state.boards.some(item => item.category === name)) {
+          state = {
+            ...state,
+            boards: [...state.boards, {
+              ...board(false),
+              id: `roadmap-${name}`,
+              name,
+              category: name,
+            }],
+          }
+          revision++
+        }
+        if (!domainState.boards.some(item => item.category === name)) {
+          domainState = {
+            ...domainState,
+            boards: [...domainState.boards, {
+              ...board(false),
+              id: `domain-${name}`,
+              name,
+              category: name,
+            }],
+          }
+          domainRevision++
+        }
+      }
+      json = {
+        categories: categories.map(name => ({
+          name,
+          builtin: false,
+          removable: true,
+          count: name === 'LLM' ? 1 : 0,
+        })),
+        migrated: 0,
+      }
+    }
     else if (path === '/api/paper-teams') json = { teams: [] }
     else if (path === '/api/status') json = { running: false, total: 0, done: 0 }
     else if (path === '/api/jobs') json = []
@@ -250,6 +302,27 @@ test('roadmap navigation uses a mind-map icon and keeps the canvas close to the 
   expect(headerBox!.height).toBeLessThanOrEqual(64)
   expect(noticeBox!.height).toBeLessThanOrEqual(32)
   expect(canvasBox!.y).toBeLessThanOrEqual(190)
+})
+
+test('a field created in roadmap is available globally, including empty library filters', async ({ page }) => {
+  await setup(page)
+  const roadmap = page.getByRole('region', { name: '识途', exact: true })
+  await roadmap.getByRole('button', { name: '新建领域', exact: true }).click()
+  await roadmap.getByRole('textbox', { name: '领域名称', exact: true }).fill('具身智能数据')
+  await roadmap.getByRole('button', { name: '保存', exact: true }).click()
+  await expect(roadmap.getByRole('combobox', { name: '领域', exact: true }).locator('option:checked'))
+    .toHaveText('具身智能数据')
+
+  await page.getByRole('navigation').getByRole('button', { name: '索骥', exact: true }).click()
+  await expect(page.getByRole('region', { name: '索骥', exact: true })
+    .getByRole('combobox', { name: '领域', exact: true })
+    .getByRole('option', { name: '具身智能数据', exact: true }))
+    .toHaveCount(1)
+
+  await page.getByRole('navigation').getByRole('button', { name: '资料', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '按论文大类筛选', exact: true })
+    .getByRole('option', { name: '具身智能数据 · 0', exact: true }))
+    .toHaveCount(1)
 })
 
 test('rerun asks whether to keep previous relationships before starting research', async ({ page }) => {

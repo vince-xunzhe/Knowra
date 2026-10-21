@@ -7,6 +7,12 @@ from fastapi import HTTPException
 from models import DomainWorkspace, RoadmapWorkspace
 from sqlalchemy.orm import Session
 
+from services.paper_category_service import (
+    PAPER_CATEGORY_OTHER,
+    get_active_categories,
+    set_active_categories,
+)
+
 
 def reconcile_categories(state: dict, categories: list[str]) -> dict:
     result = deepcopy(state)
@@ -51,6 +57,31 @@ def reconcile_categories(state: dict, categories: list[str]) -> dict:
     return result
 
 
+def promote_workspace_categories(db: Session) -> list[str]:
+    """Promote legacy page-local boards into the shared paper taxonomy."""
+    active = get_active_categories()
+    additions: list[str] = []
+    known = set(active)
+    for model in (DomainWorkspace, RoadmapWorkspace):
+        row = db.get(model, 1)
+        if row is None or not isinstance(row.state, dict):
+            continue
+        for board in row.state.get("boards", []):
+            if not isinstance(board, dict):
+                continue
+            name = str(board.get("name") or "").strip()
+            if name and name not in known:
+                known.add(name)
+                additions.append(name)
+    if additions:
+        set_active_categories(
+            [category for category in active if category != PAPER_CATEGORY_OTHER]
+            + additions
+            + ([PAPER_CATEGORY_OTHER] if PAPER_CATEGORY_OTHER in active else [])
+        )
+    return get_active_categories()
+
+
 def rename_category_canvas(db: Session, old: str, new: str) -> None:
     """Join the caller's category-rename transaction; never create a workspace."""
     for model in (DomainWorkspace, RoadmapWorkspace):
@@ -84,5 +115,41 @@ def _rename_workspace(db, model, old, new):
             db.rollback()
             raise HTTPException(
                 409, "Canvas changed during category rename; please retry"
+            )
+        db.expire(row)
+
+
+def delete_category_canvas(db: Session, name: str) -> None:
+    """Remove one global category and its canvases from both workspaces."""
+    for model in (DomainWorkspace, RoadmapWorkspace):
+        row = db.get(model, 1)
+        if row is None:
+            continue
+        state = deepcopy(row.state)
+        boards = [
+            board
+            for board in state["boards"]
+            if not (
+                board.get("category") == name
+                or (not board.get("category") and board.get("name") == name)
+            )
+        ]
+        if len(boards) == len(state["boards"]):
+            continue
+        state["boards"] = boards
+        if state.get("activeId") not in {board["id"] for board in boards}:
+            state["activeId"] = boards[0]["id"] if boards else None
+        updated = (
+            db.query(model)
+            .filter_by(id=1, revision=row.revision)
+            .update(
+                {"state": state, "revision": row.revision + 1},
+                synchronize_session=False,
+            )
+        )
+        if not updated:
+            db.rollback()
+            raise HTTPException(
+                409, "Canvas changed during category deletion; please retry"
             )
         db.expire(row)
