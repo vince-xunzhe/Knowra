@@ -1451,5 +1451,8 @@
   "保留当前论文连线，再补充本轮调研发现的新关系。": "Conserva las conexiones actuales y añade las relaciones encontradas en esta investigación.",
   "清空并重新生成": "Borrar y regenerar",
   "清除未锁定的旧论文连线，按本轮调研结果重新生成。": "Elimina las conexiones anteriores sin bloquear y las regenera con los resultados de esta investigación.",
-  "这项选择只影响论文之间的历史连线。": "Esta elección solo afecta a las conexiones anteriores entre artículos."
+  "这项选择只影响论文之间的历史连线。": "Esta elección solo afecta a las conexiones anteriores entre artículos.",
+  "删除全局领域「{0}」？该领域会从识途、索骥和其他页面移除；论文分类将回退，两个画布中的该领域内容也会删除。": "¿Eliminar el campo global «{0}»? Se quitará de Hoja de ruta, Domain y las demás páginas. Las categorías de los artículos volverán a su valor derivado y también se borrará el contenido de este campo en ambos lienzos.",
+  "全局大类；这里的修改会同步到所有页面。": "Categoría global; los cambios se sincronizan en todas las páginas.",
+  "全局同步 · 仅保存在本机": "Sincronizado globalmente · Guardado solo en este equipo"
 }

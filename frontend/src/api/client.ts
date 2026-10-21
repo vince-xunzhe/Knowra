@@ -3,6 +3,7 @@ import { getLocale, type Locale } from '../i18n/store'
 import axios from 'axios'
 import { resolveJobResult, type BackgroundJob } from './jobs'
 import { readWithRetry, singleFlight } from './polling'
+import { notifyPaperCategoriesChanged } from '../lib/paperCategoryEvents'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
 
@@ -358,20 +359,29 @@ export const listPaperCategories = () =>
 export const addPaperCategory = (name: string) =>
   api
     .post<{ categories: PaperCategoryItem[] }>('/paper-categories', { name })
-    .then(r => r.data.categories)
+    .then(r => {
+      notifyPaperCategoriesChanged()
+      return r.data.categories
+    })
 export const renamePaperCategory = (name: string, newName: string) =>
   api
     .put<{ categories: PaperCategoryItem[]; migrated: number }>(
       `/paper-categories/${encodeURIComponent(name)}`,
       { new_name: newName },
     )
-    .then(r => r.data)
+    .then(r => {
+      notifyPaperCategoriesChanged()
+      return r.data
+    })
 export const deletePaperCategory = (name: string) =>
   api
     .delete<{ categories: PaperCategoryItem[]; migrated: number }>(
       `/paper-categories/${encodeURIComponent(name)}`,
     )
-    .then(r => r.data)
+    .then(r => {
+      notifyPaperCategoriesChanged()
+      return r.data
+    })
 export const bulkSetPaperCategory = (paperIds: (string | number)[], category: string | null) =>
   api
     .post<{ updated: number; category: string | null }>('/papers/bulk-category', {

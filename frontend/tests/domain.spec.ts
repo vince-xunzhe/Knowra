@@ -42,7 +42,7 @@ async function setup(page: Page, inherited = false) {
     activeId: 'llm',
     boards: (inherited ? ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] : ['LLM', '三维重建']).map((name, i) => ({
       id: i ? (inherited ? `category-${i}` : '3d') : 'llm',
-      category: inherited ? name : null,
+      category: name,
       name,
       nodes: [],
       edges: [],
@@ -51,6 +51,7 @@ async function setup(page: Page, inherited = false) {
   }
   let revision = 1,
     failSave = false
+  let categories = state.boards.map(board => board.name)
   let runs: DomainAgentRun[] = []
   const errors: string[] = []
   page.on('pageerror', (e) => errors.push(e.message))
@@ -105,7 +106,61 @@ async function setup(page: Page, inherited = false) {
         notes: '',
         chat: { messages: [] },
       }
-    } else if (path === '/api/paper-categories') json = { categories: [{ name: 'LLM' }] }
+    } else if (path.startsWith('/api/paper-categories')) {
+      const method = route.request().method()
+      if (method === 'POST') {
+        const name = String(route.request().postDataJSON().name).trim()
+        if (!categories.includes(name)) {
+          categories = [
+            ...categories.filter(item => item !== '其他'),
+            name,
+            ...categories.filter(item => item === '其他'),
+          ]
+        }
+        if (!state.boards.some(board => board.category === name)) {
+          state = {
+            ...state,
+            boards: [...state.boards, {
+              id: `category-${name}`,
+              category: name,
+              name,
+              nodes: [],
+              edges: [],
+              viewport: { x: 80, y: 80, zoom: 1 },
+            }],
+          }
+          revision++
+        }
+      } else if (method === 'PUT') {
+        const current = decodeURIComponent(path.split('/').pop()!)
+        const next = String(route.request().postDataJSON().new_name).trim()
+        categories = categories.map(item => item === current ? next : item)
+        state = {
+          ...state,
+          boards: state.boards.map(board => board.category === current
+            ? { ...board, category: next, name: next }
+            : board),
+        }
+        revision++
+      } else if (method === 'DELETE') {
+        const current = decodeURIComponent(path.split('/').pop()!)
+        categories = categories.filter(item => item !== current)
+        state = { ...state, boards: state.boards.filter(board => board.category !== current) }
+        if (!state.boards.some(board => board.id === state.activeId)) {
+          state.activeId = state.boards[0]?.id ?? null
+        }
+        revision++
+      }
+      json = {
+        categories: categories.map(name => ({
+          name,
+          builtin: false,
+          removable: name !== '其他',
+          count: 0,
+        })),
+        migrated: 0,
+      }
+    }
     else if (path === '/api/paper-teams') json = { teams: [] }
     else if (path === '/api/status') json = { running: false, total: 0, done: 0 }
     else if (path === '/api/promotion/counts')
@@ -710,8 +765,12 @@ test('navigation order and inherited system categories preserve edits on taxonom
   for (const category of ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他']) {
     await expect(selector.getByRole('option', { name: category, exact: true })).toHaveCount(1)
   }
+  await expect(page.getByRole('button', { name: '重命名领域', exact: true })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '删除领域', exact: true })).toBeEnabled()
+  await selector.selectOption('category-6')
   await expect(page.getByRole('button', { name: '重命名领域', exact: true })).toBeDisabled()
   await expect(page.getByRole('button', { name: '删除领域', exact: true })).toBeDisabled()
+  await selector.selectOption('llm')
   await importPaper(page)
   await expect(page.getByRole('status')).toHaveText('已保存到本机')
   const nodes = structuredClone(context.snapshot().boards[0].nodes)
