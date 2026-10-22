@@ -34,6 +34,7 @@ import {
   cloudWarmup,
   getDeviceId,
   getStoredSession,
+  isExpiredSyncSessionError,
   performSignedUpload,
   setLastSyncAt,
   type CommitResponse,
@@ -239,6 +240,15 @@ export async function runSync(
   snapshot: LocalSnapshot,
   onProgress: SyncProgressFn = () => {},
 ): Promise<CommitResponse> {
+  return runSyncAttempt(snapshot, onProgress, [], true)
+}
+
+async function runSyncAttempt(
+  snapshot: LocalSnapshot,
+  onProgress: SyncProgressFn,
+  reusableUploads: { rel_path: string; content_hash: string }[],
+  canRecoverExpiredSession: boolean,
+): Promise<CommitResponse> {
   const session = getStoredSession()
   if (!session) {
     const err = new SyncError(tr("未登录云端账号"), 'error')
@@ -280,31 +290,46 @@ export async function runSync(
     throw new SyncError(message, 'preparing')
   }
 
+  // A commit may discover that its session expired after a slow upload.
+  // On the one automatic re-prepare we can reuse files that are already
+  // present in Storage, provided the new snapshot still has the same hash.
+  const reusableByPath = new Map(reusableUploads.map(item => [item.rel_path, item]))
+  const reused = prepResp.uploads_required.flatMap(instr => {
+    const cached = reusableByPath.get(instr.rel_path)
+    const local = uploadIndex.get(instr.rel_path)
+    return cached && local && cached.content_hash === local.row.content_hash
+      ? [cached]
+      : []
+  })
+  const reusedPaths = new Set(reused.map(item => item.rel_path))
+  const uploadsRequired = prepResp.uploads_required.filter(item => !reusedPaths.has(item.rel_path))
+
   // Persist the session so a crash mid-upload doesn't strand it.
   savePending({
     sync_session_id: prepResp.sync_session_id,
     expires_at: prepResp.expires_at,
-    uploaded: [],
+    uploaded: reused,
   })
 
   // Step 2: upload.
   const uploadsTotal = prepResp.uploads_required.length
   const uploadsSkipped = prepResp.uploads_skipped.length
-  onProgress({ stage: 'uploading', uploadsDone: 0, uploadsTotal, uploadsSkipped })
+  onProgress({ stage: 'uploading', uploadsDone: reused.length, uploadsTotal, uploadsSkipped })
 
-  const { uploaded, failures } = await runUploadsWithConcurrency(
-    prepResp.uploads_required,
+  const { uploaded: newlyUploaded, failures } = await runUploadsWithConcurrency(
+    uploadsRequired,
     uploadIndex,
     (done, current) => {
       onProgress({
         stage: 'uploading',
-        uploadsDone: done,
+        uploadsDone: reused.length + done,
         uploadsTotal,
         uploadsSkipped,
         currentFile: current,
       })
     },
   )
+  const uploaded = [...reused, ...newlyUploaded]
 
   // Update pending so a crash before commit can still finish via the
   // user clicking sync again.
@@ -330,6 +355,14 @@ export async function runSync(
       uploaded,
     })
   } catch (err) {
+    if (canRecoverExpiredSession && isExpiredSyncSessionError(err)) {
+      // The files have already reached Storage. Drop the stale local
+      // session, create a fresh staging row, and claim the matching
+      // uploads again so recovery does not resend hundreds of files.
+      savePending(null)
+      onProgress({ stage: 'preparing', uploadsDone: 0, uploadsTotal: 0, uploadsSkipped: 0 })
+      return runSyncAttempt(snapshot, onProgress, uploaded, false)
+    }
     const message = (err as Error).message || tr("commit 失败")
     onProgress({ stage: 'error', uploadsDone: uploaded.length, uploadsTotal, uploadsSkipped, error: message })
     throw new SyncError(message, 'committing')
@@ -420,6 +453,12 @@ export async function resumeCommit(
     })
     return commitResp
   } catch (err) {
+    if (isExpiredSyncSessionError(err)) {
+      // There is nothing useful left to resume. Returning null lets the
+      // UI fall back to a fresh full sync using a newly gathered snapshot.
+      savePending(null)
+      return null
+    }
     const message = (err as Error).message || tr("resume commit 失败")
     onProgress({
       stage: 'error',

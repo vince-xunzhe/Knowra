@@ -518,6 +518,27 @@ interface CloudApiErrorBody {
   message?: string
 }
 
+/** Preserve the HTTP status and server error code for callers that can
+ * recover from a specific protocol response (for example, sync commit
+ * can transparently re-prepare after an expired session). */
+export class CloudRequestError extends Error {
+  readonly status?: number
+  readonly code?: string
+
+  constructor(message: string, status?: number, code?: string) {
+    super(message)
+    this.name = 'CloudRequestError'
+    this.status = status
+    this.code = code
+  }
+}
+
+export function isExpiredSyncSessionError(err: unknown): boolean {
+  return err instanceof CloudRequestError
+    && err.status === 410
+    && (err.code === undefined || err.code === 'expired')
+}
+
 /** A call failed in a way that's worth retrying: no HTTP response at
  *  all (network reset / cold-start 503 from the Fly proxy with no CORS
  *  headers — surfaces as ERR_NETWORK), a 502/503/504, or a timeout.
@@ -534,9 +555,9 @@ function isRetriable(err: unknown): boolean {
   return status === 502 || status === 503 || status === 504
 }
 
-function cloudErrorMessage(err: unknown, label: string): string {
+function toCloudRequestError(err: unknown, label: string): Error {
   const ax = err as AxiosError<CloudApiErrorBody>
-  if (!ax?.isAxiosError) return err instanceof Error ? err.message : String(err)
+  if (!ax?.isAxiosError) return err instanceof Error ? err : new Error(String(err))
 
   const status = ax.response?.status
   const detail = ax.response?.data?.detail
@@ -546,9 +567,13 @@ function cloudErrorMessage(err: unknown, label: string): string {
   const detailError = typeof detail === 'object' && detail?.details
     ? String(detail.details.error || detail.details.reason || '').trim()
     : ''
+  const code = typeof detail === 'object'
+    ? detail?.error
+    : ax.response?.data?.error
   const prefix = status ? `${label} 失败（HTTP ${status}）` : `${label} 失败`
   const message = bodyMessage || ax.message || '请求失败'
-  return detailError ? `${prefix}: ${message}；${detailError}` : `${prefix}: ${message}`
+  const rendered = detailError ? `${prefix}: ${message}；${detailError}` : `${prefix}: ${message}`
+  return new CloudRequestError(rendered, status, code)
 }
 
 /**
@@ -582,7 +607,7 @@ async function withRetry<T>(
       await new Promise(res => setTimeout(res, delay))
     }
   }
-  throw new Error(cloudErrorMessage(lastErr, label))
+  throw toCloudRequestError(lastErr, label)
 }
 
 // ── endpoint wrappers ──────────────────────────────────────────────────
