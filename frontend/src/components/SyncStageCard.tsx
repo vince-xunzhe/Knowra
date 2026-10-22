@@ -157,7 +157,11 @@ export default function SyncStageCard({ expanded, onToggle }: Props) {
 
   const handleResume = async () => {
     try {
-      await resumeCommit(setProgress)
+      const resumed = await resumeCommit(setProgress)
+      if (resumed === null) {
+        await handleRun()
+        return
+      }
       await refreshCloudStatus()
     } catch {
       // progress already carries it

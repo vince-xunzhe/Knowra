@@ -129,7 +129,7 @@ Content-Type: application/json
 ```json
 {
   "sync_session_id": "8c4f2a-...",         // 用于第三步 commit
-  "expires_at": "2026-05-27T11:15:00Z",    // 10 分钟有效期
+  "expires_at": "2026-05-27T12:05:00Z",    // 1 小时有效期
   "uploads_required": [
     {
       "rel_path": "papers/0001-foo.md",
@@ -164,7 +164,7 @@ x-upsert: true
 
 **关键点**：
 - 直接走 Supabase Storage 域名，**不经过我们的 FastAPI**
-- 上传 URL 内嵌一次性 token，10 分钟有效
+- 上传 URL 内嵌一次性 token，1 小时有效，给大型知识库的批量上传留足时间
 - 单文件失败 → 单独重试（其他文件不受影响）
 - 实际并发度建议 **6 并发**（避免压爆 Storage rate limit）
 

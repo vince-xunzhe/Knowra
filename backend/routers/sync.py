@@ -14,7 +14,7 @@ High-level flow:
        vs upload_skipped
     4. ask the storage backend to sign a PUT URL for each upload_required
        at storage_path = wiki/<user_id>/<rel_path>
-    5. return sync_session_id + upload list + 10-min expiry
+    5. return sync_session_id + upload list + 1-hour expiry
 
   commit:
     1. validate sync_session_id exists, belongs to caller, not expired,
@@ -105,7 +105,11 @@ def get_cloud_db():
 # ── helpers ───────────────────────────────────────────────────────────
 
 
-PREPARE_TTL_SECONDS = 600  # 10 minutes
+# Large libraries can upload hundreds of wiki files over a high-latency
+# desktop connection. Keep the session aligned with the one-hour lifetime
+# documented by the schema and protocol so a healthy first sync does not
+# expire between prepare and commit.
+PREPARE_TTL_SECONDS = 3600
 
 
 def _to_utc(dt: datetime) -> datetime:
@@ -744,14 +748,12 @@ def commit(
             "sync_session belongs to a different user",
         )
 
-    now = datetime.now(timezone.utc)
-    expires_at = session.expires_at
-    if expires_at is not None and expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if expires_at and expires_at < now:
-        raise _err(status.HTTP_410_GONE, "expired", "sync_session has expired; rerun prepare")
-
     # ── replay cached response on duplicate commit ────────────────
+    # A committed session is immutable. Replay it even after its upload
+    # window has elapsed so a client that lost the original response can
+    # still learn the committed revision instead of incorrectly starting
+    # a second sync.
+    now = datetime.now(timezone.utc)
     if session.status == "committed" and session.committed_response:
         cached = session.committed_response
         return CommitResponse(
@@ -760,6 +762,12 @@ def commit(
             rejected=[CommitRejection(**r) for r in cached.get("rejected", [])],
             server_now=now,
         )
+
+    expires_at = session.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and expires_at < now:
+        raise _err(status.HTTP_410_GONE, "expired", "sync_session has expired; rerun prepare")
 
     # ── HEAD-check uploaded files ─────────────────────────────────
     rejected: list[CommitRejection] = []
