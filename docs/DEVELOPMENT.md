@@ -16,19 +16,21 @@ git worktree list
 cd "../knowra-$task_id"
 ```
 
-不要输出含认证信息的远端 URL。每个 worktree 自己安装 `backend/.venv`、`frontend/node_modules`，不跨工作区链接环境或 `data/`。`.cache/` 内工具缓存与验收快照也独立。旧工作区清理不属于初始化操作。
+不要输出含认证信息的远端 URL。每个 worktree 自己安装受记录管理的 `backend/.venv`（保留旧环境迁移时为 `backend/.venv-native-py312`）、`frontend/node_modules`，不跨工作区链接环境或 `data/`。`.cache/` 内工具缓存与验收快照也独立。旧工作区清理不属于初始化操作。
 
 ## 安装、启动与端口
 
 本机 Web 基线为 Python **3.12.13+ / 3.12.x**、Node **24.14.1+ / 24.x**；固定版本见 `.python-version`、`.node-version`；当前 Web 锁为 Vite 8.0.9、TypeScript 6.0.3。准备好这些运行时和 `uv`（本轮锁由 0.11.14 生成）后：
 
 ```bash
-PYTHON_BIN=python3.12 ./scripts/install-native.sh
+./scripts/install-native.sh
 ./start.sh --check
 BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ```
 
 安装只用官方 PyPI 哈希锁、wheel 和 npm 锁；清空包管理器继承配置并使用工作区缓存。npm 使用 `ci --ignore-scripts`：当前仅可选 `fsevents` 标记安装脚本，Web 构建使用包中现成的原生绑定。新增依赖/脚本须重新核查，不能以 `npm rebuild`、重签名或移除隔离属性盲目修复。
+
+安装器只寻找已安装的基线 Python，不下载运行时；可用 `PYTHON_BIN` 明确指定受支持解释器，`NODE_BIN` 可指定 `.../bin/node` 并仅调整本次命令 PATH。旧环境迁移和日常 main 的使用步骤见 [INSTALL.zh.md](../INSTALL.zh.md)。安装记录包含环境路径、Python 版本、锁哈希和 installing/ready 状态，安装失败不能被视为就绪。
 
 安装不启动服务。启动不安装依赖、不启动 Docker/Colima、不处理原生签名、不自动打开浏览器。`--check` 只验证运行时、安装锁标记、数据边界和端口，不导入应用。默认端口为 8103/5183；并行工作区必须显式分配另一对空闲端口，占用时失败而不偷偷换端口。
 
@@ -42,9 +44,9 @@ BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ./scripts/check.sh
 ```
 
-此入口依次执行：
+此入口先运行 `scripts/test_native_startup.py`：在本工作区临时夹具中直接执行安装、`--check` 和日常 `./start.sh`，使用合成配置与 mock 回环服务；然后依次执行：
 
-1. `backend/.venv/bin/python scripts/check_backend.py`：在本 worktree `.cache/` 内复制必要 Python 源码，使用独立临时数据，运行明确列出的 queue/executor/background-dispatch 子集与 PostgreSQL opt-in 门禁检查；禁止外网、真实配置/日常数据读取及快照外写入。不是整个后端套件。
+1. `scripts/check.sh` 使用安装记录选定的解释器运行 `scripts/check_backend.py`：在本 worktree `.cache/` 内复制必要 Python 源码，使用独立临时数据，运行明确列出的 queue/executor/background-dispatch 子集与 PostgreSQL opt-in 门禁检查；禁止外网、真实配置/日常数据读取及快照外写入。不是整个后端套件。
 前端检查由 `scripts/check_frontend.py` 在 `.cache/` 源码快照中执行，排除 `.env*` 并清空继承环境，构建明确禁用 Vite env 加载；不指向日常服务。
 
 2. `npm --prefix frontend run test:unit`：Node 自带 test runner 执行 polling 单测，不混收 Playwright。

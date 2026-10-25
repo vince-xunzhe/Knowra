@@ -96,3 +96,6 @@ frontend/playwright-report/
 # Worktree-only tool caches and isolated verification output
 /.cache/
 /.local/
+
+# Managed native environment beside a preserved legacy environment
+/backend/.venv-native-py312/
