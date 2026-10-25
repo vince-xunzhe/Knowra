@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from database import assert_processing_schema
 from models import Base, Paper
 from services.task_store import TaskStore
 from services import task_executor as executor
@@ -26,6 +27,11 @@ class TaskExecutorTests(unittest.TestCase):
         Base.metadata.create_all(engine)
         self.sessions = sessionmaker(bind=engine)
         for mock in [patch('database.SessionLocal', self.sessions),
+                     patch('database.engine', engine),
+                     # The production helper's default engine is bound at
+                     # definition time; exercise its real checks on this fixture.
+                     patch('database.assert_processing_schema',
+                           side_effect=lambda: assert_processing_schema(engine)),
                      patch('config.load_config', return_value={}),
                      patch.dict(os.environ, {'KNOWRA_TASK_EXECUTOR': '1'})]:
             mock.start()

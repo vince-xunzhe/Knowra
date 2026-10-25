@@ -1,108 +1,39 @@
-# 安装说明
+# 本机 Web 安装说明
 
 [中文](INSTALL.zh.md) | [English](INSTALL.md)
 
-本文档说明 Knowra 的依赖环境、启动命令和手动运行方式。
+每轮先从最新 main 建立独立 worktree 和分支，详见[开发工作区与验收](docs/DEVELOPMENT.md)。不要共享旧目录的虚拟环境、node_modules 或研究数据。
 
-## 环境要求
+## 运行时
 
-推荐安装：
+- Python **3.12.13+，限 3.12.x**，见 `.python-version`。
+- Node **24.14.1+，限 24.x** 与 npm，见 `.node-version`。
+- PATH 中可用的 `uv`；本轮 Python 锁由 uv 0.11.14 生成。
 
-- Docker Desktop，或 Docker CLI + Colima + Docker Compose。
-- 一个可用的 OpenAI API Key。
+这是本机 Web 基线，不代表移动端/容器版本要求。安装和离线验收无需真实 API Key。
 
-有 Docker runtime 时，项目会使用固定容器环境运行，不依赖宿主机 Python、Node 或 npm 版本。
-
-本机 fallback 模式需要：
-
-- Python 3.10 或更新版本。
-- Node.js 20 或更新版本。
-- npm。
-
-## 快速开始
+## 显式安装与验证
 
 ```bash
-./start.sh
+PYTHON_BIN=python3.12 ./scripts/install-native.sh
+./scripts/check.sh
+./start.sh --check
 ```
 
-启动脚本会自动：
+安装入口在当前 worktree 创建 `backend/.venv`，从官方 PyPI 安装 `backend/requirements-dev.lock` 中有哈希的 wheel，并从官方 npm 按现有锁执行 `npm ci --ignore-scripts`。缓存及空 npm 配置都在 `.cache/`，不启动服务、不迁移数据库、不重签名或修改系统权限。已有不兼容 Python 环境会被拒绝，不自动覆盖。
 
-1. 检测 Docker Compose 是否可用。
-2. Docker 可用时构建并启动后端和前端容器。
-3. 如果检测到 Colima 但 runtime 未启动，会自动启动 Colima。
-4. Docker 不可用时回退到本机 Python/Node 模式。
-5. 自动避开已占用端口，从 `8000` 和 `5173` 向后寻找可用端口。
-6. 启动前端并打开浏览器。
+验收入口运行隔离后端子集、polling 单测、TypeScript/Vite 构建和现有 ESLint，任一步失败返回非零；不自动运行 PostgreSQL、真实服务或浏览器 E2E。`start.sh --check` 只做启动前检查，不导入应用。
 
-## 运行选项
+## 显式启动
 
 ```bash
-KNOWLEDGE_WIKI_MODE=docker ./start.sh   # 强制容器模式
-KNOWLEDGE_WIKI_MODE=native ./start.sh   # 强制本机模式
-OPEN_BROWSER=0 ./start.sh               # 不自动打开浏览器
-BACKEND_PORT=8000 FRONTEND_PORT=5173 ./start.sh
+BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ```
 
-## 配置 API Key
+并行 worktree 各用一对空闲端口，占用时明确失败。启动只使用已安装依赖，不自动安装包、选 Docker、启 Colima、重签名原生模块或打开浏览器。可显式设 `KNOWLEDGE_WIKI_MODE=native`；旧 `auto`/`docker` 值会被拒绝并说明原因。现有 Docker 文件保持不变，容器操作仍需另行明确选择。
 
-启动后可以在应用的「设置」页配置 API Key。
+API 启动可能初始化/迁移本 worktree 的 `data/` 并按既有策略启动独立 worker。检测到已有 SQLite 时，需先确认备份和迁移影响，再设置 `KNOWRA_ALLOW_EXISTING_DATA=1`。不允许链接其他工作区数据或使用外部队列路径。关闭 API/Web **不会停止独立 worker**，须遵循[后台任务说明](docs/TASK-WORKERS.md)。
 
-也可以通过环境变量临时提供：
+真实凭据可以在明确授权的运行会话中通过应用设置配置。根 `.env` 默认不读取；明确需要本 worktree 的配置时设 `KNOWRA_LOAD_ENV=1`，由 Uvicorn 解析环境值，不作为 shell source。不得提交真实凭据。后端热重载仍仅在 `BACKEND_RELOAD=1` 时开启。
 
-```bash
-export OPENAI_API_KEY="sk-..."
-./start.sh
-```
-
-如果需要长期本地运行，可以复制配置模板：
-
-```bash
-cp .env.example .env
-```
-
-然后在 `.env` 中填写 `OPENAI_API_KEY`。`.env` 会被 Docker Compose 和本机 fallback 共同读取，并且默认不提交到 Git。
-
-## 首次使用
-
-1. 运行 `./start.sh` 启动应用。
-2. 打开「设置」页。
-3. 填入 OpenAI API Key。
-4. 确认扫描目录，默认是 `data/papers`。
-5. 选择论文处理模型和 embedding 模型。
-6. 设置相似度阈值，默认 `0.6`。
-7. 保存设置。
-
-## 手动运行
-
-容器模式：
-
-```bash
-docker compose up --build
-```
-
-本机后端：
-
-```bash
-cd backend
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --port 8000 --reload
-```
-
-本机前端：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-## 排查
-
-- 如果端口被占用，`start.sh` 会自动尝试下一个端口。
-- 如果 Docker 不可用，可以使用 `KNOWLEDGE_WIKI_MODE=native ./start.sh`。
-- 如果本机模式的 Node 报错，请确认 `node -v` 是 20 或更新版本。
-- 如果论文处理失败，请检查应用「设置」页中的 OpenAI API Key 和模型配置。
-
-返回 [README](README.zh.md)。
+数据备份目标、加密和保留策略由用户决定后再实施，清单见开发文档。本轮没有自动备份、数据库复制或两机同步。完成开发、验证、review修复及冲突核验后，在当轮发布授权范围交付非 Draft PR，由用户 merge。

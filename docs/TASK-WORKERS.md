@@ -98,7 +98,7 @@ Availability checks do not call a model or verify login/network/model access.
 ## Verification
 
 ```bash
-backend/.venv/bin/python -m pytest -q backend/tests/test_task_queue.py backend/tests/test_task_executor.py backend/tests/test_paper_background_dispatch.py
+backend/.venv/bin/python scripts/check_backend.py
 cd frontend
 node --test tests/polling.test.mjs
 npm run build

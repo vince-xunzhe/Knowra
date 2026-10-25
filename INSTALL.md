@@ -1,108 +1,46 @@
-# Install
+# Install (native Web development)
 
 [中文](INSTALL.zh.md) | [English](INSTALL.md)
 
-This guide covers environment requirements, startup commands, and manual run options for Knowra.
+Use a fresh worktree and branch for each iteration; follow [Development](docs/DEVELOPMENT.md). Never reuse another checkout's virtual environment, node_modules or research data.
 
 ## Requirements
 
-Recommended:
+- Python 3.12.13 or later **within 3.12.x** (`.python-version`).
+- Node 24.14.1 or later **within 24.x**, with npm (`.node-version`).
+- `uv` available on PATH; the checked-in Python lock was generated with uv 0.11.14.
 
-- Docker Desktop, or Docker CLI + Colima + Docker Compose.
-- A valid OpenAI API key.
+These are the supported native Web baseline, not mobile/container requirements. An API key is not needed to install or run the offline checks.
 
-When Docker is available, the project runs in pinned containers and does not depend on host Python, Node, or npm versions.
-
-Native fallback requirements:
-
-- Python 3.10 or newer.
-- Node.js 20 or newer.
-- npm.
-
-## Quick Start
+## Install explicitly
 
 ```bash
-./start.sh
+PYTHON_BIN=python3.12 ./scripts/install-native.sh
 ```
 
-The launcher will:
+The installer creates this worktree's `backend/.venv`, installs hash-checked official PyPI wheels from `backend/requirements-dev.lock`, and runs `npm ci --ignore-scripts` against the official npm registry. Tool caches and empty npm config files stay in `.cache/`. It does not start services, migrate a database or change system permissions/signatures. No existing environment is replaced with an incompatible Python version.
 
-1. Detect whether Docker Compose is available.
-2. Build and start backend/frontend containers when Docker is available.
-3. Start Colima automatically when Colima is installed but stopped.
-4. Fall back to native Python/Node setup when Docker is unavailable.
-5. Avoid occupied ports by searching upward from `8000` and `5173`.
-6. Start the frontend and open the browser.
-
-## Runtime Options
+## Validate before starting
 
 ```bash
-KNOWLEDGE_WIKI_MODE=docker ./start.sh   # force container mode
-KNOWLEDGE_WIKI_MODE=native ./start.sh   # force native mode
-OPEN_BROWSER=0 ./start.sh               # do not open the browser automatically
-BACKEND_PORT=8000 FRONTEND_PORT=5173 ./start.sh
+./scripts/check.sh
+./start.sh --check
 ```
 
-## Configure The API Key
+The first command runs the isolated backend subset, polling unit tests, TypeScript/Vite build and existing ESLint; it returns nonzero for any failure. It does not run PostgreSQL, real providers or browser E2E. The second is a read-only launch preflight. See [Development](docs/DEVELOPMENT.md) for scope and known-check reporting.
 
-You can configure the API key in the app Settings page after startup.
-
-For temporary shell-based setup:
+## Start this worktree
 
 ```bash
-export OPENAI_API_KEY="sk-..."
-./start.sh
+BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ```
 
-For repeated local runs, copy the config template:
+Choose distinct free ports for each concurrent worktree. Startup uses installed dependencies only; it no longer installs packages, selects Docker automatically, starts Colima, re-signs modules or opens a browser. `KNOWLEDGE_WIKI_MODE=native` is optional; old `auto`/`docker` values are rejected with an explanation. Existing Docker files are unchanged, and container operations remain a separate explicit workflow.
 
-```bash
-cp .env.example .env
-```
+The API may initialize/migrate **this worktree's** `data/` and launch the existing independent worker. Existing SQLite files require explicit `KNOWRA_ALLOW_EXISTING_DATA=1` after reviewing backup/migration implications. Shared data symlinks and external task-queue paths are rejected. Stopping API/Web does not stop an independent worker; read [worker operations](docs/TASK-WORKERS.md).
 
-Then set `OPENAI_API_KEY` in `.env`. The `.env` file is read by both Docker Compose and the native fallback, and is ignored by Git.
+Credentials may be configured later in the application's Settings, within an authorized running session. The launcher does not load root `.env` by default. To use this worktree's local file explicitly, set `KNOWRA_LOAD_ENV=1`; Uvicorn parses it as environment data, not shell code. Never commit real credentials. Backend reload remains opt-in with `BACKEND_RELOAD=1`.
 
-## First Run
+## Backup and delivery
 
-1. Start the app with `./start.sh`.
-2. Open Settings.
-3. Enter your OpenAI API key.
-4. Confirm the scan directory, defaulting to `data/papers`.
-5. Select the paper processing model and embedding model.
-6. Set the similarity threshold, defaulting to `0.6`.
-7. Save settings.
-
-## Manual Run
-
-Container mode:
-
-```bash
-docker compose up --build
-```
-
-Native backend:
-
-```bash
-cd backend
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --port 8000 --reload
-```
-
-Native frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-## Troubleshooting
-
-- If a port is already occupied, `start.sh` automatically tries the next port.
-- If Docker is unavailable, use `KNOWLEDGE_WIKI_MODE=native ./start.sh`.
-- If native mode fails on Node, check that `node -v` is 20 or newer.
-- If paper processing fails, confirm the OpenAI API key and model settings in the app Settings page.
-
-Return to [README](README.md).
+[Development](docs/DEVELOPMENT.md) records the backup decisions still required from the user. No automatic backup, database copy or two-machine synchronization is included. After implementation, validation, review fixes and conflict checks, deliver a non-Draft PR only with that round's publication authorization; the user merges.

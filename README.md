@@ -8,7 +8,7 @@ The current build is no longer tied to a single OpenAI path. It now ships with a
 
 For installation, environment setup, and startup commands, see [Install](INSTALL.md).
 
-Development environment note: the install guide and `start.sh` currently accept Node 20 too broadly. Locked Vite requires `^20.19.0 || >=22.12.0`; the optional mobile app's React Native requires `>=20.19.4`. The container files declare Python 3.12 and Node 24. Native version pinning and stricter startup checks remain to be added; keep the existing npm lockfiles when preparing another machine.
+Native Web development uses Python 3.12.13+ within 3.12.x and Node 24.14.1+ within 24.x. Each iteration uses a fresh worktree with its own environment and data. Install explicitly with `./scripts/install-native.sh`, validate with `./scripts/check.sh`, then run `./start.sh --check` before starting. See [worktree, validation and backup guidance](docs/DEVELOPMENT.md).
 
 ## Highlights
 
@@ -220,7 +220,7 @@ data/
 
 For native startup, `bash start.sh` disables backend auto-reload by default. Developers can opt in with `KNOWLEDGE_WIKI_MODE=native BACKEND_RELOAD=1 bash start.sh`. Paper processing runs in an independent worker: closing a browser or restarting the API does not terminate that worker. If the worker itself is interrupted, work can resume from saved checkpoints through the background-tasks panel; an interrupted model call may run again. Stopping the API does not stop all work. See [worker operations](docs/TASK-WORKERS.md) for shutdown and recovery.
 
-`./start.sh` reads local configuration and installs dependencies; container mode may start Colima and build images, while native macOS mode may adjust native Node module attributes/signatures. API startup can apply database schema changes/backfills and start a worker. For development checks, use an isolated checkout/worktree with separate data instead of a live research database. Reviewing documentation does not establish that startup, builds or tests pass; record which checks were actually run.
+`./start.sh` starts the installed native environment only; installation, Docker/Colima and native module signing are separate from startup. Root `.env` loading is opt-in. Existing databases require explicit acknowledgement because API startup can apply schema changes/backfills and start a worker. Use each worktree's independent data and the isolated verification entrypoint; never point checks at a live research database. Record actual validation results and deliver a non-Draft PR after review and conflict checks, with publication authorization for that round.
 
 Local mode allows only one backend per data directory, even on different ports. SQLite uses WAL with a 30-second lock wait; paper processing retries transient lock conflicts after rolling back, reusing successful model results within that run. For a live database backup, use SQLite's backup API (as the migration and deduplication scripts do), not a copy of `knowledge.db` alone: committed data may still be in its WAL sidecar.
 

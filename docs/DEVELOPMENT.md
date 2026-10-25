@@ -1,112 +1,75 @@
-# 开发说明
+# 开发工作区与验收
 
-本文档记录本地开发、校验和发布时最常用的操作。
+每轮迭代从最新远端 `main` 新建 worktree 和独立分支。原目录、旧 worktree、未提交文件和日常研究数据都保留；不 reset/stash/clean。发布需要当轮授权，完成验证、review 修复和冲突核验后交付非 Draft PR，由用户 merge。
 
-## 本地开发
+## 新建一轮工作区
 
-推荐一键启动：
-
-```bash
-./start.sh
-```
-
-默认会优先使用 Docker Compose，以固定 Python/Node 运行环境。如果使用 Colima 作为 Docker runtime，`start.sh` 会在需要时自动启动 Colima。需要指定模式时：
+在已有仓库中先检查状态和远端地址，再执行（`task_id` 每轮不同）：
 
 ```bash
-KNOWLEDGE_WIKI_MODE=docker ./start.sh
-KNOWLEDGE_WIKI_MODE=native ./start.sh
+GIT_OPTIONAL_LOCKS=0 git -c core.fsmonitor=false status --short
+git remote -v
+git fetch --no-tags origin main
+task_id=native-checks
+git worktree add -b "work/$task_id" "../knowra-$task_id" origin/main
+git worktree list
+cd "../knowra-$task_id"
 ```
 
-容器模式手动启动：
+不要输出含认证信息的远端 URL。每个 worktree 自己安装 `backend/.venv`、`frontend/node_modules`，不跨工作区链接环境或 `data/`。`.cache/` 内工具缓存与验收快照也独立。旧工作区清理不属于初始化操作。
+
+## 安装、启动与端口
+
+本机 Web 基线为 Python **3.12.13+ / 3.12.x**、Node **24.14.1+ / 24.x**；固定版本见 `.python-version`、`.node-version`；当前 Web 锁为 Vite 8.0.4、TypeScript 6.0.2。准备好这些运行时和 `uv`（本轮锁由 0.11.14 生成）后：
 
 ```bash
-docker compose up --build
+PYTHON_BIN=python3.12 ./scripts/install-native.sh
+./start.sh --check
+BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ```
 
-本机模式分别启动：
+安装只用官方 PyPI 哈希锁、wheel 和 npm 锁；清空包管理器继承配置并使用工作区缓存。npm 使用 `ci --ignore-scripts`：当前仅可选 `fsevents` 标记安装脚本，Web 构建使用包中现成的原生绑定。新增依赖/脚本须重新核查，不能以 `npm rebuild`、重签名或移除隔离属性盲目修复。
+
+安装不启动服务。启动不安装依赖、不启动 Docker/Colima、不处理原生签名、不自动打开浏览器。`--check` 只验证运行时、安装锁标记、数据边界和端口，不导入应用。默认端口为 8103/5183；并行工作区必须显式分配另一对空闲端口，占用时失败而不偷偷换端口。
+
+`data/` 仍锚定当前 worktree，API 启动会初始化或迁移该目录并按既有策略启动独立 worker。已有数据库时先确认备份/迁移影响，再显式设置 `KNOWRA_ALLOW_EXISTING_DATA=1`；不允许数据目录链接到其他工作区。任务队列必须留在当前 `data/`，启动入口固定 local 模式。根 `.env` 默认不读取，确需本工作区凭据时用 `KNOWRA_LOAD_ENV=1` 显式交给 Uvicorn 解析（不作为 shell 脚本 source）；检查和安装不需要凭据。
+
+后端默认不热重载；开发可设 `BACKEND_RELOAD=1`。关闭启动脚本只关闭 API/Web，**不会终止独立 worker**。worker 的默认策略没有改变，手动 external 模式也须另行启动 worker；关闭、升级和恢复见 [TASK-WORKERS.md](TASK-WORKERS.md)。不要将启动当作验收。
+
+## 一条命令验收
 
 ```bash
-cd backend
-. .venv/bin/activate
-uvicorn main:app --port 8000 --reload
+./scripts/check.sh
 ```
+
+此入口依次执行：
+
+1. `backend/.venv/bin/python scripts/check_backend.py`：在本 worktree `.cache/` 内复制必要 Python 源码，使用独立临时数据，运行明确列出的 queue/executor/background-dispatch 子集与 PostgreSQL opt-in 门禁检查；禁止外网、真实配置/日常数据读取及快照外写入。不是整个后端套件。
+前端检查由 `scripts/check_frontend.py` 在 `.cache/` 源码快照中执行，排除 `.env*` 并清空继承环境，构建明确禁用 Vite env 加载；不指向日常服务。
+
+2. `npm --prefix frontend run test:unit`：Node 自带 test runner 执行 polling 单测，不混收 Playwright。
+3. `npm --prefix frontend run build`：TypeScript 与 Vite 生产构建。
+4. `npm --prefix frontend run lint`：现有完整 ESLint。任何一步失败会返回非零，其他检查仍完成；既有 lint 债务必须报告，不能静默吞掉或借基建任务重写业务代码。
+
+默认入口不启动应用、浏览器、真实模型服务或 PostgreSQL。现有 Playwright/E2E 另行审批与隔离，不自动执行。PostgreSQL 测试会重建 schema，仅在专用可丢弃实例且显式 opt-in 时运行，详见 `backend/requirements-postgres.txt`；URL 环境变量本身不足以启用。
+
+## 更新依赖
+
+修改后端直接依赖 `backend/requirements.txt` 或测试输入 `backend/requirements-dev.in` 后，在本工作区使用官方源重新生成锁（不要手改哈希）：
 
 ```bash
-cd frontend
-npm run dev
+UV_CACHE_DIR="$PWD/.cache/uv" uv --no-config pip compile backend/requirements-dev.in --python-version 3.12 --universal --generate-hashes --no-header --no-annotate --only-binary :all: --default-index https://pypi.org/simple --output-file backend/requirements-dev.lock
 ```
 
-## 依赖管理
+再执行安装与验收。前端保留 `package-lock.json` 的精确版本和 integrity；只有确需升级时才更新依赖。不能复制另一台机器的 venv/node_modules。下载依赖需要网络，验收默认离线。
 
-后端依赖写在 `backend/requirements.txt`。新增 Python 依赖后，手动更新该文件。
+## 数据备份：待用户决定，不自动执行
 
-前端依赖写在 `frontend/package.json` 和 `frontend/package-lock.json`。新增依赖时在 `frontend/` 下执行：
+代码通过 Git；数据、秘密、环境不随 Git 或两台机器自动同步。开始备份前由用户决定目标位置、加密方式、保留周期、可停机窗口和是否保留可重建产物。
 
-```bash
-npm install package-name
-```
+- 必须评估：`data/knowledge.db`、`data/tasks.db`、论文 `data/papers/`、人工/派生 wiki `data/wiki/`、`data/paper_records/`、运行配置 `data/config.json` 与必要偏好文件。配置可能含凭据，只能进入用户批准的受保护备份，绝不写入公开仓库。
+- 可按恢复需求决定：`data/artifacts/`、`data/roadmap_assets/`、其他可重建缓存；不能未经确认删除原件。
+- 排除：`.venv`、`node_modules`、`.cache`、`frontend/dist`、日志和进程锁。活跃 SQLite 使用 backup API 取得一致快照；不要仅复制 `.db` 并丢弃 WAL，也不要同步正在写入的数据库。
+- 恢复演练应使用另一个隔离 worktree 和独立端口，验证数据库完整性、记录/论文数量及资源引用，禁用真实外部服务；通过后再讨论正式迁移。
 
-如果使用容器模式，依赖会在镜像构建或容器启动时自动安装。前端 `node_modules` 使用 Docker volume 隔离，避免和不同宿主机的原生依赖混用。
-
-机器本地配置可以放在根目录 `.env` 中：
-
-```bash
-cp .env.example .env
-```
-
-`.env` 会被 `start.sh` 和 Docker Compose 读取，适合放 API Key、端口和运行模式。
-
-## 基础校验
-
-后端语法检查：
-
-```bash
-python3 -m compileall -q -x 'backend/\\.venv' backend
-```
-
-前端构建：
-
-```bash
-cd frontend
-npm run build
-```
-
-前端 lint：
-
-```bash
-cd frontend
-npm run lint
-```
-
-## 数据目录
-
-`data/` 是本地运行状态目录。仓库只保留以下占位文件：
-
-- `data/papers/.gitkeep`
-- `data/artifacts/.gitkeep`
-
-以下内容默认被 `.gitignore` 排除：
-
-- PDF 文件。
-- SQLite 数据库。
-- 渲染图片缓存。
-- `data/config.json`，因为它可能包含 API Key。
-
-## 处理失败排查
-
-1. 在「论文」页查看单篇错误。
-2. 在「回顾」页查看 `raw_llm_response`，确认模型是否返回了合法 JSON。
-3. 检查「设置」页里的 API Key、模型和扫描目录。
-4. 如果修改了 Prompt，优先对一篇论文重试，再批量处理。
-5. 如果相似边过多或过少，只需要调整阈值并重建相似度边。
-
-## 发布建议
-
-提交前建议运行：
-
-```bash
-python3 -m compileall -q -x 'backend/\\.venv' backend
-cd frontend && npm run build
-```
-
-如果仓库里出现了本地数据，先确认 `.gitignore` 是否覆盖，然后只暂存源码、文档和必要配置。
+本轮只提供此清单，未读取、复制、移动或删除研究数据，也未创建自动备份/两机同步。CI、部署、移动端打包和旧 worktree 清理后置。

@@ -7,8 +7,16 @@
 #
 #     docker run --rm -d --name knowra-rls-test -p 54322:5432 \
 #         -e POSTGRES_PASSWORD=knowra -e POSTGRES_DB=knowra_test postgres:16
-#     backend/.venv/bin/pip install -r backend/requirements-postgres.txt
+#     UV_CACHE_DIR="$PWD/.cache/uv" uv --no-config pip install --python backend/.venv/bin/python \
+#         --only-binary :all: --default-index https://pypi.org/simple -r backend/requirements-postgres.txt
 #     export KNOWRA_TEST_POSTGRES_URL=postgresql://postgres:knowra@localhost:54322/knowra_test
+#     export KNOWRA_ALLOW_DESTRUCTIVE_PG_TESTS=1
 #     backend/.venv/bin/python -m unittest backend.tests.test_postgres_rls
+#
+# This is destructive and is excluded from the default offline check. Only
+# loopback targets with an explicit non-5432 port, database knowra_test and
+# no URL query/fragment or PG* environment overrides are accepted. Clear PG*
+# variables first; keep the two explicit KNOWRA_* settings above. Do not point
+# this suite at a shared instance.
 
 psycopg2-binary==2.9.10

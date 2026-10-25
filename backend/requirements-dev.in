@@ -1,0 +1,3 @@
+-r requirements.txt
+# FastAPI TestClient used by the offline unittest subset.
+httpx==0.28.1

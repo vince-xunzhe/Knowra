@@ -92,3 +92,7 @@ frontend/playwright-report/
 
 # Separate local Python 3.12 environment (not publication content)
 /backend/.venv-py312/
+
+# Worktree-only tool caches and isolated verification output
+/.cache/
+/.local/
