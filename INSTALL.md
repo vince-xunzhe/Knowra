@@ -27,7 +27,7 @@ The installer creates this worktree's `backend/.venv`, installs hash-checked off
 ./start.sh --check
 ```
 
-The first command runs the isolated backend subset, polling unit tests, TypeScript/Vite build and existing ESLint; it returns nonzero for any failure. It does not run PostgreSQL, real providers or browser E2E. The second is a read-only launch preflight. See [Development](docs/DEVELOPMENT.md) for scope and known-check reporting.
+The first command runs the isolated backend subset, polling unit tests, TypeScript/Vite build, full ESLint (zero warnings) and mock browser regressions against real React components. It requires an installed Chrome/Chromium; it never downloads a browser. Every failure or missing prerequisite returns nonzero. The browser uses a temporary profile and a random loopback port, with mocked APIs and external requests blocked. PostgreSQL, real providers and the existing application E2E suite are not run. The second command is a read-only launch preflight. See [Development](docs/DEVELOPMENT.md) for scope and browser configuration.
 
 ## Start this worktree
 

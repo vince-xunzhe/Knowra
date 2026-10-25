@@ -28,11 +28,12 @@ import {
   type ChatState, type ChatMessage,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
-import PaperProcessBadge, {
+import PaperProcessBadge from '../components/PaperProcessBadge'
+import {
   inferPaperProcessMeta,
   summarizePaperError,
   type ProcessStatusHint,
-} from '../components/PaperProcessBadge'
+} from '../components/paperProcessMeta'
 import PdfSidePanel, { type PdfViewState } from '../components/PdfSidePanel'
 import { normalizeFormula } from '../services/formulaNormalizer'
 
@@ -110,6 +111,11 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<PaperDetail | null>(null)
+  const updateVisibleDetail = useCallback((updated: PaperDetail) => {
+    // A completed save for a paper we have left may update the list, but must
+    // not replace the newly loaded paper or unmount its unsaved editors.
+    setDetail(current => current?.id === updated.id ? updated : current)
+  }, [])
   const [filter, setFilter] = useState<Filter>('processed')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -120,15 +126,17 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   const [savingRaw, setSavingRaw] = useState(false)
   const [categoryDraft, setCategoryDraft] = useState<string>(CATEGORY_INHERIT)
   const [categorySaving, setCategorySaving] = useState(false)
-  const [categoryError, setCategoryError] = useState<string | null>(null)
+  const [categoryFailure, setCategoryFailure] = useState<{ paperId: number; message: string } | null>(null)
+  const categoryError = categoryFailure?.paperId === selectedId ? categoryFailure.message : null
   const [learningSaving, setLearningSaving] = useState(false)
   const [learningError, setLearningError] = useState<string | null>(null)
   // User-editable taxonomy (loaded from /paper-categories). Falls back to
   // the built-in defaults until the first fetch resolves.
   const [categoryItems, setCategoryItems] = useState<PaperCategoryItem[]>([])
-  const categoryOptions: string[] = categoryItems.length
-    ? categoryItems.map(c => c.name)
-    : [...PAPER_CATEGORY_OPTIONS]
+  const categoryOptions = useMemo(
+    () => categoryItems.length ? categoryItems.map(c => c.name) : [...PAPER_CATEGORY_OPTIONS],
+    [categoryItems],
+  )
   const [reprocessing, setReprocessing] = useState(false)
   const [actionNotice, setActionNotice] = useState<ActionNotice | null>(null)
   const [processStatus, setProcessStatus] = useState<ProcessStatusHint | null>(null)
@@ -355,18 +363,22 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
     return parseExtractionResponse(rawResponse)
   }, [visibleDetail, rawResponse])
 
-  useEffect(() => {
-    if (!visibleDetail) return
-    setCategoryDraft(visibleDetail.paper_category_override || CATEGORY_INHERIT)
-    setCategoryError(null)
-  }, [visibleDetail])
+  const categoryOverride = visibleDetail?.paper_category_override || CATEGORY_INHERIT
+  const [categorySource, setCategorySource] = useState({ paperId: selectedId, override: categoryOverride })
+  // A new paper or a changed saved category starts a fresh selection. Notes,
+  // chat and other detail refreshes must not discard an unsaved category choice.
+  if (categorySource.paperId !== selectedId || categorySource.override !== categoryOverride) {
+    setCategorySource({ paperId: selectedId, override: categoryOverride })
+    setCategoryDraft(categoryOverride)
+    setCategoryFailure(null)
+  }
 
   const selectPaper = (id: number) => {
     setSelectedId(id)
     setEditingRaw(false)
     setRawDraft('')
     setRawError(null)
-    setCategoryError(null)
+    setCategoryFailure(null)
     setLearningError(null)
     setActionNotice(null)
   }
@@ -390,7 +402,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
     setRawError(null)
     try {
       const updated = await updatePaperResponse(visibleDetail.id, rawDraft)
-      setDetail(updated)
+      updateVisibleDetail(updated)
       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
       setEditingRaw(false)
       setRawDraft('')
@@ -422,7 +434,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
         error: null,
         knowledge_nodes: [],
       }
-      setDetail(updated)
+      updateVisibleDetail(updated)
       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
       cancelRawEdit()
       setActionNotice({
@@ -444,16 +456,16 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   const saveCategory = async () => {
     if (!visibleDetail) return
     setCategorySaving(true)
-    setCategoryError(null)
+    setCategoryFailure(null)
     try {
       const updated = await updatePaperCategory(
         visibleDetail.id,
         categoryDraft === CATEGORY_INHERIT ? null : categoryDraft,
       )
-      setDetail(updated)
+      updateVisibleDetail(updated)
       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
     } catch (error) {
-      setCategoryError(getApiErrorMessage(error))
+      setCategoryFailure({ paperId: visibleDetail.id, message: getApiErrorMessage(error) })
     } finally {
       setCategorySaving(false)
     }
@@ -465,7 +477,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
     setLearningError(null)
     try {
       const updated = await updatePaperLearningStatus(visibleDetail.id, status)
-      setDetail(updated)
+      updateVisibleDetail(updated)
       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
     } catch (error) {
       setLearningError(getApiErrorMessage(error))
@@ -842,7 +854,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     <div className="text-sm text-slate-500 py-8 text-center">
                       {tr("该论文尚未处理。回到资料库点击「立即处理」。")}</div>
                   ) : parsed ? (
-                    <StructuredBody data={parsed} detail={visibleDetail} onSaved={setDetail} />
+                    <StructuredBody data={parsed} detail={visibleDetail} onSaved={updateVisibleDetail} />
                   ) : (
                     <div>
                       <p className="text-sm text-amber-400 mb-2">{tr("⚠ 无法解析为 JSON，显示原文")}</p>
@@ -864,7 +876,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     key={visibleDetail.id}
                     paper={visibleDetail}
                     onUpdate={updated => {
-                      setDetail(updated)
+                      updateVisibleDetail(updated)
                       setPapers(prev => prev.map(p => p.id === updated.id ? updated : p))
                     }}
                   />
@@ -877,7 +889,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                       keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
                       onOpenPdf={() => handleOpenPdf(visibleDetail.id)}
                       onNoteAdded={updated => {
-                        setDetail(updated)
+                        updateVisibleDetail(updated)
                         setPapers(prev => prev.map(p => (p.id === updated.id ? updated : p)))
                         setActionNotice({ tone: 'success', title: tr("已存为个人笔记") })
                       }}
@@ -1198,12 +1210,20 @@ function PaperChatBox({
   const [error, setError] = useState<string | null>(null)
 
   // Reprocess / reload updates arrive through the parent paper detail object.
-  // Keep the local chat panel in sync so the module re-enables itself when the
-  // backend has finished rebuilding the paper state.
-  useEffect(() => {
+  // Adjust the snapshot before rendering, preserving this paper's unsent input.
+  // The parent keys this component by paper.id, so another paper gets new state.
+  const [chatSource, setChatSource] = useState(paper.chat)
+  if (chatSource !== paper.chat) {
+    setChatSource(paper.chat)
     setChat(paper.chat)
     setError(null)
-  }, [paper.id, paper.chat])
+  }
+
+  const active = useRef(false)
+  useEffect(() => {
+    active.current = true
+    return () => { active.current = false }
+  }, [])
 
   // Re-derive countdown every minute without refetching.
   const [, setTick] = useState(0)
@@ -1219,12 +1239,13 @@ function PaperChatBox({
     setError(null)
     try {
       const next = await sendPaperChat(paper.id, message)
+      if (!active.current) return
       setChat(next)
       setInput('')
     } catch (e) {
-      setError(getApiErrorMessage(e))
+      if (active.current) setError(getApiErrorMessage(e))
     } finally {
-      setSending(false)
+      if (active.current) setSending(false)
     }
   }
 
@@ -1232,10 +1253,11 @@ function PaperChatBox({
     if (!confirm(tr("清空本地对话记录并开启新会话？"))) return
     try {
       const next = await resetPaperChat(paper.id)
+      if (!active.current) return
       setChat(next)
       setError(null)
     } catch (e) {
-      setError(getApiErrorMessage(e))
+      if (active.current) setError(getApiErrorMessage(e))
     }
   }
 
@@ -1248,7 +1270,7 @@ function PaperChatBox({
       content: (answer || '').trim(),
     })
     const updated = await updatePaperNotes(paper.id, serializeNoteBlocks(blocks))
-    onNoteAdded?.(updated)
+    if (active.current) onNoteAdded?.(updated)
   }
 
   const tone = chatStatusTone(chat)
@@ -2293,60 +2315,58 @@ function NotesSection({
   onUpdate: (paper: PaperDetail) => void
 }) {
   useLocale()
-  const [blocks, setBlocks] = useState<NoteBlockData[]>(() => parseNoteBlocks(paper.notes))
-  const [editingId, setEditingId] = useState<string | null>(null)
+  const savedBlocks = useMemo(() => parseNoteBlocks(paper.notes), [paper.notes])
+  const [editingBlock, setEditingBlock] = useState<NoteBlockData | null>(null)
+  const editingId = editingBlock?.id ?? null
   const [draftTitle, setDraftTitle] = useState('')
   const [draftContent, setDraftContent] = useState('')
-  const [isNewBlock, setIsNewBlock] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Re-sync from the paper when its notes change externally (e.g. a Q&A was
-  // saved from the 追问 panel) — but never while the user is mid-edit.
+  // Saved notes stay current while an editor owns its independent draft. Keep
+  // a new (or externally removed) edited block visible until save or cancel.
+  const blocks = editingBlock && !savedBlocks.some(b => b.id === editingBlock.id)
+    ? [...savedBlocks, editingBlock]
+    : savedBlocks
+  const active = useRef(false)
   useEffect(() => {
-    if (editingId === null) setBlocks(parseNoteBlocks(paper.notes))
-  }, [paper.notes, editingId])
+    active.current = true
+    return () => { active.current = false }
+  }, [])
 
   const persist = async (nextBlocks: NoteBlockData[]) => {
     setSaving(true)
     setError(null)
     try {
       const updated = await updatePaperNotes(paper.id, serializeNoteBlocks(nextBlocks))
+      if (!active.current) return false
       onUpdate(updated)
-      setBlocks(nextBlocks)
       return true
     } catch (e) {
-      setError(getApiErrorMessage(e))
+      if (active.current) setError(getApiErrorMessage(e))
       return false
     } finally {
-      setSaving(false)
+      if (active.current) setSaving(false)
     }
   }
 
   const startEdit = (block: NoteBlockData) => {
-    setEditingId(block.id)
+    setEditingBlock(block)
     setDraftTitle(block.title)
     setDraftContent(block.content)
-    setIsNewBlock(false)
     setError(null)
   }
 
   const startNew = () => {
     const id = newBlockId()
-    setBlocks(prev => [...prev, { id, title: '', content: '' }])
-    setEditingId(id)
+    setEditingBlock({ id, title: '', content: '' })
     setDraftTitle('')
     setDraftContent('')
-    setIsNewBlock(true)
     setError(null)
   }
 
   const cancelEdit = () => {
-    if (isNewBlock && editingId) {
-      setBlocks(prev => prev.filter(b => b.id !== editingId))
-    }
-    setEditingId(null)
-    setIsNewBlock(false)
+    setEditingBlock(null)
     setError(null)
   }
 
@@ -2357,8 +2377,7 @@ function NotesSection({
     )
     const ok = await persist(next)
     if (ok) {
-      setEditingId(null)
-      setIsNewBlock(false)
+      setEditingBlock(null)
     }
   }
 
@@ -2367,8 +2386,7 @@ function NotesSection({
     const next = blocks.filter(b => b.id !== id)
     const ok = await persist(next)
     if (ok && editingId === id) {
-      setEditingId(null)
-      setIsNewBlock(false)
+      setEditingBlock(null)
     }
   }
 

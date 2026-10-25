@@ -22,7 +22,7 @@ PYTHON_BIN=python3.12 ./scripts/install-native.sh
 
 安装入口在当前 worktree 创建 `backend/.venv`，从官方 PyPI 安装 `backend/requirements-dev.lock` 中有哈希的 wheel，并从官方 npm 按现有锁执行 `npm ci --ignore-scripts`。缓存及空 npm 配置都在 `.cache/`，不启动服务、不迁移数据库、不重签名或修改系统权限。已有不兼容 Python 环境会被拒绝，不自动覆盖。
 
-验收入口运行隔离后端子集、polling 单测、TypeScript/Vite 构建和现有 ESLint，任一步失败返回非零；不自动运行 PostgreSQL、真实服务或浏览器 E2E。`start.sh --check` 只做启动前检查，不导入应用。
+验收入口运行隔离后端子集、polling 单测、TypeScript/Vite 构建、完整 ESLint（零警告）和真实 React 组件的 mock 浏览器回归。需已安装 Chrome/Chromium，不自动下载浏览器；任何失败或缺少前置条件均返回非零。浏览器使用临时 profile 和随机回环端口，全部 API mock，外网请求被阻断；不运行 PostgreSQL、真实服务或现有整站 E2E。`start.sh --check` 只做启动前检查，不导入应用。浏览器配置见[开发验收说明](docs/DEVELOPMENT.md)。
 
 ## 显式启动
 

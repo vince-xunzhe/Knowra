@@ -20,7 +20,7 @@ Use Python 3.12.13+ within 3.12.x and Node 24.14.1+ within 24.x; pinned baseline
 
 ## Validation
 
-`./scripts/check.sh` runs the maintained isolated backend subset, polling unit tests, TypeScript/Vite build and existing ESLint. Any failure returns nonzero. Python and Web checks operate on source snapshots under this worktree's `.cache/`, with credentials/data excluded and network guards. See `docs/DEVELOPMENT.md` for the exact scope; this is not a full application test suite.
+`./scripts/check.sh` runs the maintained isolated backend subset, polling unit tests, TypeScript/Vite build, full ESLint with zero warnings allowed, and mock browser regressions against real React components. Any failure or missing browser returns nonzero; a skipped check is not a pass. Python and Web checks operate on source snapshots under this worktree's `.cache/`, with credentials/data excluded and network guards. The browser harness uses a temporary profile and a random loopback port, with all API responses mocked and external requests blocked; it does not start the application backend. See `docs/DEVELOPMENT.md` for the exact scope; this is not a full application test suite.
 
 Never automatically run unrestricted backend discovery, existing browser E2E, real provider/LLM/market calls, migrations or deployment. PostgreSQL RLS tests are destructive and require an additional explicit opt-in for a disposable loopback test instance; setting a database URL alone is insufficient. The default check does not execute them. Report old lint/test debt separately; do not broaden infrastructure work into business rewrites merely to get green checks.
 

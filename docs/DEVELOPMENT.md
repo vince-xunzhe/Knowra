@@ -49,9 +49,12 @@ BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 
 2. `npm --prefix frontend run test:unit`：Node 自带 test runner 执行 polling 单测，不混收 Playwright。
 3. `npm --prefix frontend run build`：TypeScript 与 Vite 生产构建。
-4. `npm --prefix frontend run lint`：现有完整 ESLint。任何一步失败会返回非零，其他检查仍完成；既有 lint 债务必须报告，不能静默吞掉或借基建任务重写业务代码。
+4. `npm --prefix frontend run lint`：完整 ESLint，错误和警告都使验收失败；不降低规则或忽略问题。
+5. 真实 React 组件的 mock 浏览器回归：覆盖 Ask 会话、索引请求和归纳标题，Review 论文切换、聊天输入和笔记编辑，以及召回操作中关闭重开弹窗。仅在源码快照中构建专用测试页面，使用随机回环端口、临时浏览器 profile 和合成数据；全部 API mock，外网请求被阻断。
 
-默认入口不启动应用、浏览器、真实模型服务或 PostgreSQL。现有 Playwright/E2E 另行审批与隔离，不自动执行。PostgreSQL 测试会重建 schema，仅在专用可丢弃实例且显式 opt-in 时运行，详见 `backend/requirements-postgres.txt`；URL 环境变量本身不足以启用。
+任何一步失败会返回非零，其他检查仍完成；缺少浏览器等前置条件不能当作跳过后通过。默认入口启动专用测试页面的静态服务与临时浏览器，不启动应用后端、真实模型服务或 PostgreSQL。现有整站 Playwright/E2E 另行审批与隔离，不自动执行。PostgreSQL 测试会重建 schema，仅在专用可丢弃实例且显式 opt-in 时运行，详见 `backend/requirements-postgres.txt`；URL 环境变量本身不足以启用。
+
+浏览器回归需要已安装的 Chrome/Chromium；默认查找 macOS Chrome 或 `PATH` 中的 Chromium/Chrome，不自动下载。其他安装位置可显式指定绝对路径：`KNOWRA_BROWSER_EXECUTABLE=/absolute/path/to/chrome ./scripts/check.sh`。测试入口与合成夹具位于 `frontend/tests/lifecycle-*`，通过 `scripts/check_frontend.py` 接入快照；类型、构建、lint、浏览器结果分别记录于 `.cache/frontend-check-*/`。取消或超时时，入口会终止本次子进程组；清理失败必须报告，不能将其视为通过。
 
 ## 更新依赖
 

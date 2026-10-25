@@ -66,10 +66,18 @@ export default function TeamComposer({ onClose }: { onClose: () => void }) {
   }, [])
 
   useEffect(() => {
-    reload()
-      .catch(e => setError(apiErr(e)))
-      .finally(() => setLoading(false))
-  }, [reload])
+    let cancelled = false
+    Promise.all([listPaperTeams(), listPapers()])
+      .then(([registry, records]) => {
+        if (cancelled) return
+        setTeams(registry.teams)
+        setOthersCount(registry.others_count)
+        setPapers(records)
+      })
+      .catch(e => { if (!cancelled) setError(apiErr(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const teamNames = useMemo(() => teams.map(t => t.name), [teams])
   // Lanes shown on the right: real teams in registry order, then "others".

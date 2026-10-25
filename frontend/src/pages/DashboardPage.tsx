@@ -96,7 +96,14 @@ export default function DashboardPage() {
     }
   }, [])
 
-  useEffect(() => { void load(true) }, [load])
+  useEffect(() => {
+    let cancelled = false
+    getDashboardSummary()
+      .then(payload => { if (!cancelled) setData(payload) })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
   if (loading) {
     return (

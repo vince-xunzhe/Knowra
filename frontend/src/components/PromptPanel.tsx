@@ -32,7 +32,7 @@ import { getPrompt, updatePrompt, resetPrompt } from '../api/client'
 function estimateTokens(text: string): number {
   let cjk = 0, other = 0
   for (const ch of text) {
-    if (/[㐀-鿿豈-﫿　-〿]/.test(ch)) cjk++
+    if (/[㐀-鿿豈-﫿\u3000-〿]/.test(ch)) cjk++
     else other++
   }
   return Math.round(cjk + other / 3.6)
