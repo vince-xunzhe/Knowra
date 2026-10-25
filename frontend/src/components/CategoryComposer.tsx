@@ -56,10 +56,17 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   }, [])
 
   useEffect(() => {
-    reload()
-      .catch(e => setError(apiErr(e)))
-      .finally(() => setLoading(false))
-  }, [reload])
+    let cancelled = false
+    Promise.all([listPaperCategories(), listPapers()])
+      .then(([categories, records]) => {
+        if (cancelled) return
+        setCats(categories)
+        setPapers(records)
+      })
+      .catch(e => { if (!cancelled) setError(apiErr(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
   const catNames = useMemo(() => cats.map(c => c.name), [cats])
 

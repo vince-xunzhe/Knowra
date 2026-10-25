@@ -66,7 +66,7 @@ const REJECTOR_LABELS: Record<string, { label: string; hint: string }> = {
 export default function RejectedRescueModal({ open, onClose, onRecalled }: Props) {
   useLocale()
   const [items, setItems] = useState<PromotionCandidate[]>([])
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(open)
   const [busyIds, setBusyIds] = useState<Set<number>>(new Set())
   const [groupBusy, setGroupBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -76,27 +76,29 @@ export default function RejectedRescueModal({ open, onClose, onRecalled }: Props
   // sub-groups. Persisted across renders within a single open of the
   // modal — every fresh open starts with everything expanded.
   const [collapsedKeys, setCollapsedKeys] = useState<Set<string>>(new Set())
+  const [previousOpen, setPreviousOpen] = useState(open)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listPromotionCandidates('rejected', 1000)
-      setItems(data.items)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
+  // Only the selection/group UI resets on opening. Keep this component alive
+  // so a recall started before closing can update the next open's item list.
+  if (previousOpen !== open) {
+    setPreviousOpen(open)
     if (open) {
       setSelected(new Set())
       setCollapsedKeys(new Set())
-      void load()
+      setLoading(true)
+      setError(null)
     }
-  }, [open, load])
+  }
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    listPromotionCandidates('rejected', 1000)
+      .then(data => { if (!cancelled) setItems(data.items) })
+      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [open])
 
   const toggleCollapsed = useCallback((key: string) => {
     setCollapsedKeys(prev => {

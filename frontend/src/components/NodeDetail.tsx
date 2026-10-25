@@ -112,7 +112,14 @@ const PROMOTION_BADGE: Record<PromotionStatus, { bg: string; text: string; label
   rejected: { bg: 'bg-rose-500/15 border border-rose-500/40', text: 'text-rose-200', get label() { return tr("已淘汰") } },
 }
 
-export default function NodeDetail({
+export default function NodeDetail(props: Props) {
+  if (!props.node) return null
+  return <NodeDetailSession key={`${props.node.id}:${props.initialTab ?? 'detail'}`} {...props} />
+}
+
+// Reset drawer-local state only when the requested node/tab changes. Updates
+// to the same graph node must not discard the user's current tab or edits.
+function NodeDetailSession({
   node,
   onClose,
   onNavigate,
@@ -133,7 +140,7 @@ export default function NodeDetail({
   // Two-tab drawer: 详情 (current rich panel) and Wiki (rendered .md). The
   // Wiki tab only fetches when activated to avoid wasted listing on every
   // node click.
-  const [tab, setTab] = useState<'detail' | 'wiki'>('detail')
+  const [tab, setTab] = useState<'detail' | 'wiki'>(initialTab ?? 'detail')
   const [wiki, setWiki] = useState<WikiPageDetail | null>(null)
   const [wikiLoading, setWikiLoading] = useState(false)
   const [wikiError, setWikiError] = useState<string | null>(null)
@@ -166,16 +173,9 @@ export default function NodeDetail({
       }
     }
 
-    setLocalStatus(null)
-    setLocalPromotedBy(null)
-    setLocalReason(null)
-    setTab(initialTab ?? 'detail')
-    setWiki(null)
-    setWikiError(null)
-    setWikiMissing(false)
     void loadDetail()
     return () => { cancelled = true }
-  }, [nodeId, initialTab])
+  }, [nodeId])
 
   const status: PromotionStatus = localStatus || node?.promotion_status || 'promoted'
   // Wiki tab is meaningful when the node has a corresponding .md file:

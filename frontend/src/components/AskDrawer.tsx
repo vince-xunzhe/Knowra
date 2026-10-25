@@ -67,6 +67,7 @@ interface SynthesisDraft {
   sessionId: string
   sessionTitle: string
   sessionTurns: Turn[]
+  viewGeneration: number
 }
 
 interface DuplicateConceptConflict {
@@ -321,28 +322,50 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   const [indexStatus, setIndexStatus] = useState<WikiIndexStatus | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
   const [indexNotice, setIndexNotice] = useState<IndexNotice | null>(null)
+  const [wasOpen, setWasOpen] = useState(open)
   const [synthesisDraft, setSynthesisDraft] = useState<SynthesisDraft | null>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const indexRequestId = useRef(0)
+  const sessionViewGeneration = useRef(0)
   const activeSession = useMemo(() => {
     const found = askState.sessions.find(session => session.id === askState.activeSessionId)
     return found || askState.sessions[0] || createAskSession()
   }, [askState])
-  const turns = activeSession?.turns || []
-  const question = activeSession?.question || ''
+  const turns = activeSession.turns
+  const question = activeSession.question
   const sessionsForSelect = useMemo(
     () => [...askState.sessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [askState.sessions],
   )
+
+  // A notice belongs to one opening of the drawer. Adjust only this
+  // transient state when the controlled prop changes; keep conversation
+  // drafts and any in-flight Ask/rebuild operation alive across closing.
+  if (wasOpen !== open) {
+    setWasOpen(open)
+    if (open) setIndexNotice(null)
+  }
 
   // Refresh index status whenever the drawer opens — cheap GET, gives the
   // user immediate feedback on whether the agent has its primary scaffolding
   // (index.md) ready.
   useEffect(() => {
     if (!open) return
-    setIndexNotice(null)
-    getWikiIndexStatus().then(setIndexStatus).catch(() => setIndexStatus(null))
-    requestAnimationFrame(() => inputRef.current?.focus())
+    let cancelled = false
+    const requestId = ++indexRequestId.current
+    getWikiIndexStatus()
+      .then(status => {
+        if (!cancelled && requestId === indexRequestId.current) setIndexStatus(status)
+      })
+      .catch(() => {
+        if (!cancelled && requestId === indexRequestId.current) setIndexStatus(null)
+      })
+    const focusFrame = requestAnimationFrame(() => inputRef.current?.focus())
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(focusFrame)
+    }
   }, [open])
 
   // Auto-scroll to bottom on new turn — common chat affordance.
@@ -352,11 +375,12 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     }
   }, [turns, submitting])
 
-  useEffect(() => {
+  const resetSessionView = useCallback(() => {
+    sessionViewGeneration.current += 1
     setError(null)
     setNotice(null)
     setSynthesisDraft(null)
-  }, [activeSession?.id])
+  }, [])
 
   // GraphPage unmounts when the user switches to another top-level page, so
   // persist the Ask conversations in localStorage to preserve the session
@@ -400,18 +424,19 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
       sessions: [session, ...prev.sessions],
       activeSessionId: session.id,
     }))
-    setError(null)
+    resetSessionView()
     requestAnimationFrame(() => inputRef.current?.focus())
-  }, [activeSession.question, activeSession.turns.length, submitting])
+  }, [activeSession.question, activeSession.turns.length, resetSessionView, submitting])
 
   const handleSessionSelect = useCallback((sessionId: string) => {
     if (submitting) return
+    if (sessionId !== activeSession.id) resetSessionView()
     setAskState(prev => ({
       ...prev,
       activeSessionId: sessionId,
     }))
     requestAnimationFrame(() => inputRef.current?.focus())
-  }, [submitting])
+  }, [activeSession.id, resetSessionView, submitting])
 
   const handleSend = useCallback(async () => {
     const q = question.trim()
@@ -496,9 +521,8 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
         activeSessionId: normalized[0].id,
       }
     })
-    setError(null)
-    setNotice(null)
-  }, [activeSession.id, submitting])
+    resetSessionView()
+  }, [activeSession.id, resetSessionView, submitting])
 
   const handleRebuildIndex = useCallback(async () => {
     setRebuilding(true)
@@ -509,8 +533,9 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     })
     try {
       await rebuildWikiIndex()
+      const requestId = ++indexRequestId.current
       const fresh = await getWikiIndexStatus()
-      setIndexStatus(fresh)
+      if (requestId === indexRequestId.current) setIndexStatus(fresh)
       setIndexNotice({
         tone: 'success',
         title: tr("index.md 重建完成"),
@@ -678,7 +703,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                 : ''
             return (
               <TurnView
-                key={i}
+                key={`${activeSession.id}:${i}`}
                 turn={turn}
                 onFileBack={
                   turn.role === 'assistant'
@@ -687,12 +712,14 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                         sessionId: activeSession.id,
                         sessionTitle: activeSession.title,
                         sessionTurns: turns.slice(0, i + 1),
+                        viewGeneration: sessionViewGeneration.current,
                       })
                     : undefined
                 }
                 onExport={
                   turn.role === 'assistant'
                     ? async (fmt: WikiOutputFormat) => {
+                        const generation = sessionViewGeneration.current
                         try {
                           const result = await renderWikiOutput({
                             answer: turn.content,
@@ -702,11 +729,13 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                               (fmt === 'marp' ? tr("幻灯导出") : tr("报告导出")),
                             source_question: precedingQuestion,
                           })
+                          if (generation !== sessionViewGeneration.current) return
                           setNotice({
                             tone: 'emerald',
                             text: tr("已生成{0}：{1}", { 0: fmt === 'marp' ? tr(' Marp 幻灯') : tr('报告'), 1: result.rel_path }),
                           })
                         } catch (e: unknown) {
+                          if (generation !== sessionViewGeneration.current) return
                           const msg =
                             (e as { response?: { data?: { detail?: string } } })
                               ?.response?.data?.detail ||
@@ -741,7 +770,9 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
             draft={synthesisDraft}
             onClose={() => setSynthesisDraft(null)}
             onSaved={(result, scope) => {
-              setSynthesisDraft(null)
+              onSynthesisCreated?.(result.concept_id)
+              if (synthesisDraft.viewGeneration !== sessionViewGeneration.current) return
+              setSynthesisDraft(current => current === synthesisDraft ? null : current)
               const relatedSuffix = result.related_concepts_added && result.related_concepts_added > 0
                 ? tr("，并连到了 {0} 个已有概念", { 0: result.related_concepts_added })
                 : ''
@@ -770,7 +801,6 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                             ),
                     },
               )
-              onSynthesisCreated?.(result.concept_id)
             }}
           />
         )}
@@ -1067,7 +1097,8 @@ function SynthesisSaveModal({
     [rounds],
   )
   const hasSessionScope = rounds.length > 1
-  const [scope, setScope] = useState<SynthesisScope>('turn')
+  const [requestedScope, setScope] = useState<SynthesisScope>('turn')
+  const scope = hasSessionScope ? requestedScope : 'turn'
   const defaultTitles = useMemo(() => {
     const turnBase =
       currentRound?.question ||
@@ -1082,23 +1113,12 @@ function SynthesisSaveModal({
       session: sessionBase.replace(/[?？\s]+$/, '').slice(0, 30) || 'Ask归纳',
     }
   }, [currentRound?.question, draft.sessionTitle, sessionQuestions])
-  const [title, setTitle] = useState(defaultTitles.turn)
+  const [editedTitle, setEditedTitle] = useState<string | null>(null)
+  const title = editedTitle ?? defaultTitles[scope]
   const [tagsInput, setTagsInput] = useState('ask归纳')
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [titleTouched, setTitleTouched] = useState(false)
   const [duplicateConflict, setDuplicateConflict] = useState<DuplicateConceptConflict | null>(null)
-
-  useEffect(() => {
-    if (!hasSessionScope && scope !== 'turn') {
-      setScope('turn')
-    }
-  }, [hasSessionScope, scope])
-
-  useEffect(() => {
-    if (titleTouched) return
-    setTitle(defaultTitles[scope])
-  }, [defaultTitles, scope, titleTouched])
 
   const selectedBody = useMemo(() => {
     if (!currentRound) return ''
@@ -1111,7 +1131,7 @@ function SynthesisSaveModal({
   const selectedQuestions = useMemo(() => {
     if (scope === 'session') return sessionQuestions
     return currentRound?.question ? [currentRound.question] : []
-  }, [currentRound?.question, scope, sessionQuestions])
+  }, [currentRound, scope, sessionQuestions])
 
   const selectedCitedFiles = useMemo(() => {
     if (scope === 'session') return collectCitedFiles(draft.sessionTurns)
@@ -1242,8 +1262,7 @@ function SynthesisSaveModal({
             <input
               value={title}
               onChange={(e) => {
-                setTitle(e.target.value)
-                setTitleTouched(true)
+                setEditedTitle(e.target.value)
                 setDuplicateConflict(null)
                 setErr(null)
               }}

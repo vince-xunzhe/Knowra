@@ -1,10 +1,15 @@
 """Phase 1 W4: end-to-end RLS isolation tests against a real Postgres.
 
-Skipped unless ``KNOWRA_TEST_POSTGRES_URL`` is set. The URL points at a
-Postgres instance the test can fully control — it creates / drops the
+Skipped unless ``KNOWRA_ALLOW_DESTRUCTIVE_PG_TESTS=1`` and a safe
+``KNOWRA_TEST_POSTGRES_URL`` are both set. The URL must use a loopback
+host, an explicit non-default port, and the dedicated ``knowra_test``
+database, with no query parameters. The test creates / drops the
 schema, including an ``auth`` stub that mimics Supabase Auth's
 ``auth.users`` + ``auth.uid()`` API just enough to make our RLS
 policies behave at runtime.
+
+Unset all ``PG*`` environment variables first; libpq connection overrides
+must not redirect or supplement the explicitly approved test URL.
 
 Recommended local setup:
 
@@ -13,6 +18,7 @@ Recommended local setup:
         postgres:16
 
     export KNOWRA_TEST_POSTGRES_URL=postgresql://postgres:knowra@localhost:54322/knowra_test
+    export KNOWRA_ALLOW_DESTRUCTIVE_PG_TESTS=1
     backend/.venv/bin/python -m unittest backend.tests.test_postgres_rls
 
 Coverage:
@@ -29,6 +35,7 @@ import sys
 import unittest
 import uuid
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = Path(__file__).resolve().parents[1]
@@ -38,6 +45,36 @@ sys.path.insert(0, str(BACKEND))
 
 PG_URL = os.environ.get("KNOWRA_TEST_POSTGRES_URL")
 MIGRATIONS_DIR = ROOT / "supabase" / "migrations"
+
+
+def allow_destructive_postgres_tests(url: str | None, opt_in: str | None) -> bool:
+    """Fail closed before importing a driver or opening a destructive target.
+
+    Query parameters are rejected because libpq accepts connection overrides
+    there. Do not put the URL (which may contain a password) in error output.
+    """
+    # libpq environment options (including PGHOSTADDR and PGSERVICE) can
+    # override or supplement a URI. Require a fully explicit test target.
+    if opt_in != "1" or not url or any(key.startswith("PG") for key in os.environ):
+        return False
+    try:
+        target = urlsplit(url)
+        return (
+            target.scheme in {"postgresql", "postgres"}
+            and target.hostname in {"localhost", "127.0.0.1", "::1"}
+            and target.port is not None
+            and target.port != 5432
+            and unquote(target.path) == "/knowra_test"
+            and not target.query
+            and not target.fragment
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+PG_OPTED_IN = allow_destructive_postgres_tests(
+    PG_URL, os.environ.get("KNOWRA_ALLOW_DESTRUCTIVE_PG_TESTS")
+)
 
 
 # An ``auth`` stub: real Supabase ships this schema as part of GoTrue;
@@ -69,8 +106,10 @@ def _load_psycopg2():
 
 
 @unittest.skipUnless(
-    PG_URL and _load_psycopg2(),
-    "set KNOWRA_TEST_POSTGRES_URL and install psycopg2-binary to run RLS tests",
+    PG_OPTED_IN and _load_psycopg2(),
+    "RLS tests require explicit destructive opt-in, a dedicated loopback "
+    "knowra_test database on a non-default port, no PG* environment overrides, "
+    "and psycopg2-binary",
 )
 class PostgresRLSTests(unittest.TestCase):
     """Apply all 5 migrations to a real Postgres, then exercise RLS."""

@@ -1,0 +1,7 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../.tsbuildinfo/lifecycle.tsbuildinfo"
+  },
+  "include": ["../src", "lifecycle-harness.tsx"]
+}

@@ -15,7 +15,8 @@ import {
 } from '../api/client'
 import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
-import PaperProcessBadge, { inferPaperProcessMeta, summarizePaperError } from '../components/PaperProcessBadge'
+import PaperProcessBadge from '../components/PaperProcessBadge'
+import { inferPaperProcessMeta, summarizePaperError } from '../components/paperProcessMeta'
 
 interface ProcStatus {
   running: boolean

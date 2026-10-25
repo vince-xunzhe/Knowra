@@ -351,7 +351,6 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
   useEffect(() => {
     if (viewKind !== 'compiled') return
     let cancelled = false
-    setWikiGraphLoading(true)
     getWikiGraph()
       .then(data => { if (!cancelled) setWikiGraph(data) })
       .catch(error => { console.error('Failed to load wiki graph', error) })
@@ -729,7 +728,10 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
           >
             {tr("节点图谱")}</button>
           <button
-            onClick={() => setViewKind('compiled')}
+            onClick={() => {
+              if (viewKind !== 'compiled') setWikiGraphLoading(true)
+              setViewKind('compiled')
+            }}
             title={tr("基于已编译 wiki .md 的时间线视图")}
             className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
               viewKind === 'compiled'
@@ -1042,8 +1044,8 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
         />
       )}
 
-      <ConceptEditorModal
-        open={editorOpen}
+      {editorOpen && <ConceptEditorModal
+        key={editingNode?.id ?? 'create'}
         busy={actionBusyId === (editingNode?.id || 'create')}
         papers={paperCatalog}
         initialNode={editingNode}
@@ -1052,7 +1054,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
           setEditingNode(null)
         }}
         onSubmit={handleSaveManualConcept}
-      />
+      />}
     </div>
   )
 }
@@ -1113,14 +1115,12 @@ function NextStepBanner({
 }
 
 function ConceptEditorModal({
-  open,
   busy,
   papers,
   initialNode,
   onClose,
   onSubmit,
 }: {
-  open: boolean
   busy: boolean
   papers: PaperRecord[]
   initialNode: GraphNode | null
@@ -1128,22 +1128,11 @@ function ConceptEditorModal({
   onSubmit: (payload: ManualConceptInput) => Promise<void>
 }) {
   useLocale()
-  const [title, setTitle] = useState('')
-  const [content, setContent] = useState('')
+  const [title, setTitle] = useState(initialNode?.title || '')
+  const [content, setContent] = useState(initialNode?.content || '')
   const [paperQuery, setPaperQuery] = useState('')
-  const [tagsText, setTagsText] = useState('')
-  const [selectedPaperIds, setSelectedPaperIds] = useState<number[]>([])
-
-  useEffect(() => {
-    if (!open) return
-    setTitle(initialNode?.title || '')
-    setContent(initialNode?.content || '')
-    setTagsText((initialNode?.tags || []).join(', '))
-    setSelectedPaperIds(initialNode?.source_paper_ids || [])
-    setPaperQuery('')
-  }, [open, initialNode])
-
-  if (!open) return null
+  const [tagsText, setTagsText] = useState((initialNode?.tags || []).join(', '))
+  const [selectedPaperIds, setSelectedPaperIds] = useState<number[]>(initialNode?.source_paper_ids || [])
 
   const filteredPapers = papers.filter(paper => {
     const q = paperQuery.trim().toLowerCase()

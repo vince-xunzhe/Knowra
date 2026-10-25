@@ -1,285 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BACKEND_DIR="$PROJECT_DIR/backend"
-FRONTEND_DIR="$PROJECT_DIR/frontend"
-VENV_DIR="$BACKEND_DIR/.venv"
-
-if [ -f "$PROJECT_DIR/.env" ]; then
-  set -a
-  . "$PROJECT_DIR/.env"
-  set +a
+source "$(dirname "$0")/scripts/native-common.sh"
+case "${1:-}" in ""|--check) ;; *) echo "Usage: ./start.sh [--check]" >&2; exit 2;; esac
+[ "${KNOWLEDGE_WIKI_MODE:-native}" = native ] || { echo "Native-only launcher; Docker is a separate explicit workflow. See INSTALL.md." >&2; exit 2; }
+check_installed
+BACKEND_PORT="${BACKEND_PORT:-8103}"
+FRONTEND_PORT="${FRONTEND_PORT:-5183}"
+"$VENV_DIR/bin/python" - "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT" <<'PREFLIGHT'
+import os, pathlib, sys
+root = pathlib.Path(sys.argv[1]).resolve()
+ports = [int(value) for value in sys.argv[2:]]
+assert len(set(ports)) == 2 and all(1024 <= p <= 65535 for p in ports), "Choose two distinct unprivileged ports"
+for relative in ("data", "data/papers", "data/artifacts", "data/wiki", "data/config.json", "data/knowledge.db", "data/tasks.db", "data/knowledge.db-wal", "data/knowledge.db-shm", "data/tasks.db-wal", "data/tasks.db-shm"):
+    p = root / relative
+    assert not p.is_symlink() and p.resolve().is_relative_to(root), f"Do not share/link another worktree's data: {relative}"
+queue = os.environ.get("KNOWRA_TASK_DB")
+assert not queue or pathlib.Path(queue).resolve().is_relative_to(root / "data"), "KNOWRA_TASK_DB must stay in this worktree data directory"
+assert os.environ.get("KNOWRA_DEPLOY_MODE", "local") == "local", "This launcher is for local development, not cloud deployment"
+existing = any((root / "data").glob("*.db")) or any((root / "data").glob("*.sqlite*"))
+assert not existing or os.environ.get("KNOWRA_ALLOW_EXISTING_DATA") == "1", "Existing data detected. Review backup/migration implications; explicitly set KNOWRA_ALLOW_EXISTING_DATA=1 for this worktree."
+PREFLIGHT
+if command -v lsof >/dev/null; then
+  for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+    if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "Port $port is occupied; choose explicit worktree ports." >&2; exit 1
+    fi
+  done
 fi
-
-RUN_MODE="${KNOWLEDGE_WIKI_MODE:-auto}"
-OPEN_BROWSER="${OPEN_BROWSER:-1}"
-BACKEND_PORT="${BACKEND_PORT:-}"
-FRONTEND_PORT="${FRONTEND_PORT:-}"
-NATIVE_CLEANED=0
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
-
-find_free_port() {
-  local port="$1"
-  while lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; do
-    port=$((port + 1))
-  done
-  echo "$port"
-}
-
-open_url() {
-  local url="$1"
-  [ "$OPEN_BROWSER" = "0" ] && return 0
-
-  if command_exists open; then
-    open "$url" >/dev/null 2>&1 || true
-  elif command_exists xdg-open; then
-    xdg-open "$url" >/dev/null 2>&1 || true
-  elif command_exists cmd.exe; then
-    cmd.exe /c start "$url" >/dev/null 2>&1 || true
-  fi
-}
-
-schedule_open_url() {
-  local url="$1"
-  [ "$OPEN_BROWSER" = "0" ] && return 0
-
-  (
-    sleep 5
-    open_url "$url"
-  ) &
-  OPENER_PID=$!
-}
-
-docker_compose_available() {
-  if command_exists docker && docker compose version >/dev/null 2>&1; then
-    return 0
-  fi
-
-  command_exists docker-compose
-}
-
-docker_daemon_available() {
-  command_exists docker && docker info >/dev/null 2>&1
-}
-
-ensure_docker_daemon() {
-  docker_daemon_available && return 0
-
-  if command_exists colima; then
-    echo "Starting Colima Docker runtime..."
-    colima start --runtime docker >/dev/null
-    docker_daemon_available
-    return $?
-  fi
-
-  return 1
-}
-
-docker_compose() {
-  if command_exists docker && docker compose version >/dev/null 2>&1; then
-    docker compose "$@"
-  else
-    docker-compose "$@"
-  fi
-}
-
-bad_node_path() {
-  case "$1" in
-    /Applications/*.app/*|*/Applications/*.app/*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-node_major() {
-  "$1/node" -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0
-}
-
-try_node_dir() {
-  local node_dir="$1"
-  [ -x "$node_dir/node" ] && [ -x "$node_dir/npm" ] || return 1
-
-  local node_path
-  node_path="$("$node_dir/node" -p "process.execPath" 2>/dev/null || true)"
-  [ -n "$node_path" ] || node_path="$node_dir/node"
-
-  if bad_node_path "$node_path"; then
-    return 1
-  fi
-
-  local major
-  major="$(node_major "$node_dir")"
-  if [ "$major" -lt 20 ]; then
-    return 1
-  fi
-
-  export PATH="$node_dir:$PATH"
-  return 0
-}
-
-select_native_node() {
-  local current_node_dir=""
-  if command_exists node && command_exists npm; then
-    current_node_dir="$(dirname "$(command -v node)")"
-    try_node_dir "$current_node_dir" && return 0
-  fi
-
-  for node_dir in \
-    /opt/homebrew/bin \
-    /usr/local/bin \
-    "$HOME/.volta/bin" \
-    "$HOME/.asdf/shims"; do
-    try_node_dir "$node_dir" && return 0
-  done
-
-  if [ -d "$HOME/.nvm/versions/node" ]; then
-    local node_bin
-    for node_bin in "$HOME"/.nvm/versions/node/*/bin; do
-      try_node_dir "$node_bin" && return 0
-    done
-  fi
-
-  return 1
-}
-
-clear_frontend_native_attrs() {
-  if [ "$(uname -s)" = "Darwin" ] && [ -d "$FRONTEND_DIR/node_modules/@rolldown" ]; then
-    echo "Preparing frontend native bindings..."
-    find "$FRONTEND_DIR/node_modules/@rolldown" -name "*.node" -print0 | while IFS= read -r -d '' binding; do
-      xattr -d com.apple.provenance "$binding" 2>/dev/null || true
-      xattr -d com.apple.quarantine "$binding" 2>/dev/null || true
-      if command_exists codesign; then
-        codesign --force --sign - "$binding" >/dev/null 2>&1 || true
-      fi
-    done
-  fi
-}
-
-cleanup_native() {
-  [ "$NATIVE_CLEANED" = "1" ] && return 0
-  NATIVE_CLEANED=1
-  kill ${BACKEND_PID:-} ${FRONTEND_PID:-} ${OPENER_PID:-} 2>/dev/null || true
-  echo "Stopped."
-}
-
-stop_native() {
-  cleanup_native
-  exit 130
-}
-
-run_docker() {
-  export BACKEND_PORT="${BACKEND_PORT:-$(find_free_port 8000)}"
-  export FRONTEND_PORT="${FRONTEND_PORT:-$(find_free_port 5173)}"
-
-  mkdir -p "$PROJECT_DIR/data/artifacts" "$PROJECT_DIR/data/papers"
-
-  echo "=== Knowra (Docker) ==="
-  echo ""
-  echo "Starting backend on http://localhost:$BACKEND_PORT"
-  echo "Starting frontend on http://localhost:$FRONTEND_PORT"
-  echo ""
-  echo "Press Ctrl+C to stop both servers."
-  echo ""
-
-  schedule_open_url "http://localhost:$FRONTEND_PORT"
-  cd "$PROJECT_DIR"
-  docker_compose up --build
-}
-
-run_native() {
-  if ! select_native_node; then
-    echo "ERROR: Could not find a host Node.js >= 20 runtime outside an app bundle."
-    echo "Install Docker for the fully isolated path, or install Node.js with Homebrew, nvm, Volta, or asdf."
-    exit 1
-  fi
-
-  BACKEND_PORT="${BACKEND_PORT:-$(find_free_port 8000)}"
-  FRONTEND_PORT="${FRONTEND_PORT:-$(find_free_port 5173)}"
-
-  trap cleanup_native EXIT
-  trap stop_native INT TERM
-
-  echo "=== Knowra (native) ==="
-  echo ""
-
-  if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating Python virtual environment..."
-    python3 -m venv "$VENV_DIR"
-  fi
-
-  echo "Installing backend dependencies..."
-  "$VENV_DIR/bin/python" -m pip install -q -r "$BACKEND_DIR/requirements.txt"
-
-  echo "Installing frontend dependencies..."
-  echo "Using Node $(node -v) from $(command -v node)"
-  cd "$FRONTEND_DIR"
-  npm install --silent
-  clear_frontend_native_attrs
-
-  echo ""
-  echo "Starting backend on http://localhost:$BACKEND_PORT"
-  echo "Starting frontend on http://localhost:$FRONTEND_PORT"
-  echo ""
-  echo "Press Ctrl+C to stop both servers."
-  echo ""
-
-  cd "$BACKEND_DIR"
-  # Normal reading sessions must not be interrupted by source-file edits.
-  # Opt in explicitly while developing; reload can interrupt in-flight model work.
-  local backend_args=(main:app --host 127.0.0.1 --port "$BACKEND_PORT" --timeout-graceful-shutdown 10)
-  if [ "${BACKEND_RELOAD:-0}" = "1" ]; then
-    backend_args+=(--reload)
-  fi
-  "$VENV_DIR/bin/uvicorn" "${backend_args[@]}" &
-  BACKEND_PID=$!
-
-  cd "$FRONTEND_DIR"
-  VITE_API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT" npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort &
-  FRONTEND_PID=$!
-
-  schedule_open_url "http://localhost:$FRONTEND_PORT"
-
-  while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do
-    sleep 1
-  done
-
-  cleanup_native
-  wait "$BACKEND_PID" 2>/dev/null || true
-  wait "$FRONTEND_PID" 2>/dev/null || true
-  exit 1
-}
-
-case "$RUN_MODE" in
-  auto)
-    if docker_compose_available && ensure_docker_daemon; then
-      run_docker
-    else
-      run_native
-    fi
-    ;;
-  docker)
-    if ! docker_compose_available; then
-      echo "ERROR: Docker Compose is not installed."
-      exit 1
-    fi
-    if ! ensure_docker_daemon; then
-      echo "ERROR: Docker is installed but the daemon is not running."
-      exit 1
-    fi
-    run_docker
-    ;;
-  native)
-    run_native
-    ;;
-  *)
-    echo "ERROR: Unknown KNOWLEDGE_WIKI_MODE=$RUN_MODE. Use auto, docker, or native."
-    exit 1
-    ;;
-esac
+echo "Ready: worktree data=$PROJECT_DIR/data; API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT"
+[ "${1:-}" = --check ] && exit 0
+cleanup() { kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+export KNOWRA_DEPLOY_MODE=local
+export KNOWRA_TASK_DB="${KNOWRA_TASK_DB:-$PROJECT_DIR/data/tasks.db}"
+backend_args=(main:app --host 127.0.0.1 --port "$BACKEND_PORT" --timeout-graceful-shutdown 10)
+[ "${BACKEND_RELOAD:-0}" = 1 ] && backend_args+=(--reload)
+if [ "${KNOWRA_LOAD_ENV:-0}" = 1 ]; then
+  [ -f "$PROJECT_DIR/.env" ] || { echo "KNOWRA_LOAD_ENV=1 requires this worktree's .env" >&2; exit 1; }
+  backend_args+=(--env-file "$PROJECT_DIR/.env")
+fi
+echo "API startup may initialize/migrate this worktree's data and start its independent worker."
+echo "Stopping this launcher stops API/Web only; see docs/TASK-WORKERS.md for worker shutdown."
+cd "$PROJECT_DIR/backend"
+"$VENV_DIR/bin/python" -m uvicorn "${backend_args[@]}" &
+BACKEND_PID=$!
+cd "$PROJECT_DIR/frontend"
+VITE_API_PROXY_TARGET="http://127.0.0.1:$BACKEND_PORT" npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort &
+FRONTEND_PID=$!
+while kill -0 "$BACKEND_PID" 2>/dev/null && kill -0 "$FRONTEND_PID" 2>/dev/null; do sleep 1; done
+exit 1
