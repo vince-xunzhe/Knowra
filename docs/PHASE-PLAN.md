@@ -70,7 +70,7 @@
 - [ ] prepare 流程：
   - [ ] 写 staging（pending session 表，1h TTL）
   - [ ] 对每个 wiki_files 查 content_hash → 决定 uploads_required vs uploads_skipped
-  - [ ] 调 Supabase Storage SDK 签发 PUT URL（10 min 有效）
+  - [ ] 调 Supabase Storage SDK 签发 PUT URL（1h 有效）
   - [ ] 返回 sync_session_id + uploads_required[]
 - [ ] commit 流程：
   - [ ] 校验 sync_session_id 有效性 + ownership

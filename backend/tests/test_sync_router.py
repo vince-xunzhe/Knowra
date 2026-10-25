@@ -174,6 +174,13 @@ class SyncRouterTests(unittest.TestCase):
         self.assertTrue(body["uploads_required"][0]["upload_url"].startswith("memstore://"))
         self.assertEqual(body["uploads_skipped"], [])
         self.assertEqual(body["validation_errors"], [])
+        expires_raw = body["expires_at"]
+        if expires_raw.endswith("Z"):
+            expires_raw = f"{expires_raw[:-1]}+00:00"
+        expires_at = datetime.fromisoformat(expires_raw)
+        remaining = expires_at - datetime.now(timezone.utc)
+        self.assertGreater(remaining, timedelta(minutes=55))
+        self.assertLessEqual(remaining, timedelta(hours=1, minutes=1))
 
     def test_full_flow_prepare_put_commit(self):
         # Step 1: prepare
@@ -236,8 +243,23 @@ class SyncRouterTests(unittest.TestCase):
             "api_version": "1", "sync_session_id": sid,
             "uploaded": [{"rel_path": "papers/foo.md", "content_hash": "sha256:abc"}],
         }
-        first = self.client.post("/api/sync/commit", json=body).json()
-        second = self.client.post("/api/sync/commit", json=body).json()
+        first_resp = self.client.post("/api/sync/commit", json=body)
+        self.assertEqual(first_resp.status_code, 200, first_resp.text)
+        first = first_resp.json()
+
+        # A lost response may not be retried until the upload window has
+        # elapsed. Committed sessions are immutable and must still replay.
+        db = self.SessionLocal()
+        try:
+            sess = db.query(SyncSession).filter(SyncSession.id == sid).one()
+            sess.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+            db.commit()
+        finally:
+            db.close()
+
+        second_resp = self.client.post("/api/sync/commit", json=body)
+        self.assertEqual(second_resp.status_code, 200, second_resp.text)
+        second = second_resp.json()
         self.assertEqual(first["revision"], second["revision"])
         self.assertEqual(first["accepted"], second["accepted"])
 
