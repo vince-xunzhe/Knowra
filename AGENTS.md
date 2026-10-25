@@ -11,7 +11,7 @@ Knowra is a local-first paper research workspace: Python/FastAPI, React/TypeScri
 
 ## Native environment and execution
 
-Use Python 3.12.13+ within 3.12.x and Node 24.14.1+ within 24.x; pinned baselines are in `.python-version` / `.node-version`. Current Web locks use Vite 8.0.4 and TypeScript 6.0.2. This does not change the optional mobile/container environment.
+Use Python 3.12.13+ within 3.12.x and Node 24.14.1+ within 24.x; pinned baselines are in `.python-version` / `.node-version`. Current Web locks use Vite 8.0.9 and TypeScript 6.0.3. This does not change the optional mobile/container environment.
 
 - `./scripts/install-native.sh` explicitly installs this worktree's wheel-only, hashed Python lock and official npm lock with lifecycle scripts disabled. It clears inherited package-manager configuration and keeps caches local. Review dependency sources/scripts before changing this policy; do not modify global config, native signatures or quarantine settings.
 - `./start.sh --check` checks installed versions, lock markers, data boundaries and ports without loading credentials or importing the app.
