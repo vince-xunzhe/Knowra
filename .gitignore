@@ -50,6 +50,7 @@ data/tasks.db
 data/tasks.worker.lock
 data/artifacts/*
 !data/artifacts/.gitkeep
+data/roadmap_assets/
 data/paper_records/*
 !data/paper_records/.gitkeep
 data/papers/*
@@ -88,3 +89,6 @@ supabase/.temp/
 # Frontend browser test artifacts
 frontend/test-results/
 frontend/playwright-report/
+
+# Separate local Python 3.12 environment (not publication content)
+/backend/.venv-py312/

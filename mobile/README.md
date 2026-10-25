@@ -1,6 +1,8 @@
 # Knowra Mobile
 
-iOS + Android 移动端，只读消费云端知识库。React Native + Expo SDK 51 + TypeScript。
+iOS + Android 移动端，只读消费云端知识库。当前包清单为 React Native 0.81.5 + Expo SDK 54 + TypeScript。
+
+`package-lock.json` 中 React Native 要求 Node `>=20.19.4`。保留现有锁文件；项目尚未固定原生 Node/npm 版本，根安装文档中的“Node 20 或更新版本”也未表达完整约束。设备、Expo Go 与所选运行时的兼容性仍需在实际环境验证。
 
 ## 跑起来
 
@@ -88,7 +90,12 @@ mobile/
 - ❌ Markdown 富文本渲染（v2，等需求确认再加 `react-native-markdown-display`）
 - ❌ 图谱可视化（mobile 屏幕太小，看板 / 关系图留桌面）
 - ❌ 离线缓存（snapshot 全部在内存；下拉刷新拉新）
-- ❌ Push 通知 / EAS Build / TestFlight（v3 准备上架时再做）
+- ❌ Push 通知
+- EAS Build / TestFlight：仓库已有 `eas.json` 构建与提交配置；配置存在不代表构建、提交或上架已经验收。
+
+## 检查说明
+
+已有类型检查入口为在 `mobile/` 执行 `npm run tsc`。2026-10-25 的文档校订只依据包清单、配置和代码入口核对；本次未运行安装、构建、类型检查、设备预览或云端请求。
 
 ## 调试
 

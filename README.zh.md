@@ -8,6 +8,8 @@ Knowra 是一个本地优先的研究工作台，目标是把论文逐步沉淀�
 
 安装、依赖环境和启动命令请看 [安装说明](INSTALL.zh.md)。
 
+开发环境提示：安装文档和 `start.sh` 当前对 Node 20 的检查过于宽泛。锁文件中的 Vite 要求 `^20.19.0 || >=22.12.0`，可选移动端的 React Native 要求 `>=20.19.4`；容器文件声明 Python 3.12 和 Node 24。原生环境版本固定与更严格的启动检查仍待补齐，准备另一台机器时应保留现有 npm 锁文件。
+
 ## 亮点功能
 
 - **持久化独立后台任务**：自动管理的独立 worker 执行论文抽取、Wiki 编译、筛选与健检；
@@ -216,7 +218,9 @@ data/
 
 ## 常用操作
 
-原生启动时，`bash start.sh` 默认关闭后端热重载，避免修改源码中断模型任务。开发时可用 `KNOWLEDGE_WIKI_MODE=native BACKEND_RELOAD=1 bash start.sh` 显式开启。论文处理不再挂在 HTTP 响应后台任务中；重启仍会中断尚未完成的工作，需要重新执行，已保存的结果会保留。
+原生启动时，`bash start.sh` 默认关闭后端热重载，开发时可用 `KNOWLEDGE_WIKI_MODE=native BACKEND_RELOAD=1 bash start.sh` 显式开启。论文处理由独立 worker 执行：关闭浏览器或重启 API 不会终止该 worker。若 worker 本身异常中断，可在后台任务面板从已保存的检查点恢复；被中断的模型调用可能再次执行。停止 API 不等于停止全部任务，关闭与恢复方式见[后台任务说明](docs/TASK-WORKERS.md)。
+
+`./start.sh` 会读取本机配置并安装依赖；容器模式可能启动 Colima、构建镜像，macOS 原生模式可能调整原生 Node 模块的属性与签名。API 启动还可能执行数据库 schema 变更、回填并启动 worker。开发检查应使用独立 checkout/worktree 和独立数据，避免复用正在使用的研究数据库。文档检查不代表启动、构建或测试已经通过，交接时应注明实际执行了哪些检查。
 
 本地模式下，同一数据目录只能启动一个后端，换端口也不能重复启动。SQLite 使用 WAL，锁等待时间为 30 秒；论文处理遇到临时锁冲突会先回滚再有限重试，复用本轮已成功的模型结果。备份运行中的数据库应使用 SQLite backup API（迁移和去重脚本已使用），不要只复制 `knowledge.db`，因为已提交的数据可能仍在 WAL 附属文件中。
 
@@ -235,6 +239,7 @@ Knowra 面向本地个人研究工作流。默认不会提交以下运行数据�
 - `data/knowledge.db`
 - `data/papers/*`
 - `data/artifacts/*`
+- `data/roadmap_assets/`
 - `data/paper_records/*`
 - `data/wiki/*`
 - `backend/.venv`
