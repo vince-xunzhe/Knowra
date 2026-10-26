@@ -240,7 +240,7 @@ async function drag(page: Page, locator: Locator, dx: number, dy: number) {
   await page.mouse.up()
 }
 
-test('import gate, duplicate references, independent notes and saved layout', async ({ page }) => {
+test('import gate, imported status, independent notes and saved layout', async ({ page }) => {
   const context = await setup(page)
   await page.locator('.domain-header').getByRole('button', { name: '导入论文', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '导入论文', exact: true })
@@ -252,7 +252,14 @@ test('import gate, duplicate references, independent notes and saved layout', as
   ).toBeEnabled()
   await dialog.getByRole('button', { name: '关闭', exact: true }).click()
   await importPaper(page)
-  await importPaper(page)
+  await page.locator('.domain-header').getByRole('button', { name: '导入论文', exact: true }).click()
+  const imported = dialog.locator('label').filter({ hasText: reviews[0].title })
+  await expect(imported).toHaveAttribute('data-imported', 'true')
+  await expect(imported).toContainText('已导入')
+  await expect(imported.getByRole('checkbox')).toBeDisabled()
+  await expect(dialog.locator('label').filter({ hasText: reviews[1].title })).toContainText('未导入')
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click()
+  await importPaper(page, reviews[1].title)
   const cards = page.locator('[data-kind="paper"]')
   await expect(cards).toHaveCount(2)
   await cards.first().getByRole('heading').click()
