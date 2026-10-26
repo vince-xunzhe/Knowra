@@ -1,6 +1,6 @@
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from config import load_config, is_cloud_mode
 from database import init_db, ensure_runtime_schema, SessionLocal, DB_PATH
@@ -200,3 +200,9 @@ if not is_cloud_mode():
 @app.get("/")
 def root():
     return {"message": "Knowra API is running"}
+
+
+@app.get("/favicon.ico", include_in_schema=False, status_code=204)
+def favicon():
+    """Silence browsers' automatic favicon probe on the API origin."""
+    return Response(status_code=204)

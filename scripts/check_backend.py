@@ -19,6 +19,7 @@ import tempfile
 
 
 TESTS = (
+    "tests.test_main_routes",
     "tests.test_task_queue",
     "tests.test_task_executor",
     "tests.test_paper_background_dispatch",
