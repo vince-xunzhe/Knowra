@@ -44,4 +44,4 @@ API 启动可能初始化/迁移本 worktree 的 `data/` 并按既有策略启�
 
 合并代码不会自动迁移被 Git 忽略的本地环境。在日常目录先运行一次 `./scripts/install-native.sh`，再运行 `./start.sh --check`。如果原 `backend/.venv` 是 Python 3.9，安装器会保留它，另建并登记 Python 3.12 环境；以后 `./start.sh` 自动使用登记的环境，无需激活，也不会边启动边安装。不把开发 worktree 的环境链接回 main。
 
-如果预检提示已有数据库，此时只检查了存在性，没有打开数据库。确认备份／迁移影响后，再用 `KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh` 启动；这与准备 Python 是两个独立步骤。安装不读取凭据或研究数据。修复合并到日常目录之前，该目录仍是旧启动逻辑，不能把新 worktree 验收通过当作 main 已经修好。
+如果预检提示已有数据库，此时只检查了存在性。环境、路径和端口有效时，`./start.sh --check` 仍成功退出；不打开数据库，不启动 API／前端／worker，也无需授予已有数据许可。确认备份／迁移影响后，真正启动服务才使用 `KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh`；这与准备 Python、检查环境是独立步骤。安装不读取凭据或研究数据。工作区验收不会更新日常目录；相关 PR 合并后，需先更新该目录的 main 代码，再使用修复后的启动行为。

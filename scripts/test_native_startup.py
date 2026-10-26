@@ -28,6 +28,9 @@ CANONICAL = "backend/.venv"
 SERVICE = r'''import argparse, json, os, signal, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+if os.environ.get('KNOWRA_TEST_PREFLIGHT') == '1':
+    (Path.cwd().parent / 'unexpected-service-start').touch()
+    raise SystemExit('Preflight must not start a service')
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument('--host', required=True)
 parser.add_argument('--port', required=True, type=int)
@@ -187,6 +190,8 @@ class NativeStartupTests(unittest.TestCase):
             "PYTHON_BIN": sys.executable,
             "TMPDIR": str(self.fixture),
         }
+        api_port, web_port = unused_ports()
+        self.env.update(BACKEND_PORT=str(api_port), FRONTEND_PORT=str(web_port))
         self.processes: list[subprocess.Popen[str]] = []
 
     def tearDown(self) -> None:
@@ -236,6 +241,52 @@ class NativeStartupTests(unittest.TestCase):
         self.assertNotIn("Traceback", output)
         self.assertNotIn("AssertionError", output)
         return output
+
+    def audit_preflight(self) -> dict[str, str]:
+        """Audit fixture Python processes without importing an application.
+
+        The launcher/runtime use normal Python startup and inherit this hook.
+        Their isolated -I/-S version probes intentionally only import sys.
+        Violations are recorded even if application code catches the exception.
+        """
+        audit = self.fixture / "audit"
+        audit.mkdir()
+        (audit / "sitecustomize.py").write_text(
+            "from pathlib import Path\nimport os, sys\n"
+            f"root = Path({str(self.fixture)!r})\n" + r'''
+with (root / "audit-loaded").open("a") as log:
+    log.write("loaded\n")
+def reject(event):
+    with (root / "audit-violations").open("a") as log:
+        log.write(event + "\n")
+    raise RuntimeError("Preflight attempted forbidden operation: " + event)
+def audit(event, args):
+    if event == "open" and isinstance(args[0], (str, bytes, os.PathLike)):
+        target = Path(os.fsdecode(args[0])).absolute()
+        if target.is_relative_to(root / "data") or target == root / ".env":
+            reject(event + ": data/config file")
+    if event == "sqlite3.connect":
+        reject(event)
+    if event == "import" and (args[0] in {"main", "task_worker", "services.task_runtime"}
+                              or args[0].startswith("uvicorn")):
+        reject(event + ": application/worker")
+    if event == "subprocess.Popen":
+        command = args[1]
+        if not (isinstance(command, (tuple, list)) and command[1:] == [
+                "-I", "-S", "-c", "import sys; print('.'.join(map(str,sys.version_info[:3])))"]):
+            reject(event + ": unexpected child")
+sys.addaudithook(audit)
+''')
+        return {**self.env, "PYTHONPATH": str(audit), "KNOWRA_TEST_PREFLIGHT": "1"}
+
+    def assert_no_preflight_side_effects(self, calls_before: bytes) -> None:
+        self.assertTrue((self.fixture / "audit-loaded").is_file(), "Python audit must be active")
+        self.assertFalse((self.fixture / "audit-violations").exists(), "No data open, SQLite connection or app/worker import")
+        self.assertEqual((self.fixture / "tool-calls.jsonl").read_bytes(), calls_before,
+                         "Preflight must not invoke npm or uv")
+        self.assertFalse((self.fixture / "backend-service.json").exists())
+        self.assertFalse((self.fixture / "frontend-service.json").exists())
+        self.assertFalse((self.fixture / "unexpected-service-start").exists())
 
     def test_legacy_environment_error_is_actionable_and_does_not_mutate(self) -> None:
         before = self.legacy()
@@ -380,15 +431,78 @@ class NativeStartupTests(unittest.TestCase):
         self.assert_friendly_failure(self.run_entry("scripts/install-native.sh"))
         self.assertEqual(outside.read_bytes(), original)
 
-    def test_existing_data_requires_explicit_opt_in(self) -> None:
+    def test_preflight_with_existing_database_is_read_only_without_opt_in(self) -> None:
+        self.install()
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        # Synthetic invalid SQLite bytes make accidental DB use observable;
+        # the audit hook also catches reads that would not change those bytes.
+        for name in ("knowledge.db", "search.sqlite", "backup.sqlite3"):
+            with self.subTest(name=name):
+                sentinel = self.fixture / "data" / name
+                original = b"synthetic sentinel; never opened as SQLite"
+                sentinel.write_bytes(original)
+                run = self.run_entry("start.sh", "--check", env=env)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertIn("Existing data detected", run.stdout + run.stderr)
+                self.assertIn("Preflight passed", run.stdout)
+                self.assertEqual(sentinel.read_bytes(), original)
+                self.assertEqual(list((self.fixture / "data").iterdir()), [sentinel])
+                self.assert_no_preflight_side_effects(calls_before)
+                sentinel.unlink()
+
+    def test_preflight_without_database_does_not_load_config_or_start_services(self) -> None:
+        self.install()
+        env = self.audit_preflight()
+        (self.fixture / ".env").write_text("SYNTHETIC_ONLY=not-a-real-credential\n")
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        run = self.run_entry("start.sh", "--check", env={**env, "KNOWRA_LOAD_ENV": "1"})
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("Preflight passed", run.stdout)
+        self.assertNotIn("Existing data detected", run.stdout + run.stderr)
+        self.assertEqual(list((self.fixture / "data").iterdir()), [])
+        self.assert_no_preflight_side_effects(calls_before)
+
+    def test_preflight_still_rejects_occupied_ports(self) -> None:
+        self.install()
+        self.assertIsNotNone(shutil.which("lsof", path=self.env["PATH"]), "Port validation requires lsof")
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        for variable in ("BACKEND_PORT", "FRONTEND_PORT"):
+            with self.subTest(variable=variable), socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                run = self.run_entry("start.sh", "--check", env={**env, variable: str(port)})
+                output = self.assert_friendly_failure(run)
+                self.assertIn(f"Port {port} is occupied", output)
+                self.assertNotIn("Preflight passed", output)
+                self.assert_no_preflight_side_effects(calls_before)
+
+    def test_preflight_still_rejects_linked_data(self) -> None:
+        self.install()
+        outside = self.fixture / "other-data"
+        outside.mkdir()
+        (self.fixture / "data").rmdir()
+        (self.fixture / "data").symlink_to(outside, target_is_directory=True)
+        output = self.assert_friendly_failure(self.run_entry("start.sh", "--check"))
+        self.assertIn("Do not share/link", output)
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_actual_start_with_existing_data_requires_explicit_opt_in(self) -> None:
         self.install()
         sentinel = self.fixture / "data/knowledge.db"
-        sentinel.write_bytes(b"synthetic sentinel; never opened as SQLite")
-        output = self.assert_friendly_failure(self.run_entry("start.sh", "--check"))
-        self.assertIn("KNOWRA_ALLOW_EXISTING_DATA", output)
-        accepted = self.run_entry("start.sh", "--check", env={**self.env, "KNOWRA_ALLOW_EXISTING_DATA": "1"})
-        self.assertEqual(accepted.returncode, 0, accepted.stdout + accepted.stderr)
-        self.assertEqual(sentinel.read_bytes(), b"synthetic sentinel; never opened as SQLite")
+        original = b"synthetic sentinel; never opened as SQLite"
+        sentinel.write_bytes(original)
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        for opt_in in (None, "0", "true"):
+            with self.subTest(opt_in=opt_in):
+                values = env if opt_in is None else {**env, "KNOWRA_ALLOW_EXISTING_DATA": opt_in}
+                output = self.assert_friendly_failure(self.run_entry("start.sh", env=values))
+                self.assertIn("KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh", output)
+                self.assertEqual(sentinel.read_bytes(), original)
+                self.assert_no_preflight_side_effects(calls_before)
 
     def test_daily_start_uses_selected_environment_loopback_ports_and_cleans_up(self) -> None:
         before = self.legacy()
@@ -397,6 +511,9 @@ class NativeStartupTests(unittest.TestCase):
         # A relative NODE_BIN must remain usable after the launcher cd's into
         # backend/frontend. It may not accidentally select a global Node later.
         env = {**self.env, "NODE_BIN": "./bin/node", "BACKEND_PORT": str(api_port), "FRONTEND_PORT": str(web_port)}
+        sentinel = self.fixture / "data/knowledge.db"
+        sentinel.write_bytes(b"synthetic existing data")
+        env["KNOWRA_ALLOW_EXISTING_DATA"] = "1"
         process = subprocess.Popen([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True)
@@ -437,6 +554,7 @@ class NativeStartupTests(unittest.TestCase):
                 self.fail(f"Launcher left its mock service listening on {port}")
         self.assertEqual((self.fixture / CANONICAL / "bin/python").read_bytes(), before)
         self.assertFalse((self.fixture / "data/tasks.db").exists())
+        self.assertEqual(sentinel.read_bytes(), b"synthetic existing data")
 
 
 if __name__ == "__main__":

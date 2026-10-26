@@ -6,7 +6,9 @@ case "${1:-}" in ""|--check) ;; *) echo "Usage: ./start.sh [--check]" >&2; exit 
 check_installed
 BACKEND_PORT="${BACKEND_PORT:-8103}"
 FRONTEND_PORT="${FRONTEND_PORT:-5183}"
-"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" startup "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
+preflight_mode=startup
+[ "${1:-}" != --check ] || preflight_mode=preflight
+"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" "$preflight_mode" "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
 
 if command -v lsof >/dev/null; then
   for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
@@ -15,9 +17,12 @@ if command -v lsof >/dev/null; then
     fi
   done
 fi
-echo "Ready: worktree data=$PROJECT_DIR/data; API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT"
 echo "Python: $VENV_DIR/bin/python"
-[ "${1:-}" = --check ] && exit 0
+if [ "${1:-}" = --check ]; then
+  echo "Preflight passed: API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT. No services were started."
+  exit 0
+fi
+echo "Ready: worktree data=$PROJECT_DIR/data; API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT"
 cleanup() { kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
