@@ -6,9 +6,7 @@ case "${1:-}" in ""|--check) ;; *) echo "Usage: ./start.sh [--check]" >&2; exit 
 check_installed
 BACKEND_PORT="${BACKEND_PORT:-8103}"
 FRONTEND_PORT="${FRONTEND_PORT:-5183}"
-preflight_mode=startup
-[ "${1:-}" != --check ] || preflight_mode=preflight
-"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" "$preflight_mode" "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
+"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" preflight "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
 
 if command -v lsof >/dev/null; then
   for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
@@ -22,8 +20,20 @@ if [ "${1:-}" = --check ]; then
   echo "Preflight passed: API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT. No services were started."
   exit 0
 fi
+"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" startup "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
 echo "Ready: worktree data=$PROJECT_DIR/data; API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT"
-cleanup() { kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true; }
+cleanup() {
+  local pid
+  for pid in "${BACKEND_PID:-}" "${FRONTEND_PID:-}"; do
+    [ -z "$pid" ] || kill "$pid" 2>/dev/null || true
+  done
+  # Keep the launcher/terminal alive until its own services finish shutdown.
+  # The API's existing shutdown hooks can then stop its recommendation worker.
+  # Do not kill independent task workers or other checkouts' processes.
+  for pid in "${BACKEND_PID:-}" "${FRONTEND_PID:-}"; do
+    [ -z "$pid" ] || wait "$pid" 2>/dev/null || true
+  done
+}
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 export KNOWRA_DEPLOY_MODE=local
@@ -35,7 +45,7 @@ if [ "${KNOWRA_LOAD_ENV:-0}" = 1 ]; then
   backend_args+=(--env-file "$PROJECT_DIR/.env")
 fi
 echo "API startup may initialize/migrate this worktree's data and start its independent worker."
-echo "Stopping this launcher stops API/Web only; see docs/TASK-WORKERS.md for worker shutdown."
+echo "Stopping this launcher waits for API/Web shutdown; independent task workers may continue. See docs/TASK-WORKERS.md."
 cd "$PROJECT_DIR/backend"
 "$VENV_DIR/bin/python" -m uvicorn "${backend_args[@]}" &
 BACKEND_PID=$!

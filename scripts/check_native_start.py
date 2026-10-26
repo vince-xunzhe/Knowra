@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Smoke-test real API/Vite startup in a disposable, offline source snapshot.
 
-No application API is mocked. The snapshot has fresh SQLite files, a fresh HOME,
+No application API is mocked. The snapshot has synthetic legacy SQLite files, a fresh HOME,
 and a physical venv whose .pth reads this worktree's installed dependencies.
 node_modules is copied physically. Python writes outside the snapshot, external
 network connections, and model CLI execution are blocked. The task worker uses
 the supported external mode; the real recommendation worker starts with an empty
 queue. This is not a migration test against an existing user's database.
+Launcher shutdown must complete the API hooks and leave no fixture processes,
+including the empty recommendation worker. Recovery cleanup always fails the
+check; independent research task workers are not started by this fixture.
 """
 from __future__ import annotations
 
@@ -15,12 +18,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import pty
+import select
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -47,6 +53,8 @@ def audit(event, args):
         if str(path) in ('/dev/null', '/dev/urandom', '/dev/random'): return
         flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
         writing = flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)
+        if os.environ.get('KNOWRA_SMOKE_NO_DATA_OPEN') == '1' and inside(path, [ROOT / 'data']):
+            deny('prelaunch data open', path)
         if writing and not inside(path, [ROOT]): deny('outside write', path)
         if not writing and not inside(path, READ_ROOTS): deny('outside read', path)
     elif event in ('socket.connect', 'socket.bind'):
@@ -57,6 +65,7 @@ def audit(event, args):
         deny('external DNS', args[0])
     elif event == 'sqlite3.connect':
         path = pathlib.Path(args[0]).resolve()
+        if os.environ.get('KNOWRA_SMOKE_NO_DATA_OPEN') == '1': deny('prelaunch SQLite', path)
         if not path.is_relative_to(ROOT / 'data'): deny('outside SQLite', path)
     elif event == 'subprocess.Popen':
         executable, command = args[:2]
@@ -213,6 +222,54 @@ def listener_addresses(port: int) -> list[str]:
     return [line[1:] for line in found.stdout.splitlines() if line.startswith('n')]
 
 
+class TerminalSession:
+    """Drive the real terminal confirmation while continuously draining output."""
+
+    def __init__(self, log: Path):
+        self.master, self.slave = pty.openpty()
+        self.log = log
+        self.output = bytearray()
+        self.stop = threading.Event()
+        self.reader = threading.Thread(target=self._drain, daemon=True)
+        self.reader.start()
+
+    def _drain(self):
+        with self.log.open('ab') as log:
+            while not self.stop.is_set():
+                try:
+                    ready, _, _ = select.select([self.master], [], [], .1)
+                    if not ready:
+                        continue
+                    chunk = os.read(self.master, 65536)
+                except OSError:
+                    break  # A closed PTY slave reports EIO on macOS.
+                if not chunk:
+                    break
+                log.write(chunk)
+                log.flush()
+                self.output.extend(chunk)
+
+    def child_started(self):
+        os.close(self.slave)
+        self.slave = -1
+
+    def wait_for_prompt(self, run: subprocess.Popen, timeout: int = 30):
+        deadline = time.monotonic() + timeout
+        while b'Type START to continue' not in self.output:
+            if run.poll() is not None:
+                raise RuntimeError('Real launcher exited before the terminal confirmation')
+            if time.monotonic() > deadline:
+                raise RuntimeError('Real launcher did not show its terminal confirmation')
+            time.sleep(.1)
+
+    def close(self):
+        self.stop.set()
+        self.reader.join(timeout=2)
+        if self.slave >= 0:
+            os.close(self.slave)
+        os.close(self.master)
+
+
 def prepare(snapshot: Path) -> tuple[Path, dict[str, str]]:
     prefix = Path(sys.prefix).resolve()
     if prefix not in {(ROOT / 'backend' / name).resolve() for name in ('.venv', '.venv-native-py312')}:
@@ -280,11 +337,13 @@ def main() -> int:
         'dependencies':'new physical fixture venv reads this worktree site-packages; physical node_modules copy',
         'data':'new synthetic SQLite files only; original main/worktree data not copied or opened'}}
     run = browser_run = None
+    terminal = None
     api_port = web_port = 0
     owned = set()
     try:
         site, hashes = prepare(snapshot)
         report['source_sha256'] = hashes
+        report['harness_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         api_port, web_port = ports()
         python = snapshot / 'backend/.venv/bin/python'
         env = {'PATH':str(Path(node).parent)+os.pathsep+os.defpath+':/usr/sbin',
@@ -299,14 +358,33 @@ def main() -> int:
                'KNOWRA_WORKER_MODE':'external','KNOWRA_DEPLOY_MODE':'local',
                'KNOWRA_TASK_DB':str(snapshot/'data/tasks.db'),'KNOWRA_REC_DB':str(snapshot/'data/recommendations.db'),
                'BACKEND_PORT':str(api_port),'FRONTEND_PORT':str(web_port)}
-        # An empty, synthetic SQLite header is sufficient to exercise existing-
-        # data consent. App schema initialization then operates on this new DB.
+        # Seed only the disposable fixture, without importing the application.
+        # Removing this nullable column simulates an older supported schema;
+        # the real startup must add it back and preserve an unrelated row.
+        seed = '''from database import Base, engine, DB_PATH
+import sqlite3
+Base.metadata.create_all(bind=engine)
+engine.dispose()
+with sqlite3.connect(DB_PATH) as db:
+    db.execute('ALTER TABLE papers DROP COLUMN openai_file_id')
+    db.execute('CREATE TABLE smoke_sentinel (id INTEGER PRIMARY KEY, note TEXT NOT NULL)')
+    db.execute("INSERT INTO smoke_sentinel VALUES (1, 'synthetic existing data')")
+'''
+        seeded = subprocess.run([str(python), '-c', seed], cwd=snapshot/'backend', env=env,
+                                capture_output=True, text=True, timeout=30)
+        (snapshot/'.cache/seed.log').write_text(seeded.stdout+seeded.stderr)
+        if seeded.returncode:
+            raise RuntimeError('Synthetic legacy database initialization failed; inspect seed.log')
         import sqlite3
         with sqlite3.connect(snapshot/'data/knowledge.db') as db:
-            db.execute('PRAGMA user_version=0')
+            if 'openai_file_id' in {row[1] for row in db.execute('PRAGMA table_info(papers)')}:
+                raise RuntimeError('Synthetic fixture must start without the legacy column')
+        report['checks']['synthetic_legacy_column_missing_before_start'] = True
         before = hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest()
+        prelaunch_env = {**env, 'KNOWRA_SMOKE_NO_DATA_OPEN':'1'}
         for label, args, wanted in [('preflight',['--check'],0),('startup_guard',[],1)]:
-            result = subprocess.run([str(snapshot/'start.sh'),*args],cwd=snapshot,env=env,capture_output=True,text=True,timeout=30)
+            result = subprocess.run([str(snapshot/'start.sh'),*args],cwd=snapshot,env=prelaunch_env,
+                                    stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
             (snapshot/'.cache'/f'{label}.log').write_text(result.stdout+result.stderr)
             report['checks'][label] = result.returncode
             if (result.returncode==0) != (wanted==0):
@@ -314,10 +392,21 @@ def main() -> int:
             if hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest()!=before:
                 raise RuntimeError(label+' modified the synthetic database')
         report['checks']['existing_db_unchanged_before_launch'] = True
-        env['KNOWRA_ALLOW_EXISTING_DATA']='1'  # Applies only to this synthetic DB.
-        with (snapshot/'.cache/start.log').open('w') as log:
-            run = subprocess.Popen([str(snapshot/'start.sh')],cwd=snapshot,env=env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
+        if 'KNOWRA_ALLOW_EXISTING_DATA' in env:
+            raise RuntimeError('Daily-start smoke must use terminal confirmation, not an environment opt-in')
+        terminal = TerminalSession(snapshot/'.cache/start.log')
+        run = subprocess.Popen([str(snapshot/'start.sh')],cwd=snapshot,env=env,
+                               stdin=terminal.slave,stdout=terminal.slave,stderr=terminal.slave,start_new_session=True)
+        terminal.child_started()
         owned.add(run.pid)
+        terminal.wait_for_prompt(run)
+        if listening(api_port) or listening(web_port):
+            raise RuntimeError('Real services started before terminal confirmation')
+        if hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest() != before:
+            raise RuntimeError('Real launcher modified the synthetic database before terminal confirmation')
+        os.write(terminal.master, b'START\n')
+        report['checks']['terminal_confirmation'] = 'START entered at the ordinary ./start.sh prompt'
+        report['checks']['allow_existing_data_environment_present'] = False
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         api=f'http://127.0.0.1:{api_port}'; web=f'http://127.0.0.1:{web_port}'
         deadline=time.monotonic()+60
@@ -371,10 +460,23 @@ def main() -> int:
         while time.monotonic()<deadline and (any(alive(pid) for pid in owned) or listening(api_port) or listening(web_port)):
             time.sleep(.1)
         report['cleanup']['launcher_returncode']=run.returncode
-        report['cleanup']['remaining_pids']=[pid for pid in sorted(owned) if alive(pid)]
+        remaining=[pid for pid in sorted(owned) if alive(pid)]
+        report['cleanup']['launcher_remaining_pids']=remaining
         report['cleanup']['open_ports']=[port for port in (api_port,web_port) if listening(port)]
-        if report['cleanup']['remaining_pids'] or report['cleanup']['open_ports']:
+        if remaining or report['cleanup']['open_ports']:
             raise RuntimeError('Normal launcher exit left descendants or open ports')
+        shutdown_log=(snapshot/'.cache/start.log').read_text()
+        report['cleanup']['api_shutdown_completed']='Application shutdown complete.' in shutdown_log
+        if not report['cleanup']['api_shutdown_completed']:
+            raise RuntimeError('API did not complete its normal shutdown hooks')
+        report['cleanup']['remaining_pids']=remaining
+        with sqlite3.connect(snapshot/'data/knowledge.db') as db:
+            columns = {row[1] for row in db.execute('PRAGMA table_info(papers)')}
+            sentinel = db.execute('SELECT id,note FROM smoke_sentinel').fetchall()
+        report['checks']['synthetic_legacy_column_restored'] = 'openai_file_id' in columns
+        report['checks']['synthetic_existing_row_preserved'] = sentinel == [(1,'synthetic existing data')]
+        if not report['checks']['synthetic_legacy_column_restored'] or not report['checks']['synthetic_existing_row_preserved']:
+            raise RuntimeError('Real startup failed the synthetic existing-data migration/preservation check')
         with sqlite3.connect(snapshot/'data/tasks.db') as db:
             jobs=db.execute('SELECT kind,status,attempt FROM jobs').fetchall()
         with sqlite3.connect(snapshot/'data/recommendations.db') as db:
@@ -407,6 +509,8 @@ def main() -> int:
         # Recovery touches only PIDs registered/descended from this fixture.
         survivors=[pid for pid in owned if owned_alive(pid,snapshot)]
         if survivors:
+            report['exit_code']=1
+            report.setdefault('error','Unexpected survivors required recovery cleanup')
             report['cleanup']['recovery_needed']=survivors
             for pid in survivors:
                 try: os.kill(pid,signal.SIGTERM)
@@ -422,6 +526,8 @@ def main() -> int:
         if browser_run is not None:
             try: browser_run.wait(timeout=5)
             except subprocess.TimeoutExpired: pass
+        if terminal is not None:
+            terminal.close()
         report['cleanup']['final_open_ports']=[port for port in (api_port,web_port) if port and listening(port)]
         report['cleanup']['final_remaining_pids']=[pid for pid in sorted(owned) if alive(pid)]
         report['violations']=read_json_lines(snapshot/'.cache/violations.jsonl')
