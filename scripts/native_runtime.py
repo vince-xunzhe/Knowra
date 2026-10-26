@@ -123,7 +123,7 @@ def owner(root, target):
         fail("Interpreter belongs to a different environment; no dependencies were modified: " + str(target))
 
 
-def startup(root, values):
+def startup(root, values, *, check_only=False):
     try:
         ports = [int(value) for value in values]
     except ValueError:
@@ -140,6 +140,9 @@ def startup(root, values):
     if os.environ.get("KNOWRA_DEPLOY_MODE", "local") != "local":
         fail("This launcher is for local development, not cloud deployment.")
     existing = any((root / "data").glob("*.db")) or any((root / "data").glob("*.sqlite*"))
+    if existing and check_only:
+        print("Knowra: Existing data detected. Preflight only: no database was opened and no services were started. Starting services still requires explicit existing-data permission after reviewing backup/migration implications.")
+        return
     if existing and os.environ.get("KNOWRA_ALLOW_EXISTING_DATA") != "1":
         fail("Existing data detected. No database was opened. Review backup/migration implications, then explicitly use KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh for this checkout.")
 
@@ -165,8 +168,8 @@ def main():
         write_record(root, Path(sys.argv[3]), "installing", sys.argv[4])
     elif mode == "finish-install":
         write_record(root, Path(sys.argv[3]), "ready", ".".join(map(str, sys.version_info[:3])))
-    elif mode == "startup":
-        startup(root, sys.argv[3:])
+    elif mode in ("startup", "preflight"):
+        startup(root, sys.argv[3:], check_only=mode == "preflight")
     else:
         fail("Unknown native runtime operation")
 

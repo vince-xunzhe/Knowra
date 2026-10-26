@@ -32,7 +32,7 @@ BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 
 安装器只寻找已安装的基线 Python，不下载运行时；可用 `PYTHON_BIN` 明确指定受支持解释器，`NODE_BIN` 可指定 `.../bin/node` 并仅调整本次命令 PATH。旧环境迁移和日常 main 的使用步骤见 [INSTALL.zh.md](../INSTALL.zh.md)。安装记录包含环境路径、Python 版本、锁哈希和 installing/ready 状态，安装失败不能被视为就绪。
 
-安装不启动服务。启动不安装依赖、不启动 Docker/Colima、不处理原生签名、不自动打开浏览器。`--check` 只验证运行时、安装锁标记、数据边界和端口，不导入应用。默认端口为 8103/5183；并行工作区必须显式分配另一对空闲端口，占用时失败而不偷偷换端口。
+安装不启动服务。启动不安装依赖、不启动 Docker/Colima、不处理原生签名、不自动打开浏览器。`--check` 只验证运行时、安装锁标记、数据边界和端口，不导入应用、不打开数据库。已有数据库仅提示，无需 `KNOWRA_ALLOW_EXISTING_DATA`；该许可仍在真正启动服务前强制检查。默认端口为 8103/5183；并行工作区必须显式分配另一对空闲端口，占用时失败而不偷偷换端口。
 
 `data/` 仍锚定当前 worktree，API 启动会初始化或迁移该目录并按既有策略启动独立 worker。已有数据库时先确认备份/迁移影响，再显式设置 `KNOWRA_ALLOW_EXISTING_DATA=1`；不允许数据目录链接到其他工作区。任务队列必须留在当前 `data/`，启动入口固定 local 模式。根 `.env` 默认不读取，确需本工作区凭据时用 `KNOWRA_LOAD_ENV=1` 显式交给 Uvicorn 解析（不作为 shell 脚本 source）；检查和安装不需要凭据。
 
@@ -43,6 +43,8 @@ BACKEND_PORT=8103 FRONTEND_PORT=5183 ./start.sh
 ```bash
 ./scripts/check.sh
 ```
+
+修改启动入口后，使用 `./scripts/check.sh --real-start`：常规检查全部通过后，额外运行 `scripts/check_native_start.py`，在 `.cache/` 的独立源码快照、合成数据库、临时 HOME 和随机回环端口中启动真实 Uvicorn／Vite，并用现有 Chrome 验证页面导航和真实 API 响应。快照物理环境只读使用本 worktree 刚安装的依赖，前端依赖物理复制；不复制日常数据或配置。主任务 worker 使用 external 模式，空推荐队列不执行研究任务，测试阻断外部网络与模型 CLI。检查包括已有数据的预检／启动保护，以及正常停止后本任务进程和端口回收；任何失败返回非零。日志和合成数据留在忽略的缓存中供诊断，不是对日常数据库迁移或所有生产行为的验证。
 
 此入口先运行 `scripts/test_native_startup.py`：在本工作区临时夹具中直接执行安装、`--check` 和日常 `./start.sh`，使用合成配置与 mock 回环服务；然后依次执行：
 
