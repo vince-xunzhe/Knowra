@@ -20,7 +20,7 @@ cd "../knowra-$task_id"
 
 ## 安装、启动与端口
 
-本机 Web 基线为 Python **3.12.13+ / 3.12.x**、Node **24.14.1+ / 24.x**；固定版本见 `.python-version`、`.node-version`；当前 Web 锁为 Vite 8.0.9、TypeScript 6.0.3。准备好这些运行时和 `uv`（本轮锁由 0.11.14 生成）后：
+本机 Web 基线为 Python **3.12.13+ / 3.12.x**、Node **24.14.1+ / 24.x**；固定版本见 `.python-version`、`.node-version`；当前 Web 锁为 Vite 8.0.10、TypeScript 6.0.3。准备好这些运行时和 `uv`（本轮锁由 0.11.14 生成）后：
 
 ```bash
 ./scripts/install-native.sh
