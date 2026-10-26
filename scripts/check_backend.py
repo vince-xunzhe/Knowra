@@ -29,7 +29,7 @@ TESTS = (
 def validate_workspace(project: Path, prefix: Path) -> Path:
     """Reject linked source/cache/env directories before any generated write."""
     project = project.resolve()
-    for name in (".cache", "backend", "model_gateway", "backend/.venv"):
+    for name in (".cache", "backend", "model_gateway", str(prefix.relative_to(project))):
         candidate = project / name
         if candidate.is_symlink() or not candidate.resolve().is_relative_to(project):
             raise ValueError(f"{name} must be a physical directory inside this worktree")
@@ -37,8 +37,8 @@ def validate_workspace(project: Path, prefix: Path) -> Path:
             raise ValueError(f"{name} must be a directory")
         if name != ".cache" and not candidate.is_dir():
             raise ValueError(f"{name} is missing; prepare this worktree first")
-    if prefix.resolve() != (project / "backend" / ".venv").resolve():
-        raise ValueError("use this worktree's backend/.venv/bin/python")
+    if prefix.resolve() not in {(project / "backend" / name).resolve() for name in (".venv", ".venv-native-py312")}:
+        raise ValueError("use this checkout's managed native environment from scripts/check.sh")
     return project / ".cache"
 
 
@@ -123,7 +123,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=120, help="Maximum suite runtime in seconds")
     options = parser.parse_args()
     if sys.version_info[:2] != (3, 12):
-        parser.error("use this worktree's Python 3.12 virtual environment")
+        parser.error("use this checkout's managed Python 3.12 environment from scripts/check.sh")
     if options.timeout < 1:
         parser.error("--timeout must be positive")
     project = Path(__file__).resolve().parent.parent

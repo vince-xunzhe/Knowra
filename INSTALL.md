@@ -15,10 +15,12 @@ These are the supported native Web baseline, not mobile/container requirements. 
 ## Install explicitly
 
 ```bash
-PYTHON_BIN=python3.12 ./scripts/install-native.sh
+./scripts/install-native.sh
 ```
 
-The installer creates this worktree's `backend/.venv`, installs hash-checked official PyPI wheels from `backend/requirements-dev.lock`, and runs `npm ci --ignore-scripts` against the official npm registry. Tool caches and empty npm config files stay in `.cache/`. It does not start services, migrate a database or change system permissions/signatures. No existing environment is replaced with an incompatible Python version.
+The installer uses an existing successful installation record, creates `backend/.venv` in a fresh checkout, or creates `backend/.venv-native-py312` beside an unrecorded/legacy environment. It never deletes or moves the old environment or reuses an unrecorded `backend/.venv-py312`. It installs hash-checked official PyPI wheels from `backend/requirements-dev.lock`, and runs `npm ci --ignore-scripts` against the official npm registry. Tool caches and empty npm config files stay in `.cache/`. It does not start services, migrate a database or change system permissions/signatures. The installer finds an already installed pinned Python through `python3.12` or `uv`; it never downloads a runtime. Set `PYTHON_BIN=/absolute/path/to/python3.12` to choose an existing supported interpreter. The system bootstrap Python may be older; the application still requires Python 3.12.13+ within 3.12.x. If PATH selects another Node major, prefix each command with `NODE_BIN=/absolute/path/to/node24/bin/node`; no global setting is changed.
+
+A failed install remains marked `installing`, and startup refuses it. Rerunning the installer repairs its own incomplete environment and finishes the locked installation. An unrelated existing native target is never overwritten.
 
 ## Validate before starting
 
@@ -27,7 +29,7 @@ The installer creates this worktree's `backend/.venv`, installs hash-checked off
 ./start.sh --check
 ```
 
-The first command runs the isolated backend subset, polling unit tests, TypeScript/Vite build, full ESLint (zero warnings) and mock browser regressions against real React components. It requires an installed Chrome/Chromium; it never downloads a browser. Every failure or missing prerequisite returns nonzero. The browser uses a temporary profile and a random loopback port, with mocked APIs and external requests blocked. PostgreSQL, real providers and the existing application E2E suite are not run. The second command is a read-only launch preflight. See [Development](docs/DEVELOPMENT.md) for scope and browser configuration.
+The first command runs the startup-entry regression fixtures, isolated backend subset, polling unit tests, TypeScript/Vite build, full ESLint (zero warnings) and mock browser regressions against real React components. It requires an installed Chrome/Chromium; it never downloads a browser. Every failure or missing prerequisite returns nonzero. The browser uses a temporary profile and a random loopback port, with mocked APIs and external requests blocked. PostgreSQL, real providers and the existing application E2E suite are not run. The second command is a read-only launch preflight. See [Development](docs/DEVELOPMENT.md) for scope and browser configuration.
 
 ## Start this worktree
 
@@ -44,3 +46,9 @@ Credentials may be configured later in the application's Settings, within an aut
 ## Backup and delivery
 
 [Development](docs/DEVELOPMENT.md) records the backup decisions still required from the user. No automatic backup, database copy or two-machine synchronization is included. After implementation, validation, review fixes and conflict checks, deliver a non-Draft PR only with that round's publication authorization; the user merges.
+
+## Existing main checkout after upgrading
+
+Merging this fix changes code, not ignored local environments. In your daily checkout, run `./scripts/install-native.sh` once and then `./start.sh --check`. With a legacy Python 3.9 `backend/.venv`, installation preserves it and records a separate Python 3.12 environment; subsequent `./start.sh` uses that record without activation or automatic installation. No worktree environment is linked into main.
+
+If preflight reports existing databases, it has only checked their presence. Review the backup/migration implications before running `KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh`. This opt-in is deliberately separate from preparing Python. Credentials and research data are not touched by installation. Before the fix is merged into your checkout, its old launcher still selects the old environment; a passing repair-worktree check does not repair that checkout by itself.

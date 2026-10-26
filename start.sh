@@ -6,20 +6,8 @@ case "${1:-}" in ""|--check) ;; *) echo "Usage: ./start.sh [--check]" >&2; exit 
 check_installed
 BACKEND_PORT="${BACKEND_PORT:-8103}"
 FRONTEND_PORT="${FRONTEND_PORT:-5183}"
-"$VENV_DIR/bin/python" - "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT" <<'PREFLIGHT'
-import os, pathlib, sys
-root = pathlib.Path(sys.argv[1]).resolve()
-ports = [int(value) for value in sys.argv[2:]]
-assert len(set(ports)) == 2 and all(1024 <= p <= 65535 for p in ports), "Choose two distinct unprivileged ports"
-for relative in ("data", "data/papers", "data/artifacts", "data/wiki", "data/config.json", "data/knowledge.db", "data/tasks.db", "data/knowledge.db-wal", "data/knowledge.db-shm", "data/tasks.db-wal", "data/tasks.db-shm"):
-    p = root / relative
-    assert not p.is_symlink() and p.resolve().is_relative_to(root), f"Do not share/link another worktree's data: {relative}"
-queue = os.environ.get("KNOWRA_TASK_DB")
-assert not queue or pathlib.Path(queue).resolve().is_relative_to(root / "data"), "KNOWRA_TASK_DB must stay in this worktree data directory"
-assert os.environ.get("KNOWRA_DEPLOY_MODE", "local") == "local", "This launcher is for local development, not cloud deployment"
-existing = any((root / "data").glob("*.db")) or any((root / "data").glob("*.sqlite*"))
-assert not existing or os.environ.get("KNOWRA_ALLOW_EXISTING_DATA") == "1", "Existing data detected. Review backup/migration implications; explicitly set KNOWRA_ALLOW_EXISTING_DATA=1 for this worktree."
-PREFLIGHT
+"$VENV_DIR/bin/python" "$PROJECT_DIR/scripts/native_runtime.py" startup "$PROJECT_DIR" "$BACKEND_PORT" "$FRONTEND_PORT"
+
 if command -v lsof >/dev/null; then
   for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -28,6 +16,7 @@ if command -v lsof >/dev/null; then
   done
 fi
 echo "Ready: worktree data=$PROJECT_DIR/data; API=127.0.0.1:$BACKEND_PORT; Web=127.0.0.1:$FRONTEND_PORT"
+echo "Python: $VENV_DIR/bin/python"
 [ "${1:-}" = --check ] && exit 0
 cleanup() { kill "${BACKEND_PID:-}" "${FRONTEND_PID:-}" 2>/dev/null || true; }
 trap cleanup EXIT
