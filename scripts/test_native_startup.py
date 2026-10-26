@@ -259,17 +259,6 @@ class NativeStartupTests(unittest.TestCase):
         self.terminals[descriptor] += block.decode(errors="replace")
         return bool(block)
 
-    def terminal_until(self, process: subprocess.Popen[str], descriptor: int, needle: str) -> str:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            self.read_terminal(descriptor)
-            output = self.terminals[descriptor]
-            if needle in output:
-                return output
-            if process.poll() is not None:
-                break
-        self.fail("Terminal did not reach " + repr(needle) + ": " + self.terminals[descriptor])
-
     def terminal_finish(self, process: subprocess.Popen[str], descriptor: int) -> subprocess.CompletedProcess[str]:
         deadline = time.monotonic() + 10
         while process.poll() is None and time.monotonic() < deadline:
@@ -508,7 +497,7 @@ sys.addaudithook(audit)
         self.assert_friendly_failure(self.run_entry("scripts/install-native.sh"))
         self.assertEqual(outside.read_bytes(), original)
 
-    def test_preflight_with_existing_database_is_read_only_without_opt_in(self) -> None:
+    def test_preflight_with_existing_database_is_read_only(self) -> None:
         self.install()
         env = self.audit_preflight()
         calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
@@ -521,7 +510,7 @@ sys.addaudithook(audit)
                 sentinel.write_bytes(original)
                 run = self.run_entry("start.sh", "--check", env=env)
                 self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-                self.assertIn("Existing data detected", run.stdout + run.stderr)
+                self.assertIn("Existing local data detected", run.stdout + run.stderr)
                 self.assertIn("Preflight passed", run.stdout)
                 self.assertEqual(sentinel.read_bytes(), original)
                 self.assertEqual(list((self.fixture / "data").iterdir()), [sentinel])
@@ -536,7 +525,7 @@ sys.addaudithook(audit)
         run = self.run_entry("start.sh", "--check", env={**env, "KNOWRA_LOAD_ENV": "1"})
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn("Preflight passed", run.stdout)
-        self.assertNotIn("Existing data detected", run.stdout + run.stderr)
+        self.assertNotIn("Existing local data detected", run.stdout + run.stderr)
         self.assertEqual(list((self.fixture / "data").iterdir()), [])
         self.assert_no_preflight_side_effects(calls_before)
 
@@ -566,38 +555,16 @@ sys.addaudithook(audit)
         self.assertIn("Do not share/link", output)
         self.assertEqual(list(outside.iterdir()), [])
 
-    def test_actual_start_with_existing_data_requires_explicit_opt_in(self) -> None:
-        self.install()
-        sentinel = self.fixture / "data/knowledge.db"
-        original = b"synthetic sentinel; never opened as SQLite"
-        sentinel.write_bytes(original)
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        for opt_in in (None, "0", "true"):
-            with self.subTest(opt_in=opt_in):
-                values = env if opt_in is None else {**env, "KNOWRA_ALLOW_EXISTING_DATA": opt_in}
-                output = self.assert_friendly_failure(self.run_entry("start.sh", env=values))
-                self.assertIn("KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh", output)
-                self.assertEqual(sentinel.read_bytes(), original)
-                self.assert_no_preflight_side_effects(calls_before)
-
-    def test_terminal_acceptance_starts_without_injecting_or_remembering_permission(self) -> None:
+    def test_terminal_start_uses_existing_data_without_prompt_or_permission(self) -> None:
         self.install()
         sentinel = self.fixture / "data/knowledge.db"
         original = b"synthetic existing data; mock services never open it"
         sentinel.write_bytes(original)
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
         marker_before = (self.fixture / ".cache/native-install.json").read_bytes()
+        self.assertNotIn("KNOWRA_ALLOW_EXISTING_DATA", self.env)
         process, terminal = self.start_terminal()
-        output = self.terminal_until(process, terminal, "Type START to continue")
-        self.assertIn(str(self.fixture / "data"), output)
-        self.assertIn("finding", output)
-        self.assertIn("wiki", output.lower())
-        self.assertIn("worker", output.lower())
-        self.assertEqual((self.fixture / "tool-calls.jsonl").read_bytes(), calls_before)
-        self.assertFalse((self.fixture / "backend-service.json").exists())
-        self.assertFalse((self.fixture / "frontend-service.json").exists())
-        os.write(terminal, b"  START  \n")
+        # Leave the terminal input completely untouched. Existing local data
+        # must not make the ordinary entry point wait for START or a switch.
         ports = (int(self.env["BACKEND_PORT"]), int(self.env["FRONTEND_PORT"]))
         http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         records = []
@@ -615,85 +582,19 @@ sys.addaudithook(audit)
                 time.sleep(0.05)
         self.assertEqual(len(records), 2, self.terminals[terminal])
         for record in records:
-            self.assertIsNone(record["existing_data_permission"], "Confirmation must not inject an environment bypass")
+            self.assertIsNone(record["existing_data_permission"], "Startup must not inject an environment bypass")
         process.terminate()
         process.wait(timeout=5)
         self.assert_services_shutdown(records)
-        self.assertNotEqual(self.terminal_finish(process, terminal).returncode, 0)
+        run = self.terminal_finish(process, terminal)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertNotIn("Type START", run.stdout)
+        self.assertNotIn("KNOWRA_ALLOW_EXISTING_DATA", run.stdout)
         self.assert_ports_closed(ports)
         self.assertEqual(sentinel.read_bytes(), original)
         self.assertEqual((self.fixture / ".cache/native-install.json").read_bytes(), marker_before)
 
-        # A second invocation must ask again; a previous terminal answer is
-        # neither a persistent permission record nor an environment change.
-        for name in ("backend-service.json", "frontend-service.json"):
-            (self.fixture / name).unlink()
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        second, terminal = self.start_terminal(env=env)
-        self.terminal_until(second, terminal, "Type START to continue")
-        os.write(terminal, b"n\n")
-        self.assert_friendly_failure(self.terminal_finish(second, terminal))
-        self.assert_no_preflight_side_effects(calls_before)
-
-    def test_terminal_decline_empty_wrong_case_and_eof_leave_existing_data_untouched(self) -> None:
-        self.install()
-        sentinel = self.fixture / "data/knowledge.db"
-        original = b"synthetic sentinel; never opened as SQLite"
-        sentinel.write_bytes(original)
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        for answer in (b"n\n", b"\n", b"start\n", b"\x04"):
-            with self.subTest(answer=answer):
-                process, terminal = self.start_terminal(env=env)
-                self.terminal_until(process, terminal, "Type START to continue")
-                os.write(terminal, answer)
-                self.assert_friendly_failure(self.terminal_finish(process, terminal))
-                self.assertEqual(sentinel.read_bytes(), original)
-                self.assert_no_preflight_side_effects(calls_before)
-
-    def test_terminal_interrupt_during_confirmation_is_safe_and_friendly(self) -> None:
-        self.install()
-        sentinel = self.fixture / "data/knowledge.db"
-        original = b"synthetic sentinel; never opened as SQLite"
-        sentinel.write_bytes(original)
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        process, terminal = self.start_terminal(env=env)
-        self.terminal_until(process, terminal, "Type START to continue")
-        signal_group(process.pid, signal.SIGINT)
-        self.assert_friendly_failure(self.terminal_finish(process, terminal))
-        self.assertEqual(sentinel.read_bytes(), original)
-        self.assert_no_preflight_side_effects(calls_before)
-
-    def test_piped_start_answer_does_not_grant_noninteractive_permission(self) -> None:
-        self.install()
-        (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        run = subprocess.run([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
-                             input="START\n", text=True, capture_output=True, timeout=10)
-        output = self.assert_friendly_failure(run)
-        self.assertIn("interactive", output.lower())
-        self.assertIn("KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh", output)
-        self.assert_no_preflight_side_effects(calls_before)
-
-    def test_terminal_stdin_with_redirected_confirmation_output_is_rejected(self) -> None:
-        self.install()
-        (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
-        env = self.audit_preflight()
-        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
-        master, slave = pty.openpty()
-        try:
-            run = subprocess.run([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
-                                 stdin=slave, text=True, capture_output=True, timeout=10)
-        finally:
-            os.close(slave)
-            os.close(master)
-        self.assert_friendly_failure(run)
-        self.assert_no_preflight_side_effects(calls_before)
-
-    def test_terminal_preflight_and_occupied_start_do_not_request_confirmation(self) -> None:
+    def test_terminal_preflight_and_occupied_start_preserve_read_only_boundaries(self) -> None:
         self.install()
         (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
         env = self.audit_preflight()
@@ -714,7 +615,7 @@ sys.addaudithook(audit)
                 self.assertNotIn("Type START to continue", output)
                 self.assert_no_preflight_side_effects(calls_before)
 
-    def test_daily_start_uses_selected_environment_loopback_ports_and_cleans_up(self) -> None:
+    def test_noninteractive_start_uses_existing_data_and_selected_environment_without_permission(self) -> None:
         before = self.legacy()
         self.install()
         api_port, web_port = unused_ports()
@@ -723,9 +624,10 @@ sys.addaudithook(audit)
         env = {**self.env, "NODE_BIN": "./bin/node", "BACKEND_PORT": str(api_port), "FRONTEND_PORT": str(web_port)}
         sentinel = self.fixture / "data/knowledge.db"
         sentinel.write_bytes(b"synthetic existing data")
-        env["KNOWRA_ALLOW_EXISTING_DATA"] = "1"
+        marker_before = (self.fixture / ".cache/native-install.json").read_bytes()
+        self.assertNotIn("KNOWRA_ALLOW_EXISTING_DATA", env)
         process = subprocess.Popen([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
-                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   stdin=subprocess.DEVNULL, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True)
         self.processes.append(process)
         records = []
@@ -750,6 +652,8 @@ sys.addaudithook(audit)
         self.assertEqual(web["proxy"], f"http://127.0.0.1:{api_port}")
         self.assertIn("--strictPort", web["arguments"])
         self.assertIn("main:app", api["arguments"])
+        self.assertIsNone(api["existing_data_permission"])
+        self.assertIsNone(web["existing_data_permission"])
         process.terminate()
         # Wait for the launcher PID, not communicate(): inherited output pipes
         # could otherwise hide children still shutting down after it exits.
@@ -757,6 +661,9 @@ sys.addaudithook(audit)
         self.assert_services_shutdown(records)
         stdout, stderr = process.communicate(timeout=5)
         self.assertNotEqual(process.returncode, 0, stdout + stderr)
+        self.assertNotIn("Type START", stdout + stderr)
+        self.assertNotIn("KNOWRA_ALLOW_EXISTING_DATA", stdout + stderr)
+        self.assertEqual((self.fixture / ".cache/native-install.json").read_bytes(), marker_before)
         for port in (api_port, web_port):
             deadline = time.monotonic() + 3
             while time.monotonic() < deadline:

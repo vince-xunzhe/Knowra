@@ -5,11 +5,14 @@ No application API is mocked. The snapshot has synthetic legacy SQLite files, a 
 and a physical venv whose .pth reads this worktree's installed dependencies.
 node_modules is copied physically. Python writes outside the snapshot, external
 network connections, and model CLI execution are blocked. The task worker uses
-the supported external mode; the real recommendation worker starts with an empty
-queue. This is not a migration test against an existing user's database.
+the supported external mode; the real recommendation worker stays idle behind a
+synthetic, unexpired lease owned by another fixture node. No recommendation job
+is executed. This is not a migration test against an existing user's database.
 Launcher shutdown must complete the API hooks and leave no fixture processes,
-including the empty recommendation worker. Recovery cleanup always fails the
+including the idle recommendation worker. Recovery cleanup always fails the
 check; independent research task workers are not started by this fixture.
+Existing local data is used by the ordinary launcher without confirmation input
+or an existing-data permission environment variable.
 """
 from __future__ import annotations
 
@@ -18,15 +21,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import pty
-import select
 import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -150,7 +150,9 @@ try {
   const papers=page.waitForResponse(r=>r.url().includes('/api/papers') && r.status()===200);
   await page.getByRole('navigation').getByRole('button',{name:'资料',exact:true}).click();
   await papers;
+  await page.getByText('Existing synthetic paper',{exact:true}).first().waitFor();
   result.steps.push('Library navigation loaded real API response');
+  result.steps.push('Existing synthetic paper rendered in the library');
   const dashboard=page.waitForResponse(r=>r.url().includes('/api/dashboard/summary') && r.status()===200);
   await page.getByRole('navigation').getByRole('button',{name:'看板',exact:true}).click();
   await dashboard;
@@ -222,54 +224,6 @@ def listener_addresses(port: int) -> list[str]:
     return [line[1:] for line in found.stdout.splitlines() if line.startswith('n')]
 
 
-class TerminalSession:
-    """Drive the real terminal confirmation while continuously draining output."""
-
-    def __init__(self, log: Path):
-        self.master, self.slave = pty.openpty()
-        self.log = log
-        self.output = bytearray()
-        self.stop = threading.Event()
-        self.reader = threading.Thread(target=self._drain, daemon=True)
-        self.reader.start()
-
-    def _drain(self):
-        with self.log.open('ab') as log:
-            while not self.stop.is_set():
-                try:
-                    ready, _, _ = select.select([self.master], [], [], .1)
-                    if not ready:
-                        continue
-                    chunk = os.read(self.master, 65536)
-                except OSError:
-                    break  # A closed PTY slave reports EIO on macOS.
-                if not chunk:
-                    break
-                log.write(chunk)
-                log.flush()
-                self.output.extend(chunk)
-
-    def child_started(self):
-        os.close(self.slave)
-        self.slave = -1
-
-    def wait_for_prompt(self, run: subprocess.Popen, timeout: int = 30):
-        deadline = time.monotonic() + timeout
-        while b'Type START to continue' not in self.output:
-            if run.poll() is not None:
-                raise RuntimeError('Real launcher exited before the terminal confirmation')
-            if time.monotonic() > deadline:
-                raise RuntimeError('Real launcher did not show its terminal confirmation')
-            time.sleep(.1)
-
-    def close(self):
-        self.stop.set()
-        self.reader.join(timeout=2)
-        if self.slave >= 0:
-            os.close(self.slave)
-        os.close(self.master)
-
-
 def prepare(snapshot: Path) -> tuple[Path, dict[str, str]]:
     prefix = Path(sys.prefix).resolve()
     if prefix not in {(ROOT / 'backend' / name).resolve() for name in ('.venv', '.venv-native-py312')}:
@@ -332,12 +286,12 @@ def main() -> int:
     cache.mkdir(exist_ok=True)
     snapshot = Path(tempfile.mkdtemp(prefix='real-start-', dir=cache))
     report = {'snapshot':str(snapshot),'checks':{},'cleanup':{},'boundaries':{
-        'real_services':['Uvicorn/FastAPI','Vite','empty local recommendation worker'],
+        'real_services':['Uvicorn/FastAPI','Vite','idle local recommendation worker'],
         'task_worker':'supported external mode; no task worker or queued job execution',
+        'recommendation_worker':'real worker; synthetic protected lease prevents job claims; no recommendation execution',
         'dependencies':'new physical fixture venv reads this worktree site-packages; physical node_modules copy',
         'data':'new synthetic SQLite files only; original main/worktree data not copied or opened'}}
     run = browser_run = None
-    terminal = None
     api_port = web_port = 0
     owned = set()
     try:
@@ -361,10 +315,31 @@ def main() -> int:
         # Seed only the disposable fixture, without importing the application.
         # Removing this nullable column simulates an older supported schema;
         # the real startup must add it back and preserve an unrelated row.
-        seed = '''from database import Base, engine, DB_PATH
+        seed = '''from database import Base, engine, DB_PATH, SessionLocal
+from models import Paper
+from cloud_models import RecBatch
+from datetime import datetime, timedelta, timezone
+from services.local_recommendations import local_store, LOCAL_USER
 import sqlite3
 Base.metadata.create_all(bind=engine)
+with SessionLocal() as session:
+    session.add(Paper(id='smoke-existing-paper', filepath=str(DB_PATH.parent/'papers/smoke-existing.pdf'),
+                      filename='smoke-existing.pdf', file_hash='synthetic-fixture-only',
+                      title='Existing synthetic paper'))
+    session.commit()
 engine.dispose()
+# A populated library normally schedules recommendations immediately. Preserve
+# that production behavior while preventing this fixture from claiming work:
+# another synthetic node owns a valid lease, and the real worker must leave it
+# unchanged. One hour exceeds all bounded service/browser checks below.
+store = local_store()
+with store.session() as session:
+    session.add(RecBatch(id='smoke-protected-lease', user_id=LOCAL_USER,
+                        slot='synthetic-protected-slot', status='running', attempts=1,
+                        node_id='synthetic-other-node', lease_token='synthetic-lease-token',
+                        lease_expires_at=datetime.now(timezone.utc)+timedelta(hours=1)))
+    session.commit()
+store.engine.dispose()
 with sqlite3.connect(DB_PATH) as db:
     db.execute('ALTER TABLE papers DROP COLUMN openai_file_id')
     db.execute('CREATE TABLE smoke_sentinel (id INTEGER PRIMARY KEY, note TEXT NOT NULL)')
@@ -376,36 +351,30 @@ with sqlite3.connect(DB_PATH) as db:
         if seeded.returncode:
             raise RuntimeError('Synthetic legacy database initialization failed; inspect seed.log')
         import sqlite3
+        with sqlite3.connect(snapshot/'data/recommendations.db') as db:
+            recommendation_before = db.execute('SELECT * FROM rec_batches ORDER BY id').fetchall()
         with sqlite3.connect(snapshot/'data/knowledge.db') as db:
             if 'openai_file_id' in {row[1] for row in db.execute('PRAGMA table_info(papers)')}:
                 raise RuntimeError('Synthetic fixture must start without the legacy column')
         report['checks']['synthetic_legacy_column_missing_before_start'] = True
         before = hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest()
         prelaunch_env = {**env, 'KNOWRA_SMOKE_NO_DATA_OPEN':'1'}
-        for label, args, wanted in [('preflight',['--check'],0),('startup_guard',[],1)]:
-            result = subprocess.run([str(snapshot/'start.sh'),*args],cwd=snapshot,env=prelaunch_env,
-                                    stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
-            (snapshot/'.cache'/f'{label}.log').write_text(result.stdout+result.stderr)
-            report['checks'][label] = result.returncode
-            if (result.returncode==0) != (wanted==0):
-                raise RuntimeError(label+' returned an unexpected result; inspect its log')
-            if hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest()!=before:
-                raise RuntimeError(label+' modified the synthetic database')
+        result = subprocess.run([str(snapshot/'start.sh'),'--check'],cwd=snapshot,env=prelaunch_env,
+                                stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+        (snapshot/'.cache/preflight.log').write_text(result.stdout+result.stderr)
+        report['checks']['preflight'] = result.returncode
+        if result.returncode:
+            raise RuntimeError('Preflight failed; inspect its log')
+        if hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest()!=before:
+            raise RuntimeError('Preflight modified the synthetic database')
         report['checks']['existing_db_unchanged_before_launch'] = True
         if 'KNOWRA_ALLOW_EXISTING_DATA' in env:
-            raise RuntimeError('Daily-start smoke must use terminal confirmation, not an environment opt-in')
-        terminal = TerminalSession(snapshot/'.cache/start.log')
-        run = subprocess.Popen([str(snapshot/'start.sh')],cwd=snapshot,env=env,
-                               stdin=terminal.slave,stdout=terminal.slave,stderr=terminal.slave,start_new_session=True)
-        terminal.child_started()
+            raise RuntimeError('Default-data smoke must not set an existing-data permission variable')
+        with (snapshot/'.cache/start.log').open('w') as log:
+            run = subprocess.Popen([str(snapshot/'start.sh')],cwd=snapshot,env=env,
+                                   stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,start_new_session=True)
         owned.add(run.pid)
-        terminal.wait_for_prompt(run)
-        if listening(api_port) or listening(web_port):
-            raise RuntimeError('Real services started before terminal confirmation')
-        if hashlib.sha256((snapshot/'data/knowledge.db').read_bytes()).hexdigest() != before:
-            raise RuntimeError('Real launcher modified the synthetic database before terminal confirmation')
-        os.write(terminal.master, b'START\n')
-        report['checks']['terminal_confirmation'] = 'START entered at the ordinary ./start.sh prompt'
+        report['checks']['confirmation_input_provided'] = False
         report['checks']['allow_existing_data_environment_present'] = False
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         api=f'http://127.0.0.1:{api_port}'; web=f'http://127.0.0.1:{web_port}'
@@ -422,6 +391,18 @@ with sqlite3.connect(DB_PATH) as db:
             time.sleep(.2)
         report['checks']['api_health']=health
         report['checks']['vite_http']=True
+        with opener.open(api+'/api/papers',timeout=5) as response:
+            papers=json.load(response)
+        report['checks']['existing_paper_read_by_api']=any(
+            paper.get('id')=='smoke-existing-paper' and paper.get('title')=='Existing synthetic paper'
+            for paper in papers)
+        if not report['checks']['existing_paper_read_by_api']:
+            raise RuntimeError('Real API did not read the pre-existing synthetic paper')
+        startup_log=(snapshot/'.cache/start.log').read_text()
+        report['checks']['confirmation_prompt_seen']=any(text in startup_log for text in
+            ('Type START to continue','输入 START','KNOWRA_ALLOW_EXISTING_DATA'))
+        if report['checks']['confirmation_prompt_seen']:
+            raise RuntimeError('Default local-data startup still displayed an existing-data permission prompt')
         report['urls']={'api':api,'web':web}
         report['listeners']={str(port):listener_addresses(port) for port in (api_port,web_port)}
         if any(addresses!=[f'127.0.0.1:{port}'] for port,addresses in report['listeners'].items()):
@@ -480,11 +461,13 @@ with sqlite3.connect(DB_PATH) as db:
         with sqlite3.connect(snapshot/'data/tasks.db') as db:
             jobs=db.execute('SELECT kind,status,attempt FROM jobs').fetchall()
         with sqlite3.connect(snapshot/'data/recommendations.db') as db:
-            recommendation_batches=db.execute('SELECT COUNT(*) FROM rec_batches').fetchone()[0]
+            recommendation_after=db.execute('SELECT * FROM rec_batches ORDER BY id').fetchall()
             recommendation_usage=db.execute('SELECT COUNT(*) FROM rec_usage').fetchone()[0]
-        report['checks']['synthetic_queue']={'jobs':jobs,'recommendation_batches':recommendation_batches,'recommendation_usage':recommendation_usage}
-        if not jobs or any(tuple(row)!=('scan','queued',0) for row in jobs) or recommendation_batches or recommendation_usage:
-            raise RuntimeError('Synthetic queue state exceeded an unexecuted scan submission')
+        protected_lease_unchanged=len(recommendation_before)==1 and recommendation_after==recommendation_before
+        report['checks']['synthetic_queue']={'jobs':jobs,'recommendation_batches':len(recommendation_after),
+            'protected_recommendation_lease_unchanged':protected_lease_unchanged,'recommendation_usage':recommendation_usage}
+        if not jobs or any(tuple(row)!=('scan','queued',0) for row in jobs) or not protected_lease_unchanged or recommendation_usage:
+            raise RuntimeError('Synthetic queue changed beyond an unexecuted scan and unchanged protected recommendation lease')
         process_rows=read_json_lines(snapshot/'.cache/processes.jsonl')
         if any(any(str(arg).endswith('/task_worker.py') for arg in row['argv']) for row in process_rows):
             raise RuntimeError('Task worker started despite external mode')
@@ -526,8 +509,6 @@ with sqlite3.connect(DB_PATH) as db:
         if browser_run is not None:
             try: browser_run.wait(timeout=5)
             except subprocess.TimeoutExpired: pass
-        if terminal is not None:
-            terminal.close()
         report['cleanup']['final_open_ports']=[port for port in (api_port,web_port) if port and listening(port)]
         report['cleanup']['final_remaining_pids']=[pid for pid in sorted(owned) if alive(pid)]
         report['violations']=read_json_lines(snapshot/'.cache/violations.jsonl')

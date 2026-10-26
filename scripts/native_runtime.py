@@ -123,31 +123,6 @@ def owner(root, target):
         fail("Interpreter belongs to a different environment; no dependencies were modified: " + str(target))
 
 
-def confirm_existing_data(root):
-    if os.environ.get("KNOWRA_ALLOW_EXISTING_DATA") == "1":
-        return
-    if not (sys.stdin.isatty() and sys.stderr.isatty()):
-        fail("Existing data detected. No database was opened. Run ./start.sh in an interactive terminal to review and confirm this launch. For an explicitly approved unattended launch only, use KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh.")
-    print(
-        "\nKnowra: Start with existing data? / 使用已有数据启动\n"
-        + "Data directory: " + str(root / "data") + "\n"
-        + "应用会读取本地配置；启动可能更新数据库 schema、回填数据，清理历史 finding 节点，\n"
-        + "合并／修复记录和边、更新论文记录，并重建 wiki 索引。\n"
-        + "独立 worker 可能恢复旧队列／定时任务并调用外部服务；关闭启动器不保证停止它们。\n"
-        + "目前尚未打开数据库；脚本不会自动备份。需要先备份时请取消，参阅 INSTALL.zh.md。\n"
-        + "本次确认只适用于当前启动，不会保存为永久许可。\n"
-        + "Type START to continue, or press Enter to cancel / 输入 START 启动，回车取消: ",
-        end="", file=sys.stderr, flush=True,
-    )
-    try:
-        answer = sys.stdin.readline()
-    except (EOFError, KeyboardInterrupt):
-        answer = ""
-    if answer.strip() != "START":
-        fail("Startup cancelled. No database was opened and no services were started.")
-    print("Existing-data permission confirmed for this launch only.", file=sys.stderr)
-
-
 def startup(root, values, *, check_only=False):
     try:
         ports = [int(value) for value in values]
@@ -166,10 +141,7 @@ def startup(root, values, *, check_only=False):
         fail("This launcher is for local development, not cloud deployment.")
     existing = any((root / "data").glob("*.db")) or any((root / "data").glob("*.sqlite*"))
     if existing and check_only:
-        print("Knowra: Existing data detected. Preflight only: no database was opened and no services were started. Starting services still requires explicit existing-data permission after reviewing backup/migration implications.")
-        return
-    if existing:
-        confirm_existing_data(root)
+        print("Knowra: Existing local data detected. Preflight only: no database was opened and no services were started.")
 
 
 def main():
