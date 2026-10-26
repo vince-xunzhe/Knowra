@@ -7,9 +7,12 @@ research database, real provider or user configuration is involved.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
+import pty
+import select
 import shutil
 import signal
 import socket
@@ -25,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NATIVE = "backend/.venv-native-py312"
 CANONICAL = "backend/.venv"
 
-SERVICE = r'''import argparse, json, os, signal, sys
+SERVICE = r'''import argparse, json, os, signal, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 if os.environ.get('KNOWRA_TEST_PREFLIGHT') == '1':
@@ -40,7 +43,8 @@ kind = 'backend' if '-m' not in sys.argv and sys.argv[0].endswith('__main__.py')
 root = Path.cwd().parent
 record = {'kind':kind, 'pid':os.getpid(), 'python':sys.executable, 'prefix':sys.prefix,
           'arguments':sys.argv[1:], 'port':options.port,
-          'proxy':os.environ.get('VITE_API_PROXY_TARGET'), 'task_db':os.environ.get('KNOWRA_TASK_DB')}
+          'proxy':os.environ.get('VITE_API_PROXY_TARGET'), 'task_db':os.environ.get('KNOWRA_TASK_DB'),
+          'existing_data_permission':os.environ.get('KNOWRA_ALLOW_EXISTING_DATA')}
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.send_header('Content-Type','application/json'); self.end_headers()
@@ -48,10 +52,17 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
 server = HTTPServer(('127.0.0.1', options.port), Handler)
 (root / (kind + '-service.json')).write_text(json.dumps(record))
+def shutdown(*_):
+    # Model an application's asynchronous shutdown hooks. The launcher must
+    # remain alive until this completes, not merely send TERM and return.
+    time.sleep(0.2)
+    raise SystemExit(0)
 for sig in (signal.SIGINT, signal.SIGTERM):
-    signal.signal(sig, lambda *_: sys.exit(0))
+    signal.signal(sig, shutdown)
 try: server.serve_forever(poll_interval=0.05)
-finally: server.server_close()
+finally:
+    server.server_close()
+    (root / (kind + '-shutdown-complete')).write_text(str(os.getpid()))
 '''
 
 UV = r'''import json, subprocess, sys
@@ -193,6 +204,7 @@ class NativeStartupTests(unittest.TestCase):
         api_port, web_port = unused_ports()
         self.env.update(BACKEND_PORT=str(api_port), FRONTEND_PORT=str(web_port))
         self.processes: list[subprocess.Popen[str]] = []
+        self.terminals: dict[int, str] = {}
 
     def tearDown(self) -> None:
         # These PIDs and process groups were created only by this test. Never
@@ -212,12 +224,77 @@ class NativeStartupTests(unittest.TestCase):
             except ProcessLookupError:
                 continue
             signal_group(process.pid, signal.SIGKILL)
+        for descriptor in self.terminals:
+            os.close(descriptor)
         self.temporary.cleanup()
 
     def run_entry(self, entry: str, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run([str(self.fixture / entry), *args], cwd=self.fixture,
                               env=self.env if env is None else env, text=True,
                               capture_output=True, timeout=30)
+
+    def start_terminal(self, *args: str, env: dict[str, str] | None = None) -> tuple[subprocess.Popen[str], int]:
+        """Give the real launcher terminal input/output without a user's TTY."""
+        master, slave = pty.openpty()
+        self.terminals[master] = ""
+        try:
+            process = subprocess.Popen([str(self.fixture / "start.sh"), *args], cwd=self.fixture,
+                                       env=self.env if env is None else env,
+                                       stdin=slave, stdout=slave, stderr=slave,
+                                       text=True, start_new_session=True)
+        finally:
+            os.close(slave)
+        self.processes.append(process)
+        return process, master
+
+    def read_terminal(self, descriptor: int, timeout: float = 0.05) -> bool:
+        if not select.select([descriptor], [], [], timeout)[0]:
+            return False
+        try:
+            block = os.read(descriptor, 8192)
+        except OSError as error:
+            if error.errno == errno.EIO:  # macOS/Linux PTY closed by the child.
+                return False
+            raise
+        self.terminals[descriptor] += block.decode(errors="replace")
+        return bool(block)
+
+    def terminal_until(self, process: subprocess.Popen[str], descriptor: int, needle: str) -> str:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            self.read_terminal(descriptor)
+            output = self.terminals[descriptor]
+            if needle in output:
+                return output
+            if process.poll() is not None:
+                break
+        self.fail("Terminal did not reach " + repr(needle) + ": " + self.terminals[descriptor])
+
+    def terminal_finish(self, process: subprocess.Popen[str], descriptor: int) -> subprocess.CompletedProcess[str]:
+        deadline = time.monotonic() + 10
+        while process.poll() is None and time.monotonic() < deadline:
+            self.read_terminal(descriptor)
+        self.assertIsNotNone(process.poll(), "Terminal launcher failed to exit: " + self.terminals[descriptor])
+        while self.read_terminal(descriptor, 0):
+            pass
+        return subprocess.CompletedProcess(process.args, process.returncode, self.terminals[descriptor], "")
+
+    def assert_ports_closed(self, ports: tuple[int, int]) -> None:
+        for port in ports:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                with socket.socket() as connection:
+                    if connection.connect_ex(("127.0.0.1", port)) != 0:
+                        break
+                time.sleep(0.05)
+            else:
+                self.fail(f"Launcher left its mock service listening on {port}")
+
+    def assert_services_shutdown(self, records: list[dict]) -> None:
+        for record in records:
+            marker = self.fixture / (record["kind"] + "-shutdown-complete")
+            self.assertTrue(marker.is_file(), "Launcher returned before " + record["kind"] + " shutdown completed")
+            self.assertEqual(marker.read_text(), str(record["pid"]))
 
     def legacy(self) -> bytes:
         executable(self.fixture / CANONICAL / "bin/python", LEGACY_PYTHON)
@@ -504,6 +581,139 @@ sys.addaudithook(audit)
                 self.assertEqual(sentinel.read_bytes(), original)
                 self.assert_no_preflight_side_effects(calls_before)
 
+    def test_terminal_acceptance_starts_without_injecting_or_remembering_permission(self) -> None:
+        self.install()
+        sentinel = self.fixture / "data/knowledge.db"
+        original = b"synthetic existing data; mock services never open it"
+        sentinel.write_bytes(original)
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        marker_before = (self.fixture / ".cache/native-install.json").read_bytes()
+        process, terminal = self.start_terminal()
+        output = self.terminal_until(process, terminal, "Type START to continue")
+        self.assertIn(str(self.fixture / "data"), output)
+        self.assertIn("finding", output)
+        self.assertIn("wiki", output.lower())
+        self.assertIn("worker", output.lower())
+        self.assertEqual((self.fixture / "tool-calls.jsonl").read_bytes(), calls_before)
+        self.assertFalse((self.fixture / "backend-service.json").exists())
+        self.assertFalse((self.fixture / "frontend-service.json").exists())
+        os.write(terminal, b"  START  \n")
+        ports = (int(self.env["BACKEND_PORT"]), int(self.env["FRONTEND_PORT"]))
+        http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        records = []
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            self.read_terminal(terminal, 0)
+            self.assertIsNone(process.poll(), self.terminals[terminal])
+            try:
+                records = []
+                for port in ports:
+                    with http.open(f"http://127.0.0.1:{port}/health", timeout=0.3) as response:
+                        records.append(json.load(response))
+                break
+            except OSError:
+                time.sleep(0.05)
+        self.assertEqual(len(records), 2, self.terminals[terminal])
+        for record in records:
+            self.assertIsNone(record["existing_data_permission"], "Confirmation must not inject an environment bypass")
+        process.terminate()
+        process.wait(timeout=5)
+        self.assert_services_shutdown(records)
+        self.assertNotEqual(self.terminal_finish(process, terminal).returncode, 0)
+        self.assert_ports_closed(ports)
+        self.assertEqual(sentinel.read_bytes(), original)
+        self.assertEqual((self.fixture / ".cache/native-install.json").read_bytes(), marker_before)
+
+        # A second invocation must ask again; a previous terminal answer is
+        # neither a persistent permission record nor an environment change.
+        for name in ("backend-service.json", "frontend-service.json"):
+            (self.fixture / name).unlink()
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        second, terminal = self.start_terminal(env=env)
+        self.terminal_until(second, terminal, "Type START to continue")
+        os.write(terminal, b"n\n")
+        self.assert_friendly_failure(self.terminal_finish(second, terminal))
+        self.assert_no_preflight_side_effects(calls_before)
+
+    def test_terminal_decline_empty_wrong_case_and_eof_leave_existing_data_untouched(self) -> None:
+        self.install()
+        sentinel = self.fixture / "data/knowledge.db"
+        original = b"synthetic sentinel; never opened as SQLite"
+        sentinel.write_bytes(original)
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        for answer in (b"n\n", b"\n", b"start\n", b"\x04"):
+            with self.subTest(answer=answer):
+                process, terminal = self.start_terminal(env=env)
+                self.terminal_until(process, terminal, "Type START to continue")
+                os.write(terminal, answer)
+                self.assert_friendly_failure(self.terminal_finish(process, terminal))
+                self.assertEqual(sentinel.read_bytes(), original)
+                self.assert_no_preflight_side_effects(calls_before)
+
+    def test_terminal_interrupt_during_confirmation_is_safe_and_friendly(self) -> None:
+        self.install()
+        sentinel = self.fixture / "data/knowledge.db"
+        original = b"synthetic sentinel; never opened as SQLite"
+        sentinel.write_bytes(original)
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        process, terminal = self.start_terminal(env=env)
+        self.terminal_until(process, terminal, "Type START to continue")
+        signal_group(process.pid, signal.SIGINT)
+        self.assert_friendly_failure(self.terminal_finish(process, terminal))
+        self.assertEqual(sentinel.read_bytes(), original)
+        self.assert_no_preflight_side_effects(calls_before)
+
+    def test_piped_start_answer_does_not_grant_noninteractive_permission(self) -> None:
+        self.install()
+        (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        run = subprocess.run([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
+                             input="START\n", text=True, capture_output=True, timeout=10)
+        output = self.assert_friendly_failure(run)
+        self.assertIn("interactive", output.lower())
+        self.assertIn("KNOWRA_ALLOW_EXISTING_DATA=1 ./start.sh", output)
+        self.assert_no_preflight_side_effects(calls_before)
+
+    def test_terminal_stdin_with_redirected_confirmation_output_is_rejected(self) -> None:
+        self.install()
+        (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        master, slave = pty.openpty()
+        try:
+            run = subprocess.run([str(self.fixture / "start.sh")], cwd=self.fixture, env=env,
+                                 stdin=slave, text=True, capture_output=True, timeout=10)
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assert_friendly_failure(run)
+        self.assert_no_preflight_side_effects(calls_before)
+
+    def test_terminal_preflight_and_occupied_start_do_not_request_confirmation(self) -> None:
+        self.install()
+        (self.fixture / "data/knowledge.db").write_bytes(b"synthetic sentinel")
+        env = self.audit_preflight()
+        calls_before = (self.fixture / "tool-calls.jsonl").read_bytes()
+        process, terminal = self.start_terminal("--check", env=env)
+        run = self.terminal_finish(process, terminal)
+        self.assertEqual(run.returncode, 0, run.stdout)
+        self.assertNotIn("Type START to continue", run.stdout)
+        self.assert_no_preflight_side_effects(calls_before)
+        for variable in ("BACKEND_PORT", "FRONTEND_PORT"):
+            with self.subTest(variable=variable), socket.socket() as listener:
+                listener.bind(("127.0.0.1", 0))
+                listener.listen()
+                port = listener.getsockname()[1]
+                process, terminal = self.start_terminal(env={**env, variable: str(port)})
+                output = self.assert_friendly_failure(self.terminal_finish(process, terminal))
+                self.assertIn(f"Port {port} is occupied", output)
+                self.assertNotIn("Type START to continue", output)
+                self.assert_no_preflight_side_effects(calls_before)
+
     def test_daily_start_uses_selected_environment_loopback_ports_and_cleans_up(self) -> None:
         before = self.legacy()
         self.install()
@@ -541,6 +751,10 @@ sys.addaudithook(audit)
         self.assertIn("--strictPort", web["arguments"])
         self.assertIn("main:app", api["arguments"])
         process.terminate()
+        # Wait for the launcher PID, not communicate(): inherited output pipes
+        # could otherwise hide children still shutting down after it exits.
+        process.wait(timeout=5)
+        self.assert_services_shutdown(records)
         stdout, stderr = process.communicate(timeout=5)
         self.assertNotEqual(process.returncode, 0, stdout + stderr)
         for port in (api_port, web_port):
