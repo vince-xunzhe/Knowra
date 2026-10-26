@@ -59,6 +59,8 @@ import RoadmapPaperDetails, { RoadmapPaperStatus } from './RoadmapPaperDetails'
 import RoadmapReport from './RoadmapReport'
 import { sourceUrl } from '../utils/sourceUrl'
 import { roadmapEdgeGeometry } from '../lib/roadmapGeometry'
+import { availableImportPapers, importedPaperIds } from '../lib/domainImport'
+import { exportDomainGraph } from '../lib/domainGraphExport'
 import './DomainPage.css'
 
 const FIELDS: [ReviewField, string][] = [
@@ -264,6 +266,10 @@ export default function DomainPage({
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({})
   const [canvasSize, setCanvasSize] = useState({ width: 1000, height: 700 })
   const canvas = useRef<HTMLDivElement>(null)
+  const exportRunning = useRef(false)
+  const [exportBusy, setExportBusy] = useState(false)
+  const [exportNotice, setExportNotice] = useState('')
+  const [exportError, setExportError] = useState('')
   const gesture = useRef<Gesture | null>(null)
   const space = useRef(false)
   const loadSequence = useRef(0)
@@ -740,45 +746,55 @@ export default function DomainPage({
     setSelectedEdge(null)
   }
   const importPapers = () => {
-    if (!board || paperError) return
-    const incoming = papers.filter((p) => importSelected.has(p.id) && p.eligible)
-    const initial = !board.nodes.some((n) => n.kind === 'paper')
-    if (initial) incoming.sort((a, b) => (parseInt(a.year) || 9999) - (parseInt(b.year) || 9999))
-    const anchor = worldPoint({ x: 60, y: 60 }, board)
-    const columns = Math.max(
-      1,
-      Math.min(4, incoming.length, Math.floor((canvasSize.width - 120) / (360 * board.viewport.zoom))),
-    )
-    const rowHeight = Math.max(300, ...incoming.map((p) => 130 + Math.ceil(p.title.length / 22) * 23))
-    const width = columns * 360 - 80,
-      height = Math.ceil(incoming.length / columns) * rowHeight
-    const position = freePosition(
-      { ...board, nodes: board.nodes.map((n) => ({ ...n, height: sizes[n.id]?.height ?? n.height })) },
-      width,
-      height,
-      anchor.x,
-      anchor.y,
-    )
-    const nodes = incoming.map((paper, index) => ({
-      ...newNode(
-        'paper',
-        position.x + (index % columns) * 360,
-        position.y + Math.floor(index / columns) * rowHeight,
-      ),
-      paperId: paper.id,
-    }))
-    if (!nodes.length) return
-    // If the visible area is full, reveal the incoming batch without moving
-    // any existing element. Large batches remain selectable as a unit.
-    const offscreen = position.y * board.viewport.zoom + board.viewport.y + 160 > canvasSize.height - 60
-    patchBoard((b) => ({
-      ...b,
-      nodes: [...b.nodes, ...nodes],
-      viewport: offscreen
-        ? { ...b.viewport, x: 80 - position.x * b.viewport.zoom, y: 60 - position.y * b.viewport.zoom }
-        : b.viewport,
-    }))
-    setSelected(new Set(nodes.map((n) => n.id)))
+    if (!board || paperError || papersLoading || readOnly) return
+    let added: CanvasNode[] = []
+    // Resolve identity against the synchronous workspace state, so a second
+    // click cannot append duplicates before React has rendered the first one.
+    update((current) => {
+      const b = current.boards.find(candidate => candidate.id === current.activeId)
+      if (!b || b.id !== board.id) return current
+      const incoming = availableImportPapers(papers, b).filter(p => importSelected.has(p.id))
+      if (!incoming.length) return current
+      const initial = !b.nodes.some((n) => n.kind === 'paper')
+      if (initial) incoming.sort((a, b) => (parseInt(a.year) || 9999) - (parseInt(b.year) || 9999))
+      const anchor = worldPoint({ x: 60, y: 60 }, b)
+      const columns = Math.max(
+        1,
+        Math.min(4, incoming.length, Math.floor((canvasSize.width - 120) / (360 * b.viewport.zoom))),
+      )
+      const rowHeight = Math.max(300, ...incoming.map((p) => 130 + Math.ceil(p.title.length / 22) * 23))
+      const width = columns * 360 - 80,
+        height = Math.ceil(incoming.length / columns) * rowHeight
+      const position = freePosition(
+        { ...b, nodes: b.nodes.map((n) => ({ ...n, height: sizes[n.id]?.height ?? n.height })) },
+        width,
+        height,
+        anchor.x,
+        anchor.y,
+      )
+      added = incoming.map((paper, index) => ({
+        ...newNode(
+          'paper',
+          position.x + (index % columns) * 360,
+          position.y + Math.floor(index / columns) * rowHeight,
+        ),
+        paperId: paper.id,
+      }))
+      // Reveal the incoming batch without moving any existing element.
+      const offscreen = position.y * b.viewport.zoom + b.viewport.y + 160 > canvasSize.height - 60
+      return {
+        ...current,
+        boards: current.boards.map(candidate => candidate.id === b.id ? {
+          ...b,
+          nodes: [...b.nodes, ...added],
+          viewport: offscreen
+            ? { ...b.viewport, x: 80 - position.x * b.viewport.zoom, y: 60 - position.y * b.viewport.zoom }
+            : b.viewport,
+        } : candidate),
+      }
+    })
+    if (!added.length) return
+    setSelected(new Set(added.map((n) => n.id)))
     setSelectedEdge(null)
     setImportOpen(false)
     setImportSelected(new Set())
@@ -881,7 +897,9 @@ export default function DomainPage({
       (!category || p.category === category) &&
       `${p.title} ${p.year}`.toLowerCase().includes(query.toLowerCase()),
   )
-  const selectableImports = visibleImports.filter((p) => p.eligible)
+  const importedIds = importedPaperIds(board)
+  const selectableImports = availableImportPapers(visibleImports, board)
+  const selectedImportCount = availableImportPapers(papers, board).filter(p => importSelected.has(p.id)).length
   const selectedVisibleCount = selectableImports.filter((p) => importSelected.has(p.id)).length
   const allVisibleSelected = selectableImports.length > 0 && selectedVisibleCount === selectableImports.length
   const boardPapers = [...new Set(board?.nodes.filter(n => n.kind === 'paper').map(n => n.paperId) ?? [])]
@@ -942,6 +960,23 @@ export default function DomainPage({
     error: '保存失败，编辑仍保留在本页',
     conflict: '画布已在其他窗口更新，请重新加载',
   }
+  const downloadGraph = async () => {
+    if (!board?.nodes.length || !canvas.current || showReport || exportRunning.current) return
+    exportRunning.current = true
+    setExportBusy(true)
+    setExportNotice('')
+    setExportError('')
+    try {
+      const size = await exportDomainGraph(canvas.current, `${tr(pageTitle)}-${board.name}`)
+      setExportNotice(tr('已导出 {0} × {1} 像素 · 300 DPI', { 0: size.width, 1: size.height }) +
+        (size.limited ? ` · ${tr('大图已按安全像素上限缩放。')}` : ''))
+    } catch (error) {
+      setExportError(tr(error instanceof Error ? error.message : '图像导出失败，请重试。'))
+    } finally {
+      exportRunning.current = false
+      setExportBusy(false)
+    }
+  }
 
   return (
     <section className={`domain-page${isRoadmap ? ' roadmap-page' : ''}`} data-domain-mode={mode} aria-label={tr(pageTitle)}>
@@ -969,6 +1004,16 @@ export default function DomainPage({
             </button>
           )}
         </div>
+        {!showReport && <button
+          className="domain-export"
+          data-testid={`${mode}-download-graph`}
+          disabled={!board?.nodes.length || exportBusy}
+          title={tr('下载完整图；像素尺寸决定清晰度，300 DPI 用于打印。')}
+          onClick={() => void downloadGraph()}
+        >
+          {exportBusy ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}
+          {tr(exportBusy ? '正在导出…' : '下载图 PNG')}
+        </button>}
         {isRoadmap ? <button
           className="domain-primary"
           disabled={!board || readOnly || imports.busy || !imports.ready || paperError || papersLoading || !downloadableCount}
@@ -1056,6 +1101,8 @@ export default function DomainPage({
           </button>
         </div>}
       </div>
+      {exportError && <div className="domain-error" role="alert">{exportError}</div>}
+      {exportNotice && <div className="domain-export-notice" role="status">{exportNotice}</div>}
       {paperError && (
         <div className="domain-error" role="alert">
           {tr(isRoadmap ? '调研论文加载失败，请重试。' : '论文回顾加载失败，暂时无法导入。')}
@@ -1749,7 +1796,7 @@ export default function DomainPage({
             <header>
               <div>
                 <h2>{tr('导入论文')}</h2>
-                <p>{tr('从论文库引用，保留你的画布布局。')}</p>
+                <p>{tr('从论文库引用到当前领域画布；已导入的论文不会重复添加。')}</p>
               </div>
               <button aria-label={tr('关闭')} onClick={() => setImportOpen(false)}>
                 <X size={18} />
@@ -1810,13 +1857,13 @@ export default function DomainPage({
                 <p>{tr('没有匹配的论文')}</p>
               ) : (
                 visibleImports.map((p) => {
-                  const count = board?.nodes.filter((n) => n.paperId === p.id).length ?? 0
+                  const imported = importedIds.has(p.id)
                   return (
-                    <label key={p.id} className={!p.eligible ? 'ineligible' : ''}>
+                    <label key={p.id} data-imported={imported} className={imported ? 'imported' : !p.eligible ? 'ineligible' : ''}>
                       <input
                         type="checkbox"
-                        disabled={!p.eligible}
-                        checked={importSelected.has(p.id)}
+                        disabled={imported || !p.eligible || readOnly || papersLoading || paperError}
+                        checked={!imported && p.eligible && importSelected.has(p.id)}
                         onChange={(e) =>
                           setImportSelected((s) => {
                             const next = new Set(s)
@@ -1830,7 +1877,7 @@ export default function DomainPage({
                         <strong>{p.title}</strong>
                         <small>
                           {p.year || tr('年份未知')} · {p.category}
-                          {count > 0 && ` · ${tr('添加另一个引用（已有 {0} 个）', { 0: count })}`}
+                          {' · '}<span className="domain-import-status">{tr(imported ? '已导入' : '未导入')}</span>
                         </small>
                         {!p.eligible && (
                           <small className="domain-import-reason">
@@ -1846,10 +1893,10 @@ export default function DomainPage({
               )}
             </div>
             <footer>
-              <span>{tr('已选择 {0} 篇论文', { 0: importSelected.size })}</span>
+              <span>{tr('已选择 {0} 篇论文', { 0: selectedImportCount })}</span>
               <button
                 className="domain-primary"
-                disabled={!importSelected.size || paperError}
+                disabled={!selectedImportCount || paperError || papersLoading || readOnly}
                 onClick={importPapers}
               >
                 {tr('导入到画布')}

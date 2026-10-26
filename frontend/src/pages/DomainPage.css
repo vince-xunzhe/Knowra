@@ -224,6 +224,15 @@
 .domain-save.conflict {
   color: #fbbf24;
 }
+.domain-page .domain-export {
+  border: 1px solid var(--domain-border);
+  white-space: nowrap;
+}
+.domain-export-notice {
+  padding: 6px 26px;
+  color: var(--domain-muted);
+  font-size: 11px;
+}
 .domain-page .domain-primary {
   background: #6366f1;
   color: white;
@@ -997,6 +1006,12 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+.domain-import-list .imported {
+  cursor: default;
+}
+.domain-import-list .imported .domain-import-status {
+  color: var(--color-emerald-400, #34d399);
+}
 .domain-import-list .domain-import-reason {
   color: #e7b573;
 }
@@ -1184,3 +1199,8 @@
   cursor: col-resize !important;
   user-select: none !important;
 }
+
+.roadmap-diagram-export { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.roadmap-diagram-export > button { border: 1px solid var(--domain-border); }
+.roadmap-diagram-export > span { color: var(--domain-muted); font-size: 11px; }
+.roadmap-diagram-export > [role="alert"] { color: var(--color-amber-300, #fbbf24); }
