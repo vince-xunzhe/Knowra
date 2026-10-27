@@ -64,6 +64,8 @@ def guard_readonly(db, before, after):
 
 
 def public_run(run, queue=None):
+    from services.domain_framework import summary
+
     job = queue.get(run.job_id) if queue and run.job_id else None
     return {
         "id": run.id,
@@ -71,6 +73,7 @@ def public_run(run, queue=None):
         "status": run.status,
         "jobId": run.job_id,
         "error": run.error,
+        "framework": summary(run.snapshot),
         "progress": (job or {}).get("progress") or {},
         "proposal": deepcopy(run.proposal) if run.status == "preview" else None,
     }

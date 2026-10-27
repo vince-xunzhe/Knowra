@@ -44,6 +44,7 @@ import {
   type CanvasNode,
   type DomainBoard,
   type DomainPaper,
+  type DomainFrameworkSelection,
   type ResearchRelationPolicy,
   type ReviewField,
 } from '../api/domains'
@@ -55,6 +56,7 @@ import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
 import { useRoadmapImport } from '../hooks/useRoadmapImport'
 import DomainEdgeEvidence from './DomainEdgeEvidence'
+import DomainFrameworkDialog from './DomainFrameworkDialog'
 import RoadmapPaperDetails, { RoadmapPaperStatus } from './RoadmapPaperDetails'
 import RoadmapReport from './RoadmapReport'
 import { sourceUrl } from '../utils/sourceUrl'
@@ -261,6 +263,8 @@ export default function DomainPage({
   const [search, setSearch] = useState('')
   const [nameDialog, setNameDialog] = useState<'new' | 'rename' | null>(null)
   const [researchDialog, setResearchDialog] = useState(false)
+  const [frameworkDialogBoard, setFrameworkDialogBoard] = useState<string | null>(null)
+  const frameworkDialogOpen = active && !isRoadmap && frameworkDialogBoard === liveBoard?.id
   const [nameDraft, setNameDraft] = useState('')
   const [rubber, setRubber] = useState<{ start: Point; end: Point } | null>(null)
   const [sizes, setSizes] = useState<Record<string, { width: number; height: number }>>({})
@@ -383,7 +387,7 @@ export default function DomainPage({
     }
   }, [active, layoutMenu])
   useEffect(() => {
-    if (!active || (!importOpen && !nameDialog && !researchDialog)) return
+    if (!active || (!importOpen && !nameDialog && !researchDialog && !frameworkDialogOpen)) return
     const previous = document.activeElement as HTMLElement | null
     const keydown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -391,6 +395,7 @@ export default function DomainPage({
         setImportOpen(false)
         setNameDialog(null)
         setResearchDialog(false)
+        if (!agent.busy) setFrameworkDialogBoard(null)
       }
       if (event.key !== 'Tab') return
       const controls = [
@@ -413,7 +418,7 @@ export default function DomainPage({
       document.removeEventListener('keydown', keydown)
       previous?.focus()
     }
-  }, [active, mode, importOpen, nameDialog, researchDialog])
+  }, [active, mode, importOpen, nameDialog, researchDialog, frameworkDialogOpen, agent.busy])
 
   const isLocked = (n: CanvasNode, b = board) =>
     n.locked || !!b?.nodes.find((g) => g.id === n.groupId)?.locked
@@ -450,7 +455,8 @@ export default function DomainPage({
         (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"],[role="tablist"]') ||
         importOpen ||
         nameDialog ||
-        researchDialog
+        researchDialog ||
+        frameworkDialogOpen
       )
         return
       if (event.code === 'Space') {
@@ -800,6 +806,7 @@ export default function DomainPage({
     setImportSelected(new Set())
   }
   const selectBoard = useCallback((boardId: string) => {
+    setFrameworkDialogBoard(null)
     update((s) => ({ ...s, activeId: boardId }), false)
     setSelected(new Set())
     setSelectedEdge(null)
@@ -914,8 +921,24 @@ export default function DomainPage({
     void agent.act(() => workspace.withSaved(snapshot => api.start(board.id, snapshot.revision,
       Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])), relationPolicy)))
   }
+  const startDomainResearch = (framework?: DomainFrameworkSelection) => {
+    if (isRoadmap || !board || readOnly || !frameworkDialogOpen) return
+    setLinkSource(null); setImportOpen(false); setNameDialog(null); gesture.current = null
+    void agent.act(() => workspace.withSaved(async snapshot => {
+      if (snapshot.state.activeId !== board.id) throw new Error('当前领域已切换，请重新打开 Agent 代连。')
+      const started = await api.start(board.id, snapshot.revision,
+        Object.fromEntries(Object.entries(sizes).map(([key, value]) => [key, value.height])), undefined, framework)
+      setFrameworkDialogBoard(null)
+      return started
+    }))
+  }
   const beginResearch = () => {
     if (!board || readOnly) return
+    if (!isRoadmap) {
+      agent.clearError()
+      setFrameworkDialogBoard(board.id)
+      return
+    }
     if (isRoadmap && boardPapers.length) {
       setResearchDialog(true)
       return
@@ -1572,10 +1595,19 @@ export default function DomainPage({
         />
         <aside id={`${mode}-inspector`} className="domain-inspector" hidden={inspectorCollapsed} style={{ width: inspectorWidth }}>
           {run?.status === 'failed' && <div className="domain-error" role="alert">{run.error}</div>}
+          {!isRoadmap && run?.framework && <section className="domain-agent-summary domain-framework-snapshot">
+            <h2>{tr('本次参考框架')}</h2>
+            <p><strong>{run.framework.name}</strong></p>
+            <p title={run.framework.version}>{tr('固定版本 {0}', { 0: run.framework.version.slice(0, 12) })}</p>
+            <p>{tr('仅辅助分析，不作为论文连线证据；识途后续修改不会改变本次快照。')}</p>
+            {run.framework.truncated && <p>{tr('框架内容较长，本次使用有界摘要；未覆盖部分不作结论。')}</p>}
+          </section>}
           {run?.status === 'preview' && run.proposal && <section className="domain-agent-summary">
             <h2>{tr('方案概览')}</h2>
             <p>{tr('新增 {0} 条 · 替换 {1} 条 · 保护 {2} 条', { 0: run.proposal.added, 1: run.proposal.removed, 2: run.proposal.protected })}</p>
             <p>{tr(isRoadmap ? '选中连线查看理由与证据；应用后可撤销画布调整。' : '选中连线查看理由与证据；应用后可整体撤销。')}</p>
+            {!isRoadmap && <p>{tr('手工连线与锁定项已保留。')}</p>}
+            {!isRoadmap && !!run.proposal.frameworkNotes?.length && <details open className="domain-framework-notes"><summary>{tr('框架分析提示')}</summary>{run.proposal.frameworkNotes.map((note, index) => <p key={index}>{note}</p>)}</details>}
             {run.proposal.warnings.length > 0 && <details><summary>{tr('材料提示')}</summary>{run.proposal.warnings.map((w, i) => <p key={i}>{paperMap.get(w.paperId)?.title}：{w.message}</p>)}</details>}
             {run.proposal.unconnected.length > 0 && <details><summary>{tr('未连接论文')}</summary>{run.proposal.unconnected.map(p => <p key={p.paperId}>{p.title}</p>)}</details>}
             {run.proposal.rejected > 0 && <p>{tr('已过滤 {0} 条无有效证据的建议', { 0: run.proposal.rejected })}</p>}
@@ -1663,7 +1695,7 @@ export default function DomainPage({
                   patchBoard(
                     (b) => ({
                       ...b,
-                      edges: b.edges.map((e) => (e.id === edge.id ? { ...e, label: event.target.value } : e)),
+                      edges: b.edges.map((e) => (e.id === edge.id ? { ...e, label: event.target.value, ...(!isRoadmap ? { analysis: null } : {}) } : e)),
                     }),
                     false,
                   )
@@ -1678,7 +1710,7 @@ export default function DomainPage({
                     onClick={() =>
                       patchBoard((b) => ({
                         ...b,
-                        edges: b.edges.map((e) => (e.id === edge.id ? { ...e, label: tr(label) } : e)),
+                        edges: b.edges.map((e) => (e.id === edge.id ? { ...e, label: tr(label), ...(!isRoadmap ? { analysis: null } : {}) } : e)),
                       }))
                     }
                   >
@@ -1939,6 +1971,15 @@ export default function DomainPage({
           </form>
         </div>
       )}
+      {frameworkDialogOpen && liveBoard && <DomainFrameworkDialog
+        key={liveBoard.id}
+        boardId={liveBoard.id}
+        busy={agent.busy}
+        error={agent.error}
+        onClearError={agent.clearError}
+        onClose={() => setFrameworkDialogBoard(null)}
+        onStart={startDomainResearch}
+      />}
       {researchDialog && (
         <div className="domain-modal-backdrop" onClick={() => setResearchDialog(false)}>
           <section

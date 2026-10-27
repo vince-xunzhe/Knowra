@@ -1172,6 +1172,16 @@
 .domain-agent-summary { background: #6366f10b; }
 .domain-agent-summary p, .domain-edge-evidence p { margin: 8px 0; }
 .domain-agent-summary summary, .domain-edge-evidence summary { cursor: pointer; }
+.domain-framework-dialog { width: min(560px, 92vw); overflow-y: auto; }
+.domain-framework-label { display: grid; gap: 9px; margin-top: 22px; font-size: 13px; }
+.domain-framework-label select { width: 100%; min-width: 0; padding: 10px; }
+.domain-framework-status { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; color: var(--domain-muted); font-size: 11px; }
+.domain-framework-status button { flex-shrink: 0; font-size: 11px; padding: 5px 7px; }
+.domain-framework-selection { padding: 12px; margin: 8px 0; border: 1px solid var(--domain-border); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.domain-framework-dialog .domain-framework-notice { color: var(--text-primary, #e2e8f0); line-height: 1.8; }
+.domain-framework-snapshot { background: transparent; }
+.domain-framework-snapshot strong { color: var(--color-indigo-300, #a5b4fc); }
+.domain-framework-notes { border-top: 1px solid var(--domain-border); padding-top: 8px; }
 .domain-edge-evidence blockquote { border-left: 2px solid #6366f188; padding-left: 8px; margin: 8px 0; white-space: pre-wrap; }
 .domain-edge-evidence details { border-top: 1px solid var(--domain-border); padding-top: 8px; }
 
