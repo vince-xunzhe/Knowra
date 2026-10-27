@@ -1228,7 +1228,12 @@ export default function DomainPage({
                                 }))
                               }}
                             >
-                              {e.locked ? <LockKeyhole size={9} /> : <UnlockKeyhole size={9} />}
+                              <span
+                                className="domain-edge-lock-visual"
+                                style={{ transform: `scale(${Math.min(1, Math.max(0.6, board.viewport.zoom))})` }}
+                              >
+                                {e.locked ? <LockKeyhole size={8} /> : <UnlockKeyhole size={8} />}
+                              </span>
                             </button>
                           </foreignObject>
                         </g>
