@@ -596,7 +596,7 @@
 .domain-edges .selected-edge {
   color: var(--color-indigo-300, #a5b4fc);
 }
-/* Keep the edge control readable and clickable at every canvas zoom level. */
+/* Keep the hit area fixed while the visible badge shrinks with the canvas. */
 .domain-edge-lock-container {
   overflow: visible;
   pointer-events: auto;
@@ -609,16 +609,32 @@
   height: 16px;
   padding: 0;
   color: #7887a2;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+}
+.domain-edge-lock-visual {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
   background: var(--domain-panel);
   border: 1px solid #7887a266;
   border-radius: 50%;
+  pointer-events: none;
 }
 .domain-page .domain-edge-lock[aria-pressed="true"] {
   color: #d69a27;
+}
+.domain-edge-lock[aria-pressed="true"] .domain-edge-lock-visual {
   border-color: #d69a27;
   background: color-mix(in srgb, #d69a27 15%, var(--domain-panel));
 }
-.domain-page .domain-edge-lock:hover:not(:disabled) {
+.domain-page .domain-edge-lock:hover {
+  background: transparent;
+}
+.domain-edge-lock:hover:not(:disabled) .domain-edge-lock-visual {
   border-color: currentColor;
   box-shadow: 0 0 0 1px color-mix(in srgb, currentColor 18%, transparent);
 }
