@@ -132,6 +132,7 @@ export interface DomainAgentRun {
   jobId: string | null
   error: string | null
   progress: { label?: string }
+  framework?: DomainFrameworkSnapshot | null
   proposal: null | {
     board: DomainBoard
     added: number
@@ -140,12 +141,33 @@ export interface DomainAgentRun {
     rejected: number
     warnings: { paperId: string; message: string }[]
     unconnected: { paperId: string; title: string }[]
+    frameworkNotes?: string[]
   }
+}
+export interface DomainFrameworkSelection {
+  boardId: string
+  version: string
+}
+export interface DomainFrameworkOption extends DomainFrameworkSelection {
+  name: string
+  category: string | null
+  sameCategory: boolean
+  paperCount: number
+  nodeCount: number
+}
+export interface DomainFrameworkSnapshot extends DomainFrameworkSelection {
+  name: string
+  category: string | null
+  revision: number
+  capturedAt: string
+  truncated: boolean
 }
 export type ResearchRelationPolicy = 'refresh' | 'clear' | 'preserve'
 export const listDomainRuns = () => api.get<DomainAgentRun[]>('/agent/runs').then(r => r.data)
-export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>, relationPolicy?: ResearchRelationPolicy) =>
-  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights, relationPolicy }).then(r => r.data)
+export const listDomainFrameworks = (boardId: string, signal?: AbortSignal) =>
+  api.get<DomainFrameworkOption[]>('/agent/frameworks', { params: { boardId }, signal }).then(r => r.data)
+export const startDomainRun = (boardId: string, revision: number, heights: Record<string, number>, _relationPolicy?: ResearchRelationPolicy, framework?: DomainFrameworkSelection) =>
+  api.post<DomainAgentRun>('/agent/runs', { boardId, revision, heights, ...(framework ? { framework } : {}) }).then(r => r.data)
 export const discardDomainRun = (id: string) => api.post<DomainAgentRun>(`/agent/runs/${id}/discard`).then(r => r.data)
 export const applyDomainRun = (id: string) =>
   api.post<DomainSnapshot & { before: DomainBoard }>(`/agent/runs/${id}/apply`).then(r => r.data)

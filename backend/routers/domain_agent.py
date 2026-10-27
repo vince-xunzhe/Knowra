@@ -8,7 +8,7 @@ from database import get_db
 from fastapi import APIRouter, Depends, HTTPException
 from models import DomainAgentRun
 from pydantic import BaseModel, ConfigDict, Field
-from services import task_runtime
+from services import domain_framework, task_runtime
 from services.domain_agent_state import (
     BUSY,
     begin_write,
@@ -17,24 +17,36 @@ from services.domain_agent_state import (
     refresh_run,
 )
 from sqlalchemy import func
-from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm import Session
 
 from routers.domains import Board, workspace
 
 router = APIRouter(prefix="/api/domains/agent", tags=["domains"])
 
 
+class FrameworkReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    boardId: str = Field(min_length=1, max_length=100)
+    version: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class StartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     boardId: str
     revision: int = Field(ge=1)
+    framework: FrameworkReference | None = None
     # Measured card heights improve layout without changing paper content.
     heights: dict[str, float] = Field(default_factory=dict)
 
 
+@router.get("/frameworks")
+def frameworks(boardId: str, db: Annotated[Session, Depends(get_db)]):
+    return domain_framework.choices(db, boardId)
+
+
 @router.get("/runs")
 def runs(db: Annotated[Session, Depends(get_db)]):
-    # Poll only the latest run for each board, without loading old snapshots.
+    # Poll only the latest run per board; expose just its framework metadata.
     ranked = db.query(
         DomainAgentRun.id.label("id"),
         func.row_number()
@@ -50,7 +62,6 @@ def runs(db: Annotated[Session, Depends(get_db)]):
         .filter(
             ranked.c.rank == 1,
         )
-        .options(defer(DomainAgentRun.snapshot))
         .all()
     )
     latest = {}
@@ -65,6 +76,7 @@ def runs(db: Annotated[Session, Depends(get_db)]):
 
 @router.post("/runs", status_code=202)
 def start(body: StartRequest, db: Annotated[Session, Depends(get_db)]):
+    domain_framework.ensure_local()
     begin_write(db)
     row = workspace(db, commit=False)
     if row.revision != body.revision:
@@ -87,11 +99,12 @@ def start(body: StartRequest, db: Annotated[Session, Depends(get_db)]):
         n["id"]: min(10000, max(60, body.heights.get(n["id"], n["height"])))
         for n in board["nodes"]
     }
+    framework = domain_framework.capture(db, board, body.framework) if body.framework else None
     run = DomainAgentRun(
         id=str(uuid4()),
         board_id=body.boardId,
         status="pending",
-        snapshot={"board": deepcopy(board), "heights": heights},
+        snapshot={"board": deepcopy(board), "heights": heights, "framework": framework},
     )
     db.add(run)
     db.commit()
