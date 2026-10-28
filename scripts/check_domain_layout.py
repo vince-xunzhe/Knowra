@@ -25,7 +25,9 @@ def git(*args: str) -> bytes:
     )
 
 
-def main() -> int:
+def main(suite: str = "layout") -> int:
+    if suite not in {"layout", "highlight"}:
+        raise ValueError("Unknown domain acceptance suite")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", help="Read-only Git revision for baseline frontend source and screenshot")
     args = parser.parse_args()
@@ -50,7 +52,7 @@ def main() -> int:
         raise SystemExit("Existing Chrome/Chromium is required; this check never downloads a browser")
     cache = ROOT / ".cache"
     cache.mkdir(exist_ok=True)
-    workspace = Path(tempfile.mkdtemp(prefix="domain-layout-baseline-" if args.baseline else "domain-layout-check-", dir=cache))
+    workspace = Path(tempfile.mkdtemp(prefix=f"domain-{suite}-baseline-" if args.baseline else f"domain-{suite}-check-", dir=cache))
     # Preserve repository-relative imports such as src/lib/cloudPolicy.ts ->
     # ../../../cloud-capabilities.json, entirely inside this task's snapshot.
     snapshot = workspace / "frontend"
@@ -101,8 +103,8 @@ def main() -> int:
     (snapshot / "build-layout.mjs").write_text('''import { build } from 'vite';
 await build({root:process.cwd(),configFile:process.cwd()+'/vite.config.ts',configLoader:'native',envDir:false,
 cacheDir:process.cwd()+'/.vite-cache',build:{outDir:process.cwd()+'/layout-dist',emptyOutDir:false,
-rollupOptions:{input:process.cwd()+'/tests/domain-layout-harness.html'}}});
-''')
+rollupOptions:{input:process.cwd()+'/tests/domain-SUITE-harness.html'}}});
+'''.replace('SUITE', suite))
     (snapshot / "network-guard.cjs").write_text('''const net = require('node:net');
 const dns = require('node:dns');
 const modules = require('node:module');
@@ -133,7 +135,7 @@ modules.syncBuiltinESMExports();
            "HOME": str(snapshot / "tmp"), "TMPDIR": str(snapshot / "tmp"),
            "NODE_OPTIONS": "--require " + json.dumps(str(snapshot / "network-guard.cjs"))}
     results = []
-    commands = [("build", [node, "build-layout.mjs"]), ("browser", [node, "tests/domain-layout-ui.mjs"])]
+    commands = [("build", [node, "build-layout.mjs"]), ("browser", [node, f"tests/domain-{suite}-ui.mjs"])]
     for name, command in commands:
         command_env = dict(env)
         if name == "browser":
@@ -148,6 +150,14 @@ modules.syncBuiltinESMExports();
             break
         if interrupted:
             break
+    # Bind evidence to the exact copied source, including the current synthetic
+    # harness used when rendering an older baseline. No data or env paths enter it.
+    source_hashes = {str(path.relative_to(workspace)): hashlib.sha256(path.read_bytes()).hexdigest()
+                     for directory in (snapshot / "src", snapshot / "tests")
+                     for path in sorted(directory.rglob("*")) if path.is_file()}
+    if policy_bytes is not None:
+        source_hashes[policy_name] = hashlib.sha256(policy_bytes).hexdigest()
+    (snapshot / "evidence/source-manifest.json").write_text(json.dumps(source_hashes, indent=2) + "\n")
     report = {"workspace": str(workspace), "snapshot": str(snapshot), "node": version, "python": sys.version.split()[0],
               "browser": browser, "source_head": git("rev-parse", "HEAD").decode().strip(),
               "baseline_sha": baseline_sha, "source_has_changes": bool(git("status", "--porcelain")),
@@ -157,9 +167,9 @@ modules.syncBuiltinESMExports();
                             "api_responses": "in-memory synthetic mocks only", "external_requests": "blocked",
                             "source_env_files": "excluded", "browser_profile": str(snapshot / "tmp/layout-profile")},
               "results": results}
-    output_path = cache / ("domain-layout-baseline-result.json" if args.baseline else "domain-layout-check-result.json")
+    output_path = cache / (f"domain-{suite}-baseline-result.json" if args.baseline else f"domain-{suite}-check-result.json")
     output_path.write_text(json.dumps(report, indent=2) + "\n")
-    print("Layout evidence: " + str(snapshot / "evidence"), flush=True)
+    print(f"Domain {suite} evidence: " + str(snapshot / "evidence"), flush=True)
     return int(any(item["exit_code"] for item in results))
 
 

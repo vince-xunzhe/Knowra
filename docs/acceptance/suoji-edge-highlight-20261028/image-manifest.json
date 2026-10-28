@@ -1,0 +1,46 @@
+{
+  "after-evidence.png": {
+    "sha256": "42e6d9d71ab139a151b2191b521895c2f7d9d6faa6f7c6913275298292a1886d",
+    "bytes": 201174
+  },
+  "after-layout-preview.png": {
+    "sha256": "6ba3e844e778e8db1c47f705c23c72697753a0c6c3029d6b0dcc864b2fc0d495",
+    "bytes": 159529
+  },
+  "after-pulse.png": {
+    "sha256": "df359429c722059faf9113e42e29489a69e5a75ed475d7f3ab48ffa19f7b7051",
+    "bytes": 182376
+  },
+  "after-reduced-motion.png": {
+    "sha256": "e8e472ee05c501c7f64968c99615b0d4caa96ecf3f36bb80f18ea2904f9edbe5",
+    "bytes": 180092
+  },
+  "after-static.png": {
+    "sha256": "c8a4c4d1059d8e9d5fe3c4fc5dfc7bbf8e2b73b360893d9c2417c19629e1745f",
+    "bytes": 180028
+  },
+  "after-zoom-drag-lock.png": {
+    "sha256": "d2fe2e15399416b5f7f2442eebda09c5d2955d6329280fbbdea341ae49455dd2",
+    "bytes": 220987
+  },
+  "before-baseline.png": {
+    "sha256": "1cc53d18e21c496c54514ba7d41b74d2a2fdda6fbd7468d987d2300df4de0bab",
+    "bytes": 178320
+  },
+  "before-current.png": {
+    "sha256": "46d2b053441ed0e09a0ea83f738109c53178aefc62d0af21f612b6fe9847e031",
+    "bytes": 174053
+  },
+  "dense-after-39-percent.png": {
+    "sha256": "f8f9d01329b50e7cb61e02555c151ea6e897f77a8ce439664e97d6e28dcaaf09",
+    "bytes": 280144
+  },
+  "dense-after-61-percent.png": {
+    "sha256": "8bc3900c67eeafde6cceed74ca144d7226c89ccc9490f031eacca7d604ea2cbc",
+    "bytes": 182087
+  },
+  "dense-before-39-percent.png": {
+    "sha256": "a5106c21b7b83cc28e77777c831eee1886967ac794ba08106b917409dfcfa0cd",
+    "bytes": 268116
+  }
+}

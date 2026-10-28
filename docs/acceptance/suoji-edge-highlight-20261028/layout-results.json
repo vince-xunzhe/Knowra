@@ -1,0 +1,272 @@
+{
+  "fixture": "23 synthetic papers; 42 synthetic relations; cycle, separate component, locked node/edge, fixed group and note",
+  "baseline": false,
+  "tests": [
+    {
+      "name": "Preview/compare/pan/cancel preserve the original state without any write",
+      "status": "passed",
+      "ms": 1532
+    },
+    {
+      "name": "Apply preserves all semantics/locks; one undo restores layout; repeat is stable",
+      "status": "passed",
+      "ms": 3967
+    },
+    {
+      "name": "Unsaved note survives preview cancellation and layout undo during save failure",
+      "status": "passed",
+      "ms": 2258
+    },
+    {
+      "name": "A failed layout save keeps the applied canvas; retry persists it without data loss",
+      "status": "passed",
+      "ms": 1312
+    },
+    {
+      "name": "Revision conflict never reloads or retries automatically; local layout remains undoable",
+      "status": "passed",
+      "ms": 1907
+    },
+    {
+      "name": "Field/page switches discard preview and never write its positions",
+      "status": "passed",
+      "ms": 2871
+    },
+    {
+      "name": "A newer refresh invalidates preview rather than overwriting the external canvas",
+      "status": "passed",
+      "ms": 432
+    },
+    {
+      "name": "Pending Agent ownership prevents layout and produces no mutation",
+      "status": "passed",
+      "ms": 364
+    }
+  ],
+  "violations": [],
+  "requests": [
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains/agent/runs",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers"
+  ],
+  "screenshots": [
+    "before-current.png",
+    "after-preview.png",
+    "after-applied.png",
+    "after-edge-detail.png",
+    "after-save-failure.png"
+  ],
+  "metrics": {
+    "before": {
+      "nodeOverlaps": 4,
+      "edgeNodeHits": 38,
+      "sampledPointsPerPath": 220,
+      "totalPathLength": 19989,
+      "hitPairs": [
+        [
+          "e1",
+          "n1"
+        ],
+        [
+          "e1",
+          "n2"
+        ],
+        [
+          "e1",
+          "n3"
+        ],
+        [
+          "e1",
+          "n4"
+        ],
+        [
+          "e4",
+          "n1"
+        ],
+        [
+          "e4",
+          "n2"
+        ],
+        [
+          "e4",
+          "n3"
+        ],
+        [
+          "e5",
+          "n6"
+        ],
+        [
+          "e6",
+          "n2"
+        ],
+        [
+          "e6",
+          "n3"
+        ],
+        [
+          "e7",
+          "n0"
+        ],
+        [
+          "e7",
+          "n7"
+        ],
+        [
+          "e9",
+          "n9"
+        ],
+        [
+          "e10",
+          "n3"
+        ],
+        [
+          "e10",
+          "n4"
+        ],
+        [
+          "e13",
+          "n9"
+        ],
+        [
+          "e15",
+          "n1"
+        ],
+        [
+          "e15",
+          "n2"
+        ],
+        [
+          "e17",
+          "n4"
+        ],
+        [
+          "e17",
+          "n9"
+        ],
+        [
+          "e17",
+          "n10"
+        ],
+        [
+          "e20",
+          "n4"
+        ],
+        [
+          "e20",
+          "n10"
+        ],
+        [
+          "e24",
+          "n8"
+        ],
+        [
+          "e24",
+          "n10"
+        ],
+        [
+          "e26",
+          "n7"
+        ],
+        [
+          "e26",
+          "n13"
+        ],
+        [
+          "e29",
+          "n15"
+        ],
+        [
+          "e30",
+          "n16"
+        ],
+        [
+          "e33",
+          "n13"
+        ],
+        [
+          "e33",
+          "n14"
+        ],
+        [
+          "e33",
+          "n15"
+        ],
+        [
+          "e34",
+          "n14"
+        ],
+        [
+          "e34",
+          "n15"
+        ],
+        [
+          "e35",
+          "n15"
+        ],
+        [
+          "e35",
+          "n16"
+        ],
+        [
+          "e38",
+          "n14"
+        ],
+        [
+          "e38",
+          "n15"
+        ]
+      ]
+    },
+    "after": {
+      "nodeOverlaps": 0,
+      "edgeNodeHits": 0,
+      "sampledPointsPerPath": 220,
+      "totalPathLength": 17696,
+      "hitPairs": []
+    }
+  },
+  "cleanupConfirmed": true,
+  "staticPort": 49919,
+  "networkScope": "Only the random loopback static origin; all API requests fulfilled in browser routes"
+}

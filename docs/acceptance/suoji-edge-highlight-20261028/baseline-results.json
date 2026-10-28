@@ -1,0 +1,24 @@
+{
+  "fixture": "7 synthetic papers; 6 relations (incoming, outgoing, reciprocal, unrelated); locked node/edge; isolated node; second domain reuses node IDs",
+  "baseline": true,
+  "tests": [
+    {
+      "name": "Fetched main: selecting the same synthetic paper does not highlight its incident edges",
+      "status": "passed",
+      "ms": 2877
+    }
+  ],
+  "violations": [],
+  "requests": [
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers"
+  ],
+  "screenshots": [
+    "before-baseline.png"
+  ],
+  "animation": {},
+  "cleanupConfirmed": true,
+  "staticPort": 49989,
+  "networkScope": "Only random loopback static origin; API responses are in-memory browser mocks; no backend/database"
+}
