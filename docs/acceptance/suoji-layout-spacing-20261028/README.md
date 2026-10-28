@@ -1,5 +1,7 @@
 # 索骥整理布局：连线疏朗优化 DOD
 
+交付：[PR #36](https://github.com/vince-xunzhe/Knowra/pull/36)，非 Draft，等待用户合并。
+
 保留原“整理布局”入口、预览／对照／取消／应用／撤销和全部论文关系。本轮按局部拥挤程度留出节点空间，并将长距离共线和近并行路径分散到不同通道；没有删边、隐藏边或调用 LLM。
 
 - 日期：2026-10-28。新工作树 `/tmp/knowra-suoji-layout-spacing-20261028`（解析为 `/private/tmp/knowra-suoji-layout-spacing-20261028`），分支 `codex/suoji-layout-spacing-20261028`。

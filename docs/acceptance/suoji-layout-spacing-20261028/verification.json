@@ -167,5 +167,6 @@
     "layout-snapshot-source.json": "5c967ece647d4001cd207c14a1456b57f4c350973cb22189291358bde15b4291",
     "cloud-results.json": "fe0e62cb214b3ddeea66882780f50147667d53a566d1fe0c44067399f1a35ff4",
     "after-arranged-detail.png": "522808e236afbac06b904faa541f261f05d6278ccefd628887d0dbdb7ce083a5"
-  }
+  },
+  "pr": "https://github.com/vince-xunzhe/Knowra/pull/36"
 }
