@@ -1,0 +1,119 @@
+{
+  "tested_commit": "3937e875eafc36e99e23ced589bbc12b5e0068af",
+  "base_commit": "1b61ecf66634642ee8ad4f800c10313fee74e0c3",
+  "date": "2026-10-28",
+  "environment": {
+    "os": "26.5.1",
+    "python": "3.12.13",
+    "node": "24.14.1",
+    "vite": "8.0.10",
+    "typescript": "6.0.3",
+    "chrome": "156.0.8078.48",
+    "profile": "disposable worktree cache profile"
+  },
+  "checks": {
+    "native_preflight": {
+      "passed": true,
+      "api_port": 8117,
+      "web_port": 5197,
+      "services_started": false
+    },
+    "standard": {
+      "exit_code": 0,
+      "startup_tests": 23,
+      "isolated_backend_tests": 31,
+      "frontend_unit_tests": 22,
+      "types": 0,
+      "build": 0,
+      "lint_errors": 0,
+      "lint_warnings": 0,
+      "lifecycle_types": 0,
+      "lifecycle_build": 0,
+      "lifecycle_browser_tests": 5,
+      "network_violations": []
+    },
+    "layout_browser": {
+      "exit_code": 0,
+      "tests": 8,
+      "details": "browser-results.json"
+    },
+    "baseline_browser": {
+      "exit_code": 0,
+      "tests": 1,
+      "details": "baseline-results.json"
+    }
+  },
+  "source_sha256": {
+    "frontend/package.json": "f06069c72f2331dd0ff47e2c47de68183bed1d226eb09f19c05ff8bde9e03e63",
+    "frontend/src/hooks/useDomainLayoutPreview.ts": "e52110b051d82d3c7359dc6b5db4cd6e4701cb19f07c119b3eb5678bbb30c6d4",
+    "frontend/src/i18n/locales/en.json": "845d55f094d32b7ec77e3abd0f11ea3019df23ea95af7863b586483c8e8457a0",
+    "frontend/src/i18n/locales/es.json": "90815427d0b7c87a76b36e314f588126d135d1d814e268b59e5cb16dc11db5e8",
+    "frontend/src/i18n/locales/ja.json": "969bd6c644bd61e16ff7e4805d19451f93a6e5313354c851478428b7198d5109",
+    "frontend/src/lib/domainGeometry.ts": "9ceb1cad2229f9bd1aef5f0fed3e42552f50821a0d25a70d05e4aba06b471c10",
+    "frontend/src/lib/domainLayout.ts": "fdd05232772e137973df922c37f694470077b965d49f20d3048a72174a116e22",
+    "frontend/src/pages/DomainPage.css": "3d6bea7807898b2b28f65bf33c61b0fbc25d41ffb4b790b3f346d57247a9bb30",
+    "frontend/src/pages/DomainPage.tsx": "db21365306895085e987f130f3584a1f0e3fccef219a12adbf4e947c6dad00fe",
+    "frontend/tests/domain-geometry.test.mjs": "cd5715bdd01fea476560cbe383e3ff2b19ab1224b7e9027eb8ff591756b5e67c",
+    "frontend/tests/domain-layout-fixture.mjs": "d44c0c14a6cc97ce6f8a805e73b990624aab35f13024834fdf3cf40daa2bf4a5",
+    "frontend/tests/domain-layout-harness.html": "8d99555ab0d831850cd929a3492457f500c437f6ef708dbc2789d359b4730a00",
+    "frontend/tests/domain-layout-harness.tsx": "b67968f9b6cfc1b8184d1444ddc2f09b819995be0ecf46dd4f8930e0c7359710",
+    "frontend/tests/domain-layout-ui.mjs": "2c2df900d993a34d0179e56f39a2dcefe8bd15269e43e0284b18e5152caf8946",
+    "frontend/tests/domain-layout.test.mjs": "a0d38f23b7166754f4cd2c07b003f17a0f1956f5aa4a3d0b3add14df459125f7",
+    "scripts/check_domain_layout.py": "50e456b95a0fee44dda22eadbc89f6e3dcbf4628f184f27486262b902bfb1c77",
+    "scripts/check_frontend.py": "2a21a1ef22bcc65b923e3770e1fb6c583b49a9b6b8350ddb92ecf52b095827fe"
+  },
+  "screenshots": {
+    "after-applied.png": {
+      "width": 1800,
+      "height": 1100,
+      "bytes": 255274,
+      "sha256": "76847c2cfecb5464dd0198ae7bca7ebfb881e0867f49e9162ab22f6f1fad8c4c",
+      "metadata": {}
+    },
+    "after-edge-detail.png": {
+      "width": 1800,
+      "height": 1100,
+      "bytes": 252865,
+      "sha256": "ffd259262cfd26224769a169b392808e3dcb266ca4fe94dea969e4b2782f352b",
+      "metadata": {}
+    },
+    "after-preview.png": {
+      "width": 1800,
+      "height": 1100,
+      "bytes": 266854,
+      "sha256": "095e2bf67dc905433382f3657c61fb9fe2427cc81e0537a6598d588dc371cc71",
+      "metadata": {}
+    },
+    "after-save-failure.png": {
+      "width": 1800,
+      "height": 1100,
+      "bytes": 260017,
+      "sha256": "f1b2813eb1d1b59b4c60b7351014ad99989081a6c6a6b78c6c6516c0a3075fcc",
+      "metadata": {}
+    },
+    "before-baseline.png": {
+      "width": 1800,
+      "height": 1100,
+      "bytes": 245661,
+      "sha256": "b881d9ce7a0e1fa6598f665314e038675df77daa372cc246d3ebbbc06f703023",
+      "metadata": {}
+    }
+  },
+  "privacy": {
+    "fixtures": "Synthetic only; 23 fictional papers and 42 fictional relations",
+    "reference_image_published": false,
+    "real_database_or_paper_files_accessed": false,
+    "business_api_requests": "All layout browser API requests mocked in-memory; no backend",
+    "uploads_during_tests": false,
+    "external_requests": "Blocked",
+    "original_checkout": "Clean; preserved",
+    "other_worktrees_modified": false
+  },
+  "limitations": [
+    "No real research data or real providers tested",
+    "No guarantee of zero edge-edge or label overlap",
+    "Fixed/grouped nodes and notes stay in place",
+    "Large/pathological drawings use disclosed simplified edge paths",
+    "Not full application E2E, cross-browser, mobile, CI, deployment or PostgreSQL tests"
+  ]
+}
