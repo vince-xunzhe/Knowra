@@ -1,0 +1,167 @@
++ <worktree>/backend/.venv/bin/python scripts/test_native_startup.py
+test_fixture_descendants_with_snapshot_cwd_are_accepted (__main__.FixtureListenerOwnershipTests.test_fixture_descendants_with_snapshot_cwd_are_accepted) ... ok
+test_lsof_failure_or_warning_cannot_authorize_http (__main__.FixtureListenerOwnershipTests.test_lsof_failure_or_warning_cannot_authorize_http) ... ok
+test_unbound_ports_wait_without_probing (__main__.FixtureListenerOwnershipTests.test_unbound_ports_wait_without_probing) ... ok
+test_unrelated_listener_is_rejected_without_claiming_ownership (__main__.FixtureListenerOwnershipTests.test_unrelated_listener_is_rejected_without_claiming_ownership) ... ok
+test_wildcard_listener_is_rejected (__main__.FixtureListenerOwnershipTests.test_wildcard_listener_is_rejected) ... ok
+test_wrong_worktree_cwd_is_rejected (__main__.FixtureListenerOwnershipTests.test_wrong_worktree_cwd_is_rejected) ... ok
+test_changed_lock_requires_reinstallation (__main__.NativeStartupTests.test_changed_lock_requires_reinstallation) ... ok
+test_failed_install_can_resume_its_managed_target (__main__.NativeStartupTests.test_failed_install_can_resume_its_managed_target) ... ok
+test_failed_install_never_becomes_ready (__main__.NativeStartupTests.test_failed_install_never_becomes_ready) ... ok
+test_fresh_checkout_installs_canonical_environment (__main__.NativeStartupTests.test_fresh_checkout_installs_canonical_environment) ... ok
+test_installer_finds_existing_python_when_python_bin_is_unset (__main__.NativeStartupTests.test_installer_finds_existing_python_when_python_bin_is_unset) ... ok
+test_installer_preserves_old_environment_and_binds_new_environment (__main__.NativeStartupTests.test_installer_preserves_old_environment_and_binds_new_environment) ... ok
+test_installer_rejects_an_interpreter_outside_selected_environment_before_sync (__main__.NativeStartupTests.test_installer_rejects_an_interpreter_outside_selected_environment_before_sync) ... ok
+test_interrupted_environment_creation_resumes_the_recorded_target (__main__.NativeStartupTests.test_interrupted_environment_creation_resumes_the_recorded_target) ... ok
+test_invalid_explicit_python_has_actionable_error (__main__.NativeStartupTests.test_invalid_explicit_python_has_actionable_error) ... ok
+test_legacy_environment_error_is_actionable_and_does_not_mutate (__main__.NativeStartupTests.test_legacy_environment_error_is_actionable_and_does_not_mutate) ... ok
+test_marker_cannot_claim_a_different_environment (__main__.NativeStartupTests.test_marker_cannot_claim_a_different_environment) ... ok
+test_node_alias_is_rejected_instead_of_using_another_path_node (__main__.NativeStartupTests.test_node_alias_is_rejected_instead_of_using_another_path_node) ... ok
+test_noninteractive_start_uses_existing_data_and_selected_environment_without_permission (__main__.NativeStartupTests.test_noninteractive_start_uses_existing_data_and_selected_environment_without_permission) ... ok
+test_preflight_still_rejects_linked_data (__main__.NativeStartupTests.test_preflight_still_rejects_linked_data) ... ok
+test_preflight_still_rejects_occupied_ports (__main__.NativeStartupTests.test_preflight_still_rejects_occupied_ports) ... ok
+test_preflight_with_existing_database_is_read_only (__main__.NativeStartupTests.test_preflight_with_existing_database_is_read_only) ... ok
+test_preflight_without_database_does_not_load_config_or_start_services (__main__.NativeStartupTests.test_preflight_without_database_does_not_load_config_or_start_services) ... ok
+test_symlinked_environment_is_rejected (__main__.NativeStartupTests.test_symlinked_environment_is_rejected) ... ok
+test_symlinked_installation_record_is_rejected_before_write (__main__.NativeStartupTests.test_symlinked_installation_record_is_rejected_before_write) ... ok
+test_terminal_preflight_and_occupied_start_preserve_read_only_boundaries (__main__.NativeStartupTests.test_terminal_preflight_and_occupied_start_preserve_read_only_boundaries) ... ok
+test_terminal_start_uses_existing_data_without_prompt_or_permission (__main__.NativeStartupTests.test_terminal_start_uses_existing_data_without_prompt_or_permission) ... ok
+test_unmanaged_native_target_is_never_overwritten (__main__.NativeStartupTests.test_unmanaged_native_target_is_never_overwritten) ... ok
+test_unsupported_node_reports_version_and_local_selection (__main__.NativeStartupTests.test_unsupported_node_reports_version_and_local_selection) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 50.874s
+
+OK
++ <worktree>/backend/.venv/bin/python scripts/check_backend.py
+Offline backend snapshot: <worktree>/.cache/backend-check-hb43grjs
+test_favicon_probe_returns_no_content (tests.test_main_routes.MainRouteTests.test_favicon_probe_returns_no_content) ... ok
+test_api_lifecycles_do_not_own_worker_lifetime (tests.test_task_queue.TaskQueueTests.test_api_lifecycles_do_not_own_worker_lifetime) ... ok
+test_concurrent_submissions_are_idempotent (tests.test_task_queue.TaskQueueTests.test_concurrent_submissions_are_idempotent) ... ok
+test_healthy_managed_worker_receives_revision_without_duplicate_spawn (tests.test_task_queue.TaskQueueTests.test_healthy_managed_worker_receives_revision_without_duplicate_spawn) ... ok
+test_killed_worker_is_interrupted_not_success_and_duplicate_worker_cannot_claim (tests.test_task_queue.TaskQueueTests.test_killed_worker_is_interrupted_not_success_and_duplicate_worker_cannot_claim) ... ok
+test_legacy_heartbeat_schema_stays_compatible (tests.test_task_queue.TaskQueueTests.test_legacy_heartbeat_schema_stays_compatible) ... ok
+test_managed_upgrade_drains_current_job_before_replacement (tests.test_task_queue.TaskQueueTests.test_managed_upgrade_drains_current_job_before_replacement) ... ok
+test_old_revision_cannot_claim_after_upgrade_request (tests.test_task_queue.TaskQueueTests.test_old_revision_cannot_claim_after_upgrade_request) ... ok
+test_pipeline_and_manual_tasks_cannot_overlap (tests.test_task_queue.TaskQueueTests.test_pipeline_and_manual_tasks_cannot_overlap) ... ok
+test_policy_adapts_to_local_and_external (tests.test_task_queue.TaskQueueTests.test_policy_adapts_to_local_and_external) ... ok
+test_queued_snapshot_does_not_reuse_old_success (tests.test_task_queue.TaskQueueTests.test_queued_snapshot_does_not_reuse_old_success) ... ok
+test_real_worker_isolated_and_readable_across_api_restart (tests.test_task_queue.TaskQueueTests.test_real_worker_isolated_and_readable_across_api_restart) ... ok
+test_request_key_survives_completion (tests.test_task_queue.TaskQueueTests.test_request_key_survives_completion) ... ok
+test_resume_conflicts_with_active_writer (tests.test_task_queue.TaskQueueTests.test_resume_conflicts_with_active_writer) ... ok
+test_resume_keeps_successful_checkpoints (tests.test_task_queue.TaskQueueTests.test_resume_keeps_successful_checkpoints) ... ok
+test_revision_tracks_source_and_environment_not_secrets (tests.test_task_queue.TaskQueueTests.test_revision_tracks_source_and_environment_not_secrets) ... ok
+test_roadmap_progress_is_readable_but_resume_requires_new_research (tests.test_task_queue.TaskQueueTests.test_roadmap_progress_is_readable_but_resume_requires_new_research) ... ok
+test_status_list_does_not_load_large_reports_or_checkpoints (tests.test_task_queue.TaskQueueTests.test_status_list_does_not_load_large_reports_or_checkpoints) ... ok
+test_supervisor_checks_worker_without_browser_polling (tests.test_task_queue.TaskQueueTests.test_supervisor_checks_worker_without_browser_polling) ... ok
+test_compilation_restores_successful_page_checkpoints (tests.test_task_executor.TaskExecutorTests.test_compilation_restores_successful_page_checkpoints) ... Traceback (most recent call last):
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 300, in execute
+    result = HANDLERS[job['kind']](ctx, job['payload'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 189, in compile_items
+    raise RuntimeError(wiki.compile_state['last_error'])
+RuntimeError: RuntimeError: provider unavailable
+ok
+test_configuration_failure_precedes_destructive_reprocess (tests.test_task_executor.TaskExecutorTests.test_configuration_failure_precedes_destructive_reprocess) ... Traceback (most recent call last):
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 300, in execute
+    result = HANDLERS[job['kind']](ctx, job['payload'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 69, in process_papers
+    preflight_task_runtime(cfg, 'paper_extract')
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1198, in _execute_mock_call
+    raise effect
+model_gateway.runtime.ProviderConfigurationError: CLI missing
+ok
+test_lint_agent_failure_retains_rule_report (tests.test_task_executor.TaskExecutorTests.test_lint_agent_failure_retains_rule_report) ... Traceback (most recent call last):
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 300, in execute
+    result = HANDLERS[job['kind']](ctx, job['payload'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 224, in lint
+    raise RuntimeError(error)
+RuntimeError: provider offline
+ok
+test_pipeline_resumes_after_successful_stages_without_browser (tests.test_task_executor.TaskExecutorTests.test_pipeline_resumes_after_successful_stages_without_browser) ... Traceback (most recent call last):
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 300, in execute
+    result = HANDLERS[job['kind']](ctx, job['payload'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 247, in pipeline
+    ctx.step('promote', lambda: promote(ctx, {'use_llm': payload.get('use_llm', True), 'force_all': False}))
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 24, in step
+    result = run()
+             ^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 247, in <lambda>
+    ctx.step('promote', lambda: promote(ctx, {'use_llm': payload.get('use_llm', True), 'force_all': False}))
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<Python 3.12.13>/lib/python3.12/unittest/mock.py", line 1202, in _execute_mock_call
+    raise result
+RuntimeError: offline
+ok
+test_resume_processes_only_unfinished_papers (tests.test_task_executor.TaskExecutorTests.test_resume_processes_only_unfinished_papers) ... Traceback (most recent call last):
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 300, in execute
+    result = HANDLERS[job['kind']](ctx, job['payload'])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<worktree>/.cache/backend-check-hb43grjs/backend/services/task_executor.py", line 108, in process_papers
+    raise RuntimeError(state['last_message'])
+RuntimeError: 处理完成：1 篇成功，1 篇失败
+ok
+test_empty_submission_never_queues_work (tests.test_paper_background_dispatch.PaperBackgroundDispatchTests.test_empty_submission_never_queues_work) ... ok
+test_reprocess_does_not_delete_existing_results_before_worker_claim (tests.test_paper_background_dispatch.PaperBackgroundDispatchTests.test_reprocess_does_not_delete_existing_results_before_worker_claim) ... ok
+test_submission_and_client_shutdown_never_run_model_in_api (tests.test_paper_background_dispatch.PaperBackgroundDispatchTests.test_submission_and_client_shutdown_never_run_model_in_api) ... ok
+test_libpq_environment_cannot_redirect_a_valid_uri (tests.test_postgres_safety.PostgresSafetyTests.test_libpq_environment_cannot_redirect_a_valid_uri) ... ok
+test_only_a_dedicated_explicit_loopback_target_is_accepted (tests.test_postgres_safety.PostgresSafetyTests.test_only_a_dedicated_explicit_loopback_target_is_accepted) ... ok
+test_remote_shared_and_libpq_overrides_are_rejected (tests.test_postgres_safety.PostgresSafetyTests.test_remote_shared_and_libpq_overrides_are_rejected) ... ok
+test_url_alone_never_enables_destructive_tests (tests.test_postgres_safety.PostgresSafetyTests.test_url_alone_never_enables_destructive_tests) ... ok
+test_cloud_startup_rejects_before_application_imports (tests.test_cloud_freeze.CloudPolicyTests.test_cloud_startup_rejects_before_application_imports) ... ok
+test_local_deployment_does_not_require_cloud (tests.test_cloud_freeze.CloudPolicyTests.test_local_deployment_does_not_require_cloud) ... ok
+test_missing_or_invalid_policy_fails_closed (tests.test_cloud_freeze.CloudPolicyTests.test_missing_or_invalid_policy_fails_closed) ... ok
+test_only_reviewed_manifest_boolean_true_enables_features (tests.test_cloud_freeze.CloudPolicyTests.test_only_reviewed_manifest_boolean_true_enables_features) ... ok
+test_repository_policy_is_frozen_even_with_legacy_environment (tests.test_cloud_freeze.CloudPolicyTests.test_repository_policy_is_frozen_even_with_legacy_environment) ... ok
+test_direct_remote_worker_function_rejects_before_local_state (tests.test_cloud_freeze.FrozenApiTests.test_direct_remote_worker_function_rejects_before_local_state) ... ok
+test_direct_snapshot_function_rejects_before_query (tests.test_cloud_freeze.FrozenApiTests.test_direct_snapshot_function_rejects_before_query) ... ok
+test_local_worker_start_remains_available (tests.test_cloud_freeze.FrozenApiTests.test_local_worker_start_remains_available) ... ok
+test_remote_worker_api_rejects_before_process_or_local_state (tests.test_cloud_freeze.FrozenApiTests.test_remote_worker_api_rejects_before_process_or_local_state) ... ok
+test_repeated_frozen_requests_preserve_synthetic_library_bytes_and_rows (tests.test_cloud_freeze.FrozenApiTests.test_repeated_frozen_requests_preserve_synthetic_library_bytes_and_rows) ... ok
+test_snapshot_api_rejects_before_database_dependency (tests.test_cloud_freeze.FrozenApiTests.test_snapshot_api_rejects_before_database_dependency) ... ok
+test_existing_remote_client_cannot_send_after_freeze (tests.test_cloud_freeze.FrozenWorkerTests.test_existing_remote_client_cannot_send_after_freeze) ... ok
+test_local_cli_still_uses_local_worker_path (tests.test_cloud_freeze.FrozenWorkerTests.test_local_cli_still_uses_local_worker_path) ... ok
+test_remote_cli_rejects_before_loading_config_or_connecting (tests.test_cloud_freeze.FrozenWorkerTests.test_remote_cli_rejects_before_loading_config_or_connecting) ... ok
+test_remote_client_constructor_rejects (tests.test_cloud_freeze.FrozenWorkerTests.test_remote_client_constructor_rejects) ... ok
+test_cloud_mode_returns_404 (tests.test_sync_local_router.LocalSnapshotTests.test_cloud_mode_returns_404) ... ok
+test_edge_endpoints_are_strings (tests.test_sync_local_router.LocalSnapshotTests.test_edge_endpoints_are_strings) ... ok
+test_empty_db_returns_zero_counts (tests.test_sync_local_router.LocalSnapshotTests.test_empty_db_returns_zero_counts) ... ok
+test_file_hash_computed_and_cached (tests.test_sync_local_router.LocalSnapshotTests.test_file_hash_computed_and_cached) ... ok
+test_include_wiki_bodies_false_strips_body (tests.test_sync_local_router.LocalSnapshotTests.test_include_wiki_bodies_false_strips_body) ... ok
+test_node_source_paper_ids_are_strings (tests.test_sync_local_router.LocalSnapshotTests.test_node_source_paper_ids_are_strings) ... ok
+test_paper_rows_have_stringified_ids_and_blank_user_id (tests.test_sync_local_router.LocalSnapshotTests.test_paper_rows_have_stringified_ids_and_blank_user_id) ... ok
+test_paper_updated_at_uses_snapshot_time (tests.test_sync_local_router.LocalSnapshotTests.test_paper_updated_at_uses_snapshot_time) ... ok
+test_wiki_body_is_base64_inlined (tests.test_sync_local_router.LocalSnapshotTests.test_wiki_body_is_base64_inlined) ... ok
+test_wiki_files_have_expected_kinds_and_hashes (tests.test_sync_local_router.LocalSnapshotTests.test_wiki_files_have_expected_kinds_and_hashes) ... ok
+test_wiki_files_link_back_to_row_uuid_via_legacy_id (tests.test_sync_local_router.LocalSnapshotTests.test_wiki_files_link_back_to_row_uuid_via_legacy_id) ... ok
+test_wiki_id_is_stable_across_runs (tests.test_sync_local_router.LocalSnapshotTests.test_wiki_id_is_stable_across_runs) ... ok
+
+----------------------------------------------------------------------
+Ran 58 tests in 6.979s
+
+OK
+Offline backend checks: PASS
++ <worktree>/backend/.venv/bin/python scripts/check_frontend.py
+{"check": "unit", "exit_code": 0}
+{"check": "types", "exit_code": 0}
+{"check": "build", "exit_code": 0}
+{"check": "lint", "exit_code": 0, "errors": 0, "warnings": 0}
+{"check": "lifecycle-types", "exit_code": 0}
+{"check": "lifecycle-build", "exit_code": 0}
+{"check": "lifecycle-ui", "exit_code": 0, "tests": [{"name": "Ask session drafts, error clearing and synthesis title ownership", "status": "passed", "ms": 394}, {"name": "Ask reopen ignores stale index and cross-session export responses", "status": "passed", "ms": 493}, {"name": "Review keeps active note draft, merges refreshed notes and resets on paper switch", "status": "passed", "ms": 845}, {"name": "Review paper switch ignores an older chat response", "status": "passed", "ms": 399}, {"name": "Rescue recall survives close/reopen and cannot be submitted twice", "status": "passed", "ms": 364}], "violations": []}
+Frontend logs: <worktree>/.cache/frontend-check-xqqgfzl_/frontend

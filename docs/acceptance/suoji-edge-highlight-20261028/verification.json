@@ -1,0 +1,163 @@
+{
+  "tested_commit": "0a81b466dd29cf52619f71160d513dfc3a8f72c3",
+  "base_commit": "1291cc472a42f1399db28526031cbc89ccc14117",
+  "execution_note": "Checks ran on the pre-commit working tree; all copied frontend source and tests match tested_commit by SHA-256. The original source_head was the base commit and is not claimed as the tested feature commit. Subsequent delivery changes only add acceptance evidence and update DEVELOPMENT_LOG.md.",
+  "environment": {
+    "os": "macOS 26.5.1",
+    "python": "3.12.13",
+    "node": "24.14.1",
+    "vite": "8.0.10",
+    "typescript": "6.0.3",
+    "chrome": "156.0.8078.48",
+    "python_environment": "<worktree>/backend/.venv",
+    "node_runtime": "<worktree>/.cache/runtime/node-v24.14.1-darwin-arm64/bin/node",
+    "preflight_ports": {
+      "api": 8129,
+      "web": 5209
+    },
+    "preflight_services_started": false
+  },
+  "unified": {
+    "command": "./scripts/check.sh",
+    "exit_code": 0,
+    "startup_fixtures": 29,
+    "isolated_backend_tests": 58,
+    "frontend_unit_tests": 22,
+    "frontend": [
+      {
+        "check": "unit",
+        "exit_code": 0
+      },
+      {
+        "check": "types",
+        "exit_code": 0
+      },
+      {
+        "check": "build",
+        "exit_code": 0
+      },
+      {
+        "check": "lint",
+        "exit_code": 0,
+        "errors": 0,
+        "warnings": 0
+      },
+      {
+        "check": "lifecycle-types",
+        "exit_code": 0
+      },
+      {
+        "check": "lifecycle-build",
+        "exit_code": 0
+      },
+      {
+        "check": "lifecycle-ui",
+        "exit_code": 0,
+        "tests": [
+          {
+            "name": "Ask session drafts, error clearing and synthesis title ownership",
+            "status": "passed",
+            "ms": 394
+          },
+          {
+            "name": "Ask reopen ignores stale index and cross-session export responses",
+            "status": "passed",
+            "ms": 493
+          },
+          {
+            "name": "Review keeps active note draft, merges refreshed notes and resets on paper switch",
+            "status": "passed",
+            "ms": 845
+          },
+          {
+            "name": "Review paper switch ignores an older chat response",
+            "status": "passed",
+            "ms": 399
+          },
+          {
+            "name": "Rescue recall survives close/reopen and cannot be submitted twice",
+            "status": "passed",
+            "ms": 364
+          }
+        ],
+        "violations": []
+      }
+    ]
+  },
+  "highlight": {
+    "command": "scripts/check_domain_highlight.py",
+    "exit_code": 0,
+    "tests": 10,
+    "cleanup_confirmed": true
+  },
+  "baseline": {
+    "command": "scripts/check_domain_highlight.py --baseline 1291cc472a42f1399db28526031cbc89ccc14117",
+    "exit_code": 0
+  },
+  "layout": {
+    "command": "scripts/check_domain_layout.py",
+    "exit_code": 0,
+    "tests": 8,
+    "cleanup_confirmed": true
+  },
+  "cloud": {
+    "command": "scripts/check_cloud_freeze.py",
+    "exit_code": 0,
+    "checks": [
+      {
+        "check": "types",
+        "exit_code": 0,
+        "recovery_cleanup": false,
+        "remaining_owned_process_count": 0,
+        "unverified_process_count": 0
+      },
+      {
+        "check": "build",
+        "exit_code": 0,
+        "recovery_cleanup": false,
+        "remaining_owned_process_count": 0,
+        "unverified_process_count": 0
+      },
+      {
+        "check": "browser",
+        "exit_code": 0,
+        "recovery_cleanup": false,
+        "remaining_owned_process_count": 0,
+        "unverified_process_count": 0
+      }
+    ],
+    "test_count": 8,
+    "network_violation_count": 0,
+    "cleanup_confirmed": true
+  },
+  "snapshot_to_commit_verification": {
+    "unified": {
+      "matching_frontend_source_and_test_files": 117,
+      "mismatches": []
+    },
+    "layout": {
+      "matching_frontend_source_and_test_files": 117,
+      "mismatches": []
+    },
+    "highlight": {
+      "matching_frontend_source_and_test_files": 117,
+      "mismatches": []
+    },
+    "cloud": {
+      "matching_runtime_policy_and_harness_files": 87,
+      "mismatches": []
+    }
+  },
+  "review": {
+    "independent_code_review": "passed after click-jitter and Space-pan fixes",
+    "visual_review": "before/after, pulse/static, reduced-motion, dense 39% screenshots inspected",
+    "privacy": "Only synthetic fixtures/screenshots/results and source hashes published. Private reference image, live research data, configs, credentials, databases, environments, caches and unrelated artifacts excluded."
+  },
+  "limitations": [
+    "No live research data or existing services accessed",
+    "No real provider/model calls, real migrations, unrestricted E2E or PostgreSQL RLS",
+    "No real-start smoke: no native startup code changed",
+    "Chrome-only local acceptance; CI status is checked on the PR separately",
+    "No merge, deployment or subscription changes"
+  ]
+}

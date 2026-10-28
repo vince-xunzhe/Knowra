@@ -1,0 +1,307 @@
+{
+  "mode": "after",
+  "tests": [
+    {
+      "name": "Existing login and expired pending sync survive bootstrap, tab events and timer advancement",
+      "status": "passed",
+      "ms": 206
+    },
+    {
+      "name": "Every direct cloud/auth/sync/upload/remote worker entry rejects before network or local mutation",
+      "status": "passed",
+      "ms": 250
+    },
+    {
+      "name": "Fresh profiles and malformed pending state stay unchanged without creating device or login state",
+      "status": "passed",
+      "ms": 471
+    },
+    {
+      "name": "Page switches and repeated public recommendation clicks remain paused without retries",
+      "status": "passed",
+      "ms": 660
+    },
+    {
+      "name": "Local recommendations keep focus, feedback, worker start and refresh on local APIs",
+      "status": "passed",
+      "ms": 797
+    },
+    {
+      "name": "Local model configuration and provider-test clients remain available with synthetic responses",
+      "status": "passed",
+      "ms": 315
+    },
+    {
+      "name": "User-triggered pipeline completes locally once despite same-tick double click",
+      "status": "passed",
+      "ms": 2165
+    },
+    {
+      "name": "Leaving a running pipeline and restoring it never resumes cloud synchronization",
+      "status": "passed",
+      "ms": 2422
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/batches",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/events",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/batches",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/events",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/batches",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/events",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/batches",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/events",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/focus",
+      "method": "PUT",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/events",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker/start-local",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal/refresh",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/personal",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/recommendations/worker",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/config",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/config",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/config/model_gateway/providers/synthetic-provider/test",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/jobs/latest",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/pipeline/run",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/jobs/synthetic-pipeline",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/jobs/latest",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/pipeline/run",
+      "method": "POST",
+      "mode": "after"
+    },
+    {
+      "path": "/api/jobs/synthetic-pipeline",
+      "method": "GET",
+      "mode": "after"
+    },
+    {
+      "path": "/api/jobs/latest",
+      "method": "GET",
+      "mode": "after"
+    }
+  ],
+  "externalAttempts": [],
+  "violations": [],
+  "storageChecks": [
+    {
+      "label": "old-login-expired-pending",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "2481aa642fcb8e999f8db5c81d8c3523552cf85ce64da571bce5855b80f3eba0"
+    },
+    {
+      "label": "all-direct-entry-points",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "e0e7413c1dc2a69d1c26960be0af786aa0a81042abafa707674138722f11d24b"
+    },
+    {
+      "label": "fresh-profile",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "033c31621f215d582aacdf5509f585d7ad7dbf888928592c842533b5b8c8e593"
+    },
+    {
+      "label": "malformed-pending",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "addf9481192ca1b9cad93d85a139f7fd054b8c3836cff12efb2210346120fb78"
+    },
+    {
+      "label": "navigation-and-repeated-clicks",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "001adc9c70fb4c75ec7165de2d21c798cc028b79973b2e202038d42f8cff0d99"
+    },
+    {
+      "label": "local-recommendations",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "9f5106b3f39696ee84ca0dd90c488166f0c02f593b2855fdf41f37e74a081503"
+    },
+    {
+      "label": "local-model-clients",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "abb952e2d067b8f3e1b04600003fc585f120c97569f9b8b9deb5b6b289256373"
+    },
+    {
+      "label": "local-pipeline-complete",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "6a55b3b25b6a5e310554083e63728da576518b72f32533af1bcffa40567bfb8a"
+    },
+    {
+      "label": "pipeline-page-switch",
+      "key_count": 9,
+      "unchanged": true,
+      "mutation_count": 0,
+      "sha256": "0cd712598a28cea1b94c7e09c237e3079dd63b1ca1edee44276bceaca576a685"
+    }
+  ],
+  "screenshots": [
+    {
+      "filename": "after-cloud-paused.png",
+      "sha256": "cf6fa329dee5e8bfe7a412446f5be0fb66b211072376c940c4cedc391af21c09",
+      "width": 1680,
+      "height": 1050
+    },
+    {
+      "filename": "after-local-recommendations.png",
+      "sha256": "7ac288a73732871031b8032cf6a6f675ff56feb57077348ceacf6885ac6da886",
+      "width": 1680,
+      "height": 1050
+    },
+    {
+      "filename": "after-local-pipeline.png",
+      "sha256": "2f9d8ef56c9962913d7640a143914241e2a4f51903007cf8f2b5460dc4c351e9",
+      "width": 1680,
+      "height": 1050
+    }
+  ],
+  "cleanupConfirmed": true,
+  "fixture_port": 49978,
+  "boundary": "Static loopback fixture; every business API mocked; all external requests and WebSockets blocked; no backend, database, task worker or model process"
+}
