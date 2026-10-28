@@ -4,7 +4,7 @@
 
 | 日期／分支 | 问题与变更 | 验证摘要与未验证项 | PR | 状态 |
 | --- | --- | --- | --- | --- |
-| 2026-10-28 · `codex/suoji-layout-20261028` | 索骥增加本地整理预览／对照／应用，确定性分层与避障连线；保留分组、锁定、备注及全部关系。 | 统一检查、17 项布局／几何单测、8 组隔离浏览器流程及独立源码／像素审查通过；合成图重叠 4→0、连线穿卡 48→0。[截图与 DOD](docs/acceptance/suoji-layout-20261028/README.md)。 | 尚未创建 | 验收通过；受测 `3937e87`；基于 `1b61ecf`；待创建 PR |
+| 2026-10-28 · `codex/suoji-layout-20261028` | 索骥增加本地整理预览／对照／应用，确定性分层与避障连线；保留分组、锁定、备注及全部关系。 | 统一检查、17 项布局／几何单测、8 组隔离浏览器流程及独立源码／像素审查通过；合成图重叠 4→0、连线穿卡 48→0。[截图与 DOD](docs/acceptance/suoji-layout-20261028/README.md)。 | [#34](https://github.com/vince-xunzhe/Knowra/pull/34) | 待用户合并；受测 `3937e87`；基于 `1b61ecf`；核验 2026-10-28 |
 | 2026-10-27 · `codex/suoji-framework-context-20261027` | 索骥 Agent 代连可选识途已保存框架作为固定分析上下文，论文证据与预览应用保持独立；保留手工与锁定连线。 | 统一验收、12 项专项后端、3 项请求契约、15 组真实路由／浏览器流程及独立审查通过；[截图与 DOD](docs/acceptance/suoji-framework-context-20261027/README.md)。未验证真实 LLM 质量、日常数据或跨浏览器。 | [#32](https://github.com/vince-xunzhe/Knowra/pull/32) | 已合并 main：`1b61ecf`（2026-10-27）；核验 2026-10-28 |
 | 2026-10-27 · `codex/fix-graph-lock-size-20261027` | 缩小两模块连线锁标记，保留 16px 点击区及原交互；补项目非 Draft PR／DOD 证据交付约定。 | 统一验收、20 组隔离浏览器检查及独立审查通过；[验收截图与 DOD](docs/acceptance/graph-lock-size-20261027/README.md)。未验证日常数据或跨浏览器。 | [#31](https://github.com/vince-xunzhe/Knowra/pull/31) | 已合并 main：`8034618`（2026-10-27）；核验 2026-10-27 |
 | 2026-10-26 · `codex/suoji-import-graph-export-20261026` | 索骥按本地论文 ID 标识当前画布已导入项并防重复；索骥／识途完整图与研报流程图支持高清 PNG、300 DPI 元数据及像素上限。 | 统一验收、8 项专项单测、11 项合成 SQLite＋真实 API／浏览器流程及 PNG 解码／像素检查通过；独立审查问题已修复。未验证日常数据、外部服务或跨浏览器。 | [#30](https://github.com/vince-xunzhe/Knowra/pull/30) | 已合并 main：`8e34334`（2026-10-26）；核验 2026-10-27 |
