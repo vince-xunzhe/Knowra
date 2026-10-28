@@ -597,6 +597,33 @@
 .domain-edges .selected-edge {
   color: var(--color-indigo-300, #a5b4fc);
 }
+.domain-page[data-domain-mode="domain"] .is-paper-connected {
+  color: var(--color-indigo-300, #a5b4fc);
+}
+.domain-edge-focus { pointer-events: none; }
+.domain-edge-focus-line,
+.domain-edge-focus-halo {
+  fill: none;
+  stroke: var(--color-indigo-300, #a5b4fc);
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.domain-edge-focus-line { stroke-width: 2.8; }
+.domain-edge-focus-halo { stroke-width: 8; opacity: .12; }
+.domain-edge-focus-arrow { fill: var(--color-indigo-300, #a5b4fc); }
+.domain-edge-focus-pulse { animation: domain-edge-focus-pulse 1.4s ease-in-out 2; }
+@keyframes domain-edge-focus-pulse {
+  0%, 100% { stroke-width: 2.8; opacity: 1; }
+  50% { stroke-width: 4; opacity: .65; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .domain-edge-focus-pulse { animation: none; }
+}
+.domain-page[data-domain-mode="domain"] .domain-paper:focus-visible {
+  outline: 2px solid var(--color-indigo-400, #818cf8);
+  outline-offset: 4px;
+}
 /* Keep the hit area fixed while the visible badge shrinks with the canvas. */
 .domain-edge-lock-container {
   overflow: visible;

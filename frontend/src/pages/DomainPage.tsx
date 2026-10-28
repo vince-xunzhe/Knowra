@@ -93,6 +93,8 @@ function CanvasItem({
   onStart,
   onSize,
   roadmapRole,
+  onActivate,
+  label,
 }: {
   node: CanvasNode
   selected: boolean
@@ -101,6 +103,8 @@ function CanvasItem({
   onStart: (e: ReactPointerEvent, node: CanvasNode, resize?: boolean) => void
   onSize: (id: string, width: number, height: number) => void
   roadmapRole?: CanvasNode['roadmapRole']
+  onActivate?: (node: CanvasNode, additive: boolean) => void
+  label?: string
 }) {
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -117,6 +121,10 @@ function CanvasItem({
       data-kind={node.kind}
       data-selected={selected}
       data-roadmap-role={roadmapRole || undefined}
+      tabIndex={onActivate ? 0 : undefined}
+      role={onActivate ? 'group' : undefined}
+      aria-label={label}
+      aria-keyshortcuts={onActivate ? 'Enter' : undefined}
       className={`domain-node domain-${node.kind} ${selected ? 'is-selected' : ''} ${node.locked ? 'is-locked' : ''}`}
       style={{
         left: node.x,
@@ -127,6 +135,14 @@ function CanvasItem({
           : node.kind === 'text' ? { minHeight: node.height } : {}),
       }}
       onPointerDown={(e) => onStart(e, node)}
+      onKeyDown={(event) => {
+        // Space remains the canvas pan shortcut, including after a mouse click
+        // has focused this card. Only Enter activates the neighborhood.
+        if (!onActivate || event.target !== event.currentTarget || event.key !== 'Enter') return
+        event.preventDefault()
+        event.stopPropagation()
+        if (!event.repeat) onActivate(node, event.shiftKey)
+      }}
     >
       {children}
       {node.locked && <LockKeyhole className="domain-lock-indicator" size={12} aria-label={tr('已锁定')} />}
@@ -254,6 +270,24 @@ export default function DomainPage({
   const [taxonomyError, setTaxonomyError] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null)
+  // Inspecting a neighborhood is transient UI state, independent of the edit
+  // selection and the workspace/save queue. Reset before rendering a new scope.
+  const highlightScope = active && !isRoadmap ? liveBoard?.id ?? null : null
+  const [paperFocus, setPaperFocus] = useState<{ scope: string | null; nodeId: string | null; version: number }>({
+    scope: highlightScope, nodeId: null, version: 0,
+  })
+  if (paperFocus.scope !== highlightScope) {
+    setPaperFocus({ scope: highlightScope, nodeId: null, version: 0 })
+  }
+  const focusCandidate = useRef<{
+    scope: string; nodeId: string | null; paper: boolean; start: Point; pointerId: number
+  } | null>(null)
+  const highlightedPaper = paperFocus.scope === highlightScope && highlightScope &&
+    board?.nodes.some(node => node.id === paperFocus.nodeId && node.kind === 'paper') ? paperFocus.nodeId : null
+  const highlightPaper = (nodeId: string | null) => {
+    if (!highlightScope) return
+    setPaperFocus(current => ({ scope: highlightScope, nodeId, version: current.version + 1 }))
+  }
   const [tool, setTool] = useState<'select' | 'hand'>('select')
   const [roadmapView, setRoadmapView] = useState<'canvas' | 'report'>('canvas')
   const showReport = isRoadmap && roadmapView === 'report'
@@ -481,6 +515,8 @@ export default function DomainPage({
         setLinkSource(null)
         setSelected(new Set())
         setSelectedEdge(null)
+        highlightPaper(null)
+        focusCandidate.current = null
       }
       if (!readOnly && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault()
@@ -497,6 +533,7 @@ export default function DomainPage({
     }
     const blur = () => {
       space.current = false
+      focusCandidate.current = null
     }
     window.addEventListener('keydown', keydown)
     window.addEventListener('keyup', keyup)
@@ -544,7 +581,9 @@ export default function DomainPage({
     if (!board || (e.button !== 0 && e.button !== 1)) return
     const start = localPoint(e)
     const pan = tool === 'hand' || space.current || e.button === 1
+    focusCandidate.current = null
     if (!pan) {
+      highlightPaper(null)
       setPopover(null)
       setLinkSource(null)
       setSelectedEdge(null)
@@ -555,6 +594,7 @@ export default function DomainPage({
     canvas.current?.setPointerCapture(e.pointerId)
   }
   const beginNode = (e: ReactPointerEvent, node: CanvasNode, resize = false) => {
+    focusCandidate.current = null
     if ((e.target as HTMLElement).closest('button,a,input,textarea') && !resize) {
       e.stopPropagation()
       return
@@ -583,6 +623,12 @@ export default function DomainPage({
       else next.add(node.id)
     }
     setSelected(next)
+    if (!isRoadmap && !resize) {
+      focusCandidate.current = {
+        scope: board.id, nodeId: node.kind === 'paper' && next.has(node.id) ? node.id : null,
+        paper: node.kind === 'paper', start: localPoint(e), pointerId: e.pointerId,
+      }
+    }
     if (readOnly || isLocked(node)) return
     const ids = new Set(board.nodes.filter((n) => next.has(n.id) && !isLocked(n)).map((n) => n.id))
     for (const n of board.nodes) if (n.groupId && ids.has(n.groupId) && !isLocked(n)) ids.add(n.id)
@@ -591,6 +637,14 @@ export default function DomainPage({
     canvas.current?.setPointerCapture(e.pointerId)
   }
   const movePointer = (e: ReactPointerEvent) => {
+    const candidate = focusCandidate.current
+    if (candidate?.pointerId === e.pointerId) {
+      const point = localPoint(e)
+      if (Math.hypot(point.x - candidate.start.x, point.y - candidate.start.y) > 4) focusCandidate.current = null
+      // A small hand tremor is still a click: do not move or save the board
+      // while a paper click is pending. Once dragging, retain the original start.
+      else if (candidate.paper && gesture.current?.mode === 'move') return
+    }
     const g = gesture.current
     if (!g || (readOnly && (g.mode === 'move' || g.mode === 'resize'))) return
     const end = localPoint(e),
@@ -630,6 +684,14 @@ export default function DomainPage({
     )
   }
   const endPointer = (e: ReactPointerEvent) => {
+    const candidate = focusCandidate.current
+    focusCandidate.current = null
+    if (candidate && candidate.scope === highlightScope && candidate.pointerId === e.pointerId) {
+      const end = localPoint(e)
+      if (Math.hypot(end.x - candidate.start.x, end.y - candidate.start.y) <= 4) {
+        highlightPaper(candidate.nodeId)
+      }
+    }
     const g = gesture.current
     if (!g) return
     if (g.mode === 'select') {
@@ -651,6 +713,18 @@ export default function DomainPage({
     gesture.current = null
     setRubber(null)
     if (canvas.current?.hasPointerCapture(e.pointerId)) canvas.current.releasePointerCapture(e.pointerId)
+  }
+  const activatePaperWithKey = (node: CanvasNode, additive: boolean) => {
+    if (!board) return
+    if (!readOnly && linkSource) { connect(node.id); return }
+    const next = additive ? new Set(selected) : new Set<string>()
+    if (additive && next.has(node.id)) next.delete(node.id)
+    else next.add(node.id)
+    expandInspector()
+    setSelected(next)
+    setSelectedEdge(null)
+    setPopover(null)
+    highlightPaper(next.has(node.id) ? node.id : null)
   }
   const canConnect = (target: string) => {
     if (!isRoadmap || !linkSource || linkSource === target) return true
@@ -1182,7 +1256,10 @@ export default function DomainPage({
           onPointerDown={beginCanvas}
           onPointerMove={movePointer}
           onPointerUp={endPointer}
-          onPointerCancel={endPointer}
+          onPointerCancel={(event) => {
+            focusCandidate.current = null
+            endPointer(event)
+          }}
           onContextMenu={(e) => e.preventDefault()}
           style={{
             backgroundPosition: `${board?.viewport.x ?? 0}px ${board?.viewport.y ?? 0}px`,
@@ -1204,6 +1281,10 @@ export default function DomainPage({
                   >
                     <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
                   </marker>
+                  {!isRoadmap && <marker id="domain-focus-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                    markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M 0 0 L 10 5 L 0 10 z" className="domain-edge-focus-arrow" />
+                  </marker>}
                 </defs>
                 <g
                   transform={`translate(${board.viewport.x} ${board.viewport.y}) scale(${board.viewport.zoom})`}
@@ -1219,11 +1300,13 @@ export default function DomainPage({
                     const { sx, sy, tx, ty, d, vertical } = geometry
                     const labelX = domainGeometry?.labelX ?? (sx + tx) / 2
                     const labelY = domainGeometry?.labelY ?? (sy + ty) / 2
+                    const highlighted = !!highlightedPaper && (e.source === highlightedPaper || e.target === highlightedPaper)
                     return (
                       <g
                         key={e.id}
-                        className={`${selectedEdge === e.id ? 'selected-edge' : ''}${isRoadmap && e.roadmapStructure ? ' roadmap-structure-edge' : ''}`}
+                        className={`${selectedEdge === e.id ? 'selected-edge' : ''}${highlighted ? ' is-paper-connected' : ''}${isRoadmap && e.roadmapStructure ? ' roadmap-structure-edge' : ''}`}
                         data-edge-id={e.id}
+                        data-highlighted={highlighted || undefined}
                         data-roadmap-structure={isRoadmap && !!e.roadmapStructure}
                         data-orientation={vertical ? 'vertical' : 'horizontal'}
                         onPointerDown={(event) => {
@@ -1236,6 +1319,10 @@ export default function DomainPage({
                       >
                         <path className="domain-edge-hit" d={d} />
                         <path className="domain-edge-line" d={d} markerEnd={`url(#${mode}-arrow)`} />
+                        {highlighted && <g key={paperFocus.version} className="domain-edge-focus" aria-hidden="true">
+                          <path className="domain-edge-focus-halo" d={d} />
+                          <path className="domain-edge-focus-line domain-edge-focus-pulse" d={d} markerEnd="url(#domain-focus-arrow)" />
+                        </g>}
                         {e.label && (
                           <text x={labelX} y={labelY - 14 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
@@ -1297,6 +1384,10 @@ export default function DomainPage({
                       onStart={beginNode}
                       onSize={onSize}
                       roadmapRole={isRoadmap ? n.roadmapRole : undefined}
+                      onActivate={!isRoadmap && n.kind === 'paper' ? activatePaperWithKey : undefined}
+                      label={!isRoadmap && n.kind === 'paper' ? tr('选择论文并高亮关联连线：{0}', {
+                        0: paperMap.get(n.paperId!)?.title ?? tr('论文不可用'),
+                      }) : undefined}
                     >
                       {n.kind === 'group' ? (
                         <div className="domain-group-heading">
