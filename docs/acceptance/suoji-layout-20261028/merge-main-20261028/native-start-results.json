@@ -1,0 +1,76 @@
+{
+  "tested_merge_commit": "c9375f70fbc3cd7e5c2ca120724bc8b9ae7454c6",
+  "checks": {
+    "synthetic_legacy_column_missing_before_start": true,
+    "preflight": 0,
+    "existing_db_unchanged_before_launch": true,
+    "confirmation_input_provided": false,
+    "allow_existing_data_environment_present": false,
+    "listener_ownership_before_http": true,
+    "api_health": {
+      "message": "Knowra API is running"
+    },
+    "vite_http": true,
+    "existing_paper_read_by_api": true,
+    "confirmation_prompt_seen": false,
+    "listener_ownership_before_browser": true,
+    "browser_exit": 0,
+    "synthetic_legacy_column_restored": true,
+    "synthetic_existing_row_preserved": true,
+    "synthetic_queue": {
+      "jobs": [
+        [
+          "scan",
+          "queued",
+          0
+        ]
+      ],
+      "recommendation_batches": 1,
+      "protected_recommendation_lease_unchanged": true,
+      "recommendation_usage": 0
+    },
+    "task_worker_started": false,
+    "recommendation_worker_started": true
+  },
+  "boundaries": {
+    "real_services": [
+      "Uvicorn/FastAPI",
+      "Vite",
+      "idle local recommendation worker"
+    ],
+    "task_worker": "supported external mode; no task worker or queued job execution",
+    "recommendation_worker": "real worker; synthetic protected lease prevents job claims; no recommendation execution",
+    "dependencies": "new physical fixture venv reads this worktree site-packages; physical node_modules copy",
+    "data": "new synthetic SQLite files only; original main/worktree data not copied or opened"
+  },
+  "cleanup": {
+    "browser_runner_exited": true,
+    "launcher_returncode": 130,
+    "launcher_remaining_pids": [],
+    "open_ports": [],
+    "api_shutdown_completed": true,
+    "remaining_pids": [],
+    "final_open_ports": [],
+    "final_remaining_pids": []
+  },
+  "browser": {
+    "steps": [
+      "Real React application rendered",
+      "Library navigation loaded real API response",
+      "Existing synthetic paper rendered in the library",
+      "Dashboard rendered from real SQLite-backed API",
+      "Dashboard refresh completed against real API"
+    ],
+    "pageErrors": [],
+    "failedResponses": [],
+    "blockedRequests": [],
+    "allowedWrites": [
+      {
+        "url": "http://127.0.0.1:54744/api/scan",
+        "method": "POST"
+      }
+    ]
+  },
+  "violations": [],
+  "exit_code": 0
+}

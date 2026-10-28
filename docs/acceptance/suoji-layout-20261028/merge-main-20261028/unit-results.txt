@@ -1,0 +1,30 @@
+✔ long jumps route around intervening paper cards and text notes without changing relationships (1.387625ms)
+✔ same-column, reversed, self and parallel relations retain distinct finite routes (0.700542ms)
+✔ rendered long-title heights and widths determine obstacle bounds and ports (0.176666ms)
+✔ dense cyclic graph is deterministic across edge and node input order; group backgrounds do not block edges (5.177125ms)
+✔ existing overlapping locked endpoint cards keep the relation visible and explicitly flag obstruction (0.248375ms)
+✔ obstacle maze falls back to a multi-turn route when a single outer lane cannot escape (0.180875ms)
+✔ large drawings explicitly simplify routing without omitting or mutating any relationship (15.589209ms)
+✔ many parallel edges also select the explicit bounded route mode even on a small board (2.005417ms)
+✔ dense fanout: removes measured-card overlaps without changing content or mutating input (2.811541ms)
+✔ cycles share a layer; descendants retain forward layers; duplicate and self edges survive (0.145ms)
+✔ separate components and isolated nodes pack without overlap; old positions and input order do not affect layout (5.574375ms)
+✔ locked cards, all groups/children and notes are fixed obstacles, including children outside their container (0.228542ms)
+✔ fixed overlaps are reported while intentional group containment is excluded, with an exact no-op (0.077125ms)
+✔ long measured titles use actual dimensions; invalid measurements fall back safely (0.127375ms)
+✔ crossing reduction orders opposite targets consistently with their sources (0.3375ms)
+✔ bounded synthetic graph permutations retain idempotence, locks and every relation (10.544958ms)
+✔ coordinate overflow fails atomically instead of emitting an unsavable canvas (0.307625ms)
+✔ a timed-out status read reconnects without failing the task (0.62175ms)
+✔ persistent connection errors report unknown task status, not task failure (0.233625ms)
+✔ authorization and programming errors are not retried (0.085333ms)
+✔ multiple pollers share a pending read, but the next tick fetches fresh data (0.096459ms)
+✔ failed reads release the single-flight slot (0.092959ms)
+ℹ tests 22
+ℹ suites 0
+ℹ pass 22
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 91.224042
