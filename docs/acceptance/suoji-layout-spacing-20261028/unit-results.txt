@@ -1,0 +1,45 @@
+✔ long jumps route around intervening paper cards and text notes without changing relationships (1.748583ms)
+✔ same-column, reversed, self and parallel relations retain distinct finite routes (0.780333ms)
+✔ rendered long-title heights and widths determine obstacle bounds and ports (0.189125ms)
+✔ dense cyclic graph is deterministic across edge and node input order; group backgrounds do not block edges (17.491167ms)
+✔ existing overlapping locked endpoint cards keep the relation visible and explicitly flag obstruction (0.1355ms)
+✔ obstacle maze falls back to a multi-turn route when a single outer lane cannot escape (0.131125ms)
+✔ endpoint stubs stop before a nearby fixed card instead of falsely blocking a route (0.479625ms)
+✔ stub clearance holds left, right, above and below for 24–48px gaps and self relations (4.429416ms)
+✔ large drawings explicitly simplify routing without omitting or mutating any relationship (14.566167ms)
+✔ many parallel edges also select the explicit bounded route mode even on a small board (1.259667ms)
+✔ congestion-aware channels reduce shared and near-parallel runs without excessive detours (31.428666ms)
+ℹ {"fixture":"fixed 23 papers / 92 relations","baselineCommit":"a392c6f","baseline":{"sharedLength":27366,"nearParallelLength":109095,"crossings":973,"totalLength":85306,"maxLength":2931.7333333333336,"bends":214,"bounds":{"left":140,"top":28.8,"right":2640,"bottom":911.2}},"measured":{"sharedLength":3577,"nearParallelLength":17359,"crossings":806,"totalLength":86936,"maxLength":2931.7333333333336,"bends":220,"bounds":{"left":140,"top":-44,"right":2640,"bottom":964}}}
+✔ staggered 74-edge browser fixture changes lanes rather than sharing a seven-pixel corridor (36.141792ms)
+ℹ {"fixture":"74-edge synthetic browser geometry","core":{"crossings":277,"crossingEdgePairs":262,"sharedEndpointCrossings":107,"totalCrossings":384,"collinearOverlapLength":8648.91,"collinearEdgePairs":29,"nearParallel12Length":15934.92,"nearParallel12EdgePairs":61,"nearParallel20Length":30560.81,"nearParallel20EdgePairs":119},"full":{"crossings":334,"crossingEdgePairs":310,"sharedEndpointCrossings":141,"totalCrossings":475,"collinearOverlapLength":8660.91,"collinearEdgePairs":29,"nearParallel12Length":17631.92,"nearParallel12EdgePairs":107,"nearParallel20Length":33866.81,"nearParallel20EdgePairs":193},"paths":{"totalLength":69101.48,"longestLength":2724.71,"totalBends":208,"maxBends":8},"bounds":{"x":60,"y":930,"width":2372,"height":1579,"area":3745388},"hits":[]}
+✔ dense and schema-sized routing stay bounded and retain every edge (202.915917ms)
+ℹ {"node":"24.14.1","timings":[{"nodes":23,"edges":92,"routes":92,"elapsedMs":12.8},{"nodes":100,"edges":400,"routes":400,"elapsedMs":33.9},{"nodes":200,"edges":800,"routes":800,"elapsedMs":77.7},{"nodes":300,"edges":1200,"routes":1200,"elapsedMs":3.3},{"nodes":10000,"edges":20000,"routes":20000,"elapsedMs":71.3}]}
+✔ Actual orthogonal crossings are separated from pairs that share an endpoint (1.462167ms)
+✔ Collinear length is exact, endpoint stubs reported separately, parallel proximity has explicit thresholds (0.189041ms)
+✔ One shared union viewport includes both complete graphs without independent fit or hidden clipping (0.364334ms)
+✔ dense fanout: removes measured-card overlaps without changing content or mutating input (3.127708ms)
+✔ cycles share a layer; descendants retain forward layers; duplicate and self edges survive (0.182458ms)
+✔ separate components and isolated nodes pack without overlap; old positions and input order do not affect layout (5.74425ms)
+✔ locked cards, all groups/children and notes are fixed obstacles, including children outside their container (0.256292ms)
+✔ fixed overlaps are reported while intentional group containment is excluded, with an exact no-op (0.0835ms)
+✔ long measured titles use actual dimensions; invalid measurements fall back safely (0.212959ms)
+✔ crossing reduction orders opposite targets consistently with their sources (0.125834ms)
+✔ bounded synthetic graph permutations retain idempotence, locks and every relation (12.606875ms)
+✔ coordinate overflow fails atomically instead of emitting an unsavable canvas (0.286958ms)
+✔ density enlarges busy layer and row corridors locally with a bounded total footprint (0.750458ms)
+ℹ 19 cards: sparse 1630×1320; dense 1770×1560; area ratio 1.283
+✔ long skip traffic affects every crossed boundary, parallel counts saturate and label length never expands layout (0.352083ms)
+✔ dense cycles reserve bounded row room while every locked/grouped/note rectangle stays fixed (0.439125ms)
+✔ a timed-out status read reconnects without failing the task (0.6315ms)
+✔ persistent connection errors report unknown task status, not task failure (1.017375ms)
+✔ authorization and programming errors are not retried (0.320041ms)
+✔ multiple pollers share a pending read, but the next tick fetches fresh data (0.233666ms)
+✔ failed reads release the single-flight slot (0.234083ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 386.972708
