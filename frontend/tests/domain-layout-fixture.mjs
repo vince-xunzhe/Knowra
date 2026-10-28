@@ -43,3 +43,19 @@ export function createLayoutFixture() {
       nodes: [{ ...nodes[0], id: 'other-node', x: 120, y: 120 }], edges: [], viewport: { x: 0, y: 0, zoom: 1 } },
   ] }, papers }
 }
+
+/** Crowded outer channels: long skips, reverse/cyclic and parallel relations. */
+export function createSpacingFixture() {
+  const fixture = createLayoutFixture()
+  const board = fixture.state.boards.find(item => item.id === 'dense')
+  const pairs = [[0, 14], [0, 15], [0, 16], [0, 17], [1, 14], [1, 15], [1, 16], [1, 17],
+    [2, 14], [2, 15], [2, 16], [2, 17], [3, 14], [3, 15], [3, 16], [3, 17],
+    [4, 16], [4, 17], [5, 16], [5, 17], [6, 17], [7, 17], [8, 17], [9, 17],
+    [16, 13], [16, 13], [13, 16], [22, 0], [22, 4], [20, 17], [21, 12], [17, 22]]
+  board.edges.push(...pairs.map(([source, target], index) => ({
+    id: `spacing-${index}`, source: `n${source}`, target: `n${target}`, locked: index === 25,
+    label: index % 6 === 0 ? `合成长跨层对照关系 ${index} · 保留限定条件与证据` : `合成关系 ${index}`,
+    analysis: null,
+  })))
+  return fixture
+}

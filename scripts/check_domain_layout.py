@@ -25,12 +25,58 @@ def git(*args: str) -> bytes:
     )
 
 
+def copy_frontend(workspace: Path, revision: str | None = None) -> tuple[Path, bytes | None]:
+    snapshot = workspace / "frontend"
+    snapshot.mkdir(parents=True)
+    files = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "frontend").decode().split("\0")
+    for relative in filter(None, files):
+        parts = Path(relative).parts[1:]
+        if any(part.startswith(".env") or part in {".npmrc", "node_modules", "dist", "test-results", "playwright-report"} for part in parts):
+            continue
+        source = ROOT / relative
+        if source.is_symlink():
+            raise SystemExit(f"Refusing source symlink: {relative}")
+        if source.is_file():
+            target = snapshot.joinpath(*parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+    policy_name = "cloud-capabilities.json"
+    policy_bytes = None
+    if revision:
+        shutil.rmtree(snapshot / "src")
+        baseline_files = git("ls-tree", "-rz", "--name-only", revision, "--", "frontend/src").decode().split("\0")
+        for relative in filter(None, baseline_files):
+            if any(part.startswith(".env") for part in Path(relative).parts):
+                raise SystemExit("Refusing env-like baseline source")
+            target = snapshot.joinpath(*Path(relative).parts[1:])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(git("show", f"{revision}:{relative}"))
+        policy_entry = git("ls-tree", "-z", revision, "--", policy_name)
+        if policy_entry:
+            if policy_entry.split(b"\t", 1)[0].split()[0] not in {b"100644", b"100755"}:
+                raise SystemExit("Refusing non-file baseline cloud capability policy")
+            policy_bytes = git("show", f"{revision}:{policy_name}")
+    else:
+        policy = ROOT / policy_name
+        if policy.is_symlink() or not policy.resolve().is_relative_to(ROOT):
+            raise SystemExit("Refusing linked/outside worktree cloud capability policy")
+        policy_bytes = policy.read_bytes()
+    if policy_bytes is not None:
+        (workspace / policy_name).write_bytes(policy_bytes)
+    (snapshot / "node_modules").symlink_to(ROOT / "frontend/node_modules", target_is_directory=True)
+    return snapshot, policy_bytes
+
+
 def main(suite: str = "layout") -> int:
     if suite not in {"layout", "highlight"}:
         raise ValueError("Unknown domain acceptance suite")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", help="Read-only Git revision for baseline frontend source and screenshot")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--baseline", help="Read-only Git revision for baseline frontend source and screenshot")
+    source.add_argument("--compare", help="Compare current and selected Git source after both arrange the identical synthetic graph")
     args = parser.parse_args()
+    if args.compare and suite != "layout":
+        parser.error("--compare is only available for the layout acceptance suite")
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, interrupt)
     for relative in (".cache", "frontend", "frontend/node_modules"):
@@ -55,49 +101,11 @@ def main(suite: str = "layout") -> int:
     workspace = Path(tempfile.mkdtemp(prefix=f"domain-{suite}-baseline-" if args.baseline else f"domain-{suite}-check-", dir=cache))
     # Preserve repository-relative imports such as src/lib/cloudPolicy.ts ->
     # ../../../cloud-capabilities.json, entirely inside this task's snapshot.
-    snapshot = workspace / "frontend"
-    snapshot.mkdir()
-    files = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "frontend").decode().split("\0")
-    for relative in filter(None, files):
-        parts = Path(relative).parts[1:]
-        if any(part.startswith(".env") or part in {".npmrc", "node_modules", "dist", "test-results", "playwright-report"} for part in parts):
-            continue
-        source = ROOT / relative
-        if source.is_symlink():
-            raise SystemExit(f"Refusing source symlink: {relative}")
-        if source.is_file():
-            target = snapshot.joinpath(*parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-    baseline_sha = None
+    baseline_sha = git("rev-parse", "--verify", args.baseline + "^{commit}").decode().strip() if args.baseline else None
+    comparison_sha = git("rev-parse", "--verify", args.compare + "^{commit}").decode().strip() if args.compare else None
+    snapshot, policy_bytes = copy_frontend(workspace, baseline_sha)
+    comparison_snapshot, comparison_policy = copy_frontend(workspace / "baseline", comparison_sha) if comparison_sha else (None, None)
     policy_name = "cloud-capabilities.json"
-    policy_bytes = None
-    if args.baseline:
-        baseline_sha = git("rev-parse", "--verify", args.baseline + "^{commit}").decode().strip()
-        # Only tracked frontend source is replaced. The latest synthetic harness stays.
-        shutil.rmtree(snapshot / "src")
-        baseline_files = git("ls-tree", "-rz", "--name-only", baseline_sha, "--", "frontend/src").decode().split("\0")
-        for relative in filter(None, baseline_files):
-            if any(part.startswith(".env") for part in Path(relative).parts):
-                raise SystemExit("Refusing env-like baseline source")
-            target = snapshot.joinpath(*Path(relative).parts[1:])
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(git("show", f"{baseline_sha}:{relative}"))
-        policy_entry = git("ls-tree", "-z", baseline_sha, "--", policy_name)
-        if policy_entry:
-            if policy_entry.split(b"\t", 1)[0].split()[0] not in {b"100644", b"100755"}:
-                raise SystemExit("Refusing non-file baseline cloud capability policy")
-            policy_bytes = git("show", f"{baseline_sha}:{policy_name}")
-        # Old baselines predate this policy and do not import it. Never substitute
-        # the current policy for an absent/different baseline version.
-    else:
-        policy = ROOT / policy_name
-        if policy.is_symlink() or not policy.resolve().is_relative_to(ROOT):
-            raise SystemExit("Refusing linked/outside worktree cloud capability policy")
-        policy_bytes = policy.read_bytes()
-    if policy_bytes is not None:
-        (workspace / policy_name).write_bytes(policy_bytes)
-    (snapshot / "node_modules").symlink_to(ROOT / "frontend/node_modules", target_is_directory=True)
     (snapshot / "tmp").mkdir()
     (snapshot / "evidence").mkdir()
     (snapshot / "build-layout.mjs").write_text('''import { build } from 'vite';
@@ -105,6 +113,9 @@ await build({root:process.cwd(),configFile:process.cwd()+'/vite.config.ts',confi
 cacheDir:process.cwd()+'/.vite-cache',build:{outDir:process.cwd()+'/layout-dist',emptyOutDir:false,
 rollupOptions:{input:process.cwd()+'/tests/domain-SUITE-harness.html'}}});
 '''.replace('SUITE', suite))
+    if comparison_snapshot:
+        (comparison_snapshot / "build-layout.mjs").write_text((snapshot / "build-layout.mjs").read_text().replace(
+            "root:process.cwd(),", "root:process.cwd(),base:'/baseline/',"))
     (snapshot / "network-guard.cjs").write_text('''const net = require('node:net');
 const dns = require('node:dns');
 const modules = require('node:module');
@@ -135,13 +146,18 @@ modules.syncBuiltinESMExports();
            "HOME": str(snapshot / "tmp"), "TMPDIR": str(snapshot / "tmp"),
            "NODE_OPTIONS": "--require " + json.dumps(str(snapshot / "network-guard.cjs"))}
     results = []
-    commands = [("build", [node, "build-layout.mjs"]), ("browser", [node, f"tests/domain-{suite}-ui.mjs"])]
-    for name, command in commands:
+    commands = [("build", [node, "build-layout.mjs"], snapshot)]
+    if comparison_snapshot:
+        commands.append(("baseline-build", [node, "build-layout.mjs"], comparison_snapshot))
+    commands.append(("browser", [node, f"tests/domain-{suite}-ui.mjs"], snapshot))
+    for name, command, working_directory in commands:
         command_env = dict(env)
         if name == "browser":
             command_env.update(KNOWRA_LAYOUT_LOOPBACK="1", KNOWRA_BROWSER_EXECUTABLE=browser,
                                KNOWRA_LAYOUT_BASELINE="1" if args.baseline else "0")
-        output, code, interrupted = run_check(command, snapshot, command_env)
+            if comparison_snapshot:
+                command_env["KNOWRA_LAYOUT_COMPARISON_ROOT"] = str(comparison_snapshot / "layout-dist")
+        output, code, interrupted = run_check(command, working_directory, command_env)
         (snapshot / (name + ".log")).write_text(output)
         results.append({"check": name, "exit_code": code})
         print(json.dumps(results[-1]), flush=True)
@@ -157,10 +173,19 @@ modules.syncBuiltinESMExports();
                      for path in sorted(directory.rglob("*")) if path.is_file()}
     if policy_bytes is not None:
         source_hashes[policy_name] = hashlib.sha256(policy_bytes).hexdigest()
+    if comparison_snapshot:
+        for directory in (comparison_snapshot / "src", comparison_snapshot / "tests"):
+            for path in sorted(directory.rglob("*")):
+                if path.is_file():
+                    source_hashes[str(path.relative_to(workspace))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if comparison_policy is not None:
+            source_hashes["baseline/" + policy_name] = hashlib.sha256(comparison_policy).hexdigest()
     (snapshot / "evidence/source-manifest.json").write_text(json.dumps(source_hashes, indent=2) + "\n")
     report = {"workspace": str(workspace), "snapshot": str(snapshot), "node": version, "python": sys.version.split()[0],
               "browser": browser, "source_head": git("rev-parse", "HEAD").decode().strip(),
               "baseline_sha": baseline_sha, "source_has_changes": bool(git("status", "--porcelain")),
+              "comparison_sha": comparison_sha,
+              "comparison_policy_sha256": hashlib.sha256(comparison_policy).hexdigest() if comparison_policy is not None else None,
               "cloud_policy": {"source": baseline_sha or "working_tree", "relative_path": policy_name,
                                "sha256": hashlib.sha256(policy_bytes).hexdigest()} if policy_bytes is not None else None,
               "isolation": {"backend_started": False, "databases_opened": False,

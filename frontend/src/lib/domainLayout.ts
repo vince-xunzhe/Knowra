@@ -12,6 +12,8 @@ type Rect = { x: number; y: number; width: number; height: number }
 type Component = { key: string; nodes: Map<string, Rect>; width: number; height: number }
 const COLUMN_GAP = 170
 const ROW_GAP = 72
+const MAX_COLUMN_EXTRA = 80
+const MAX_ROW_EXTRA = 48
 const COMPONENT_GAP = 140
 const OBSTACLE_GAP = 48
 const ORIGIN = 80
@@ -62,7 +64,8 @@ function stronglyConnected(ids: string[], outgoing: Map<string, string[]>, incom
   return result.sort((a, b) => compare(a[0], b[0]))
 }
 
-function makeComponent(ids: string[], outgoing: Map<string, string[]>, incoming: Map<string, string[]>, rects: Map<string, Rect>): Component {
+function makeComponent(ids: string[], outgoing: Map<string, string[]>, incoming: Map<string, string[]>,
+  rects: Map<string, Rect>, edgeCounts: Map<string, Map<string, number>>, degree: Map<string, number>): Component {
   const sccs = stronglyConnected(ids, outgoing, incoming)
   const membership = new Map(sccs.flatMap((members, index) => members.map(id => [id, index] as const)))
   const successors = sccs.map(() => new Set<number>())
@@ -103,21 +106,39 @@ function makeComponent(ids: string[], outgoing: Map<string, string[]>, incoming:
       }
     }
   }
-  const heights = layers.map(layer => layer.reduce((sum, id) => sum + rects.get(id)!.height, 0) + ROW_GAP * (layer.length - 1))
+  // Long edges need room at every crossed boundary. Count actual relations
+  // (including parallel ones), while SCC/rank construction stays deduplicated.
+  const boundaryDelta = layers.map(() => 0)
+  for (const id of ids) for (const [target, count] of edgeCounts.get(id)!) {
+    const first = Math.min(rank.get(id)!, rank.get(target)!), last = Math.max(rank.get(id)!, rank.get(target)!)
+    if (first !== last) { boundaryDelta[first] += count; boundaryDelta[last] -= count }
+  }
+  let traffic = 0
+  const columnGaps = layers.slice(0, -1).map((layer, level) => {
+    traffic += boundaryDelta[level]
+    const perRow = traffic / Math.max(layer.length, layers[level + 1].length)
+    return COLUMN_GAP + Math.min(MAX_COLUMN_EXTRA, Math.max(0, Math.ceil((perRow - 1) * 14)))
+  })
+  // Dense ports get a few extra routing lanes, not an unbounded graph-wide
+  // expansion. Sparse chains retain their original footprint; labels are data.
+  const rowGaps = layers.map(layer => layer.slice(0, -1).map((id, index) =>
+    ROW_GAP + Math.min(MAX_ROW_EXTRA, Math.max(0, Math.max(degree.get(id)!, degree.get(layer[index + 1])!) - 2) * 6)))
+  const heights = layers.map((layer, level) => layer.reduce((sum, id) => sum + rects.get(id)!.height, 0)
+    + rowGaps[level].reduce((sum, gap) => sum + gap, 0))
   const height = Math.max(...heights)
   const nodes = new Map<string, Rect>()
   let x = 0
   for (let level = 0; level < layers.length; level++) {
     const layer = layers[level], width = Math.max(...layer.map(id => rects.get(id)!.width))
     let y = (height - heights[level]) / 2
-    for (const id of layer) {
+    for (const [index, id] of layer.entries()) {
       const rect = rects.get(id)!
       nodes.set(id, { x, y, width: rect.width, height: rect.height })
-      y += rect.height + ROW_GAP
+      y += rect.height + (rowGaps[level][index] ?? 0)
     }
-    x += width + COLUMN_GAP
+    x += width + (columnGaps[level] ?? 0)
   }
-  return { key: ids[0], nodes, width: x - COLUMN_GAP, height }
+  return { key: ids[0], nodes, width: x, height }
 }
 
 /**
@@ -141,10 +162,17 @@ export function arrangeDomainLayout(board: DomainBoard, sizes: DomainLayoutSizes
   const ids = [...movableIds].sort(compare)
   const outgoingSets = new Map(ids.map(id => [id, new Set<string>()]))
   const incomingSets = new Map(ids.map(id => [id, new Set<string>()]))
+  const edgeCounts = new Map(ids.map(id => [id, new Map<string, number>()]))
+  const degree = new Map(ids.map(id => [id, 0]))
   for (const edge of board.edges) {
+    // A relation to a fixed paper still consumes a port on its movable peer.
+    if (movableIds.has(edge.source)) degree.set(edge.source, degree.get(edge.source)! + 1)
+    if (movableIds.has(edge.target)) degree.set(edge.target, degree.get(edge.target)! + 1)
     if (movableIds.has(edge.source) && movableIds.has(edge.target)) {
       outgoingSets.get(edge.source)!.add(edge.target)
       incomingSets.get(edge.target)!.add(edge.source)
+      const counts = edgeCounts.get(edge.source)!
+      counts.set(edge.target, (counts.get(edge.target) ?? 0) + 1)
     }
   }
   const outgoing = new Map(ids.map(id => [id, [...outgoingSets.get(id)!].sort(compare)]))
@@ -161,7 +189,7 @@ export function arrangeDomainLayout(board: DomainBoard, sizes: DomainLayoutSizes
         if (!seen.has(next)) { seen.add(next); pending.push(next) }
       }
     }
-    components.push(makeComponent(connected.sort(compare), outgoing, incoming, rects))
+    components.push(makeComponent(connected.sort(compare), outgoing, incoming, rects, edgeCounts, degree))
   }
   components.sort((a, b) => b.height * b.width - a.height * a.width || compare(a.key, b.key))
   const totalArea = components.reduce((sum, component) => sum + (component.width + COMPONENT_GAP) * (component.height + COMPONENT_GAP), 0)

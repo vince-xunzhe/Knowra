@@ -4,10 +4,14 @@ import { createServer } from 'node:http'
 import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { extname, join, resolve, sep } from 'node:path'
 import { chromium, expect } from '@playwright/test'
-import { createLayoutFixture } from './domain-layout-fixture.mjs'
+import { createLayoutFixture, createSpacingFixture } from './domain-layout-fixture.mjs'
+import { collectRenderedGraph, measureRenderedGraph, sharedOverview, cropAtViewport } from './domain-layout-metrics.mjs'
 
 const root = process.cwd(), output = join(root, 'evidence')
 const staticRoot = await realpath(join(root, 'layout-dist'))
+const comparisonStaticRoot = process.env.KNOWRA_LAYOUT_COMPARISON_ROOT
+  ? await realpath(process.env.KNOWRA_LAYOUT_COMPARISON_ROOT) : null
+if (comparisonStaticRoot) assert.equal(comparisonStaticRoot, await realpath(join(root, '../baseline/frontend/layout-dist')))
 const baseline = process.env.KNOWRA_LAYOUT_BASELINE === '1'
 const violations = [], tests = [], requests = [], screenshots = []
 const report = { fixture: '23 synthetic papers; 42 synthetic relations; cycle, separate component, locked node/edge, fixed group and note',
@@ -16,8 +20,12 @@ let context
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://127.0.0.1')
-    const file = await realpath(resolve(staticRoot, '.' + decodeURIComponent(url.pathname)))
-    if (!file.startsWith(staticRoot + sep) || !(await stat(file)).isFile()) throw new Error('Outside static fixture')
+    const isComparison = url.pathname.startsWith('/baseline/')
+    const directory = isComparison ? comparisonStaticRoot : staticRoot
+    if (!directory) throw new Error('Unknown build')
+    const pathname = isComparison ? url.pathname.slice('/baseline'.length) : url.pathname
+    const file = await realpath(resolve(directory, '.' + decodeURIComponent(pathname)))
+    if (!file.startsWith(directory + sep) || !(await stat(file)).isFile()) throw new Error('Outside static fixture')
     const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2' }[extname(file)] || 'application/octet-stream'
     res.writeHead(200, { 'content-type': mime }); res.end(await readFile(file))
   } catch { res.writeHead(404); res.end('Static synthetic fixture only; no backend exists') }
@@ -87,7 +95,8 @@ async function screenshot(page, filename) {
 }
 
 async function newPage(options = {}) {
-  const fixture = createLayoutFixture()
+  const fixture = (options.fixtureFactory ?? createLayoutFixture)()
+  const buildPrefix = options.baselineBuild ? '/baseline' : ''
   const control = { fixture, puts: [], gets: 0, runs: [], nextSaveFailure: 0, pauseLoad: null, savedBodies: [] }
   if (options.runs) control.runs = options.runs
   const page = await context.newPage()
@@ -125,15 +134,132 @@ async function newPage(options = {}) {
       violations.push(`Unmocked API blocked: ${request.method()} ${url.pathname}`); return route.abort()
     }
     if (url.pathname === '/favicon.ico') return route.fulfill({ status: 204 })
-    if (url.pathname === '/tests/domain-layout-harness.html' || url.pathname.startsWith('/assets/')) return route.continue()
+    if (url.pathname === buildPrefix + '/tests/domain-layout-harness.html' || url.pathname.startsWith(buildPrefix + '/assets/')) return route.continue()
     violations.push(`Unexpected path blocked: ${url.pathname}`); return route.abort()
   })
-  await page.goto(`${origin}/tests/domain-layout-harness.html`)
+  await page.goto(`${origin}${buildPrefix}/tests/domain-layout-harness.html`)
   await saved(page)
-  await expect(page.locator('[data-node-id]')).toHaveCount(25)
-  await expect(page.locator('[data-edge-id]')).toHaveCount(42)
+  await expect(page.locator('[data-node-id]')).toHaveCount(dense(fixture).nodes.length)
+  await expect(page.locator('[data-edge-id]')).toHaveCount(dense(fixture).edges.length)
   await settled(page)
   return { page, control }
+}
+
+async function arrangeAndMeasure(options = {}) {
+  const item = await newPage({ ...options, fixtureFactory: createSpacingFixture })
+  const original = structuredClone(dense(item.control.fixture))
+  await button(item.page, '整理布局').click()
+  await expect(preview(item.page)).toBeVisible()
+  await button(item.page, '应用布局').click()
+  await expect(preview(item.page)).toHaveCount(0); await saved(item.page)
+  assert.deepEqual(semantics(dense(item.control.fixture)), semantics(original))
+  for (const fixed of original.nodes.filter(node => node.locked || node.groupId || node.kind !== 'paper')) {
+    assert.deepEqual(dense(item.control.fixture).nodes.find(node => node.id === fixed.id), fixed)
+  }
+  const graph = await collectRenderedGraph(item.page, original.edges)
+  return { ...item, graph, measurements: measureRenderedGraph(graph, dense(item.control.fixture)) }
+}
+
+async function useFixedViewport(item, viewport) {
+  // Only our in-memory API response changes: both actual production editors
+  // receive the same viewport through their normal refresh path after arranging.
+  const { zoom, x, y } = viewport
+  dense(item.control.fixture).viewport = { zoom, x, y }
+  item.control.fixture.revision++
+  const gets = item.control.gets
+  await item.page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect.poll(() => item.control.gets).toBeGreaterThan(gets)
+  await expect.poll(() => item.page.locator('.domain-world').evaluate(element => {
+    const value = new DOMMatrix(getComputedStyle(element).transform)
+    return [value.a, value.d, value.e, value.f]
+  })).toEqual([zoom, zoom, x, y])
+  await settled(item.page)
+}
+
+async function verifyVisibilityGuard(item) {
+  for (const selector of ['[data-edge-id="e0"] .domain-edge-line', '[data-edge-id="e0"]']) {
+    const element = item.page.locator(selector)
+    const original = await element.getAttribute('style')
+    try {
+      await element.evaluate(node => { node.style.opacity = '0' })
+      await assert.rejects(collectRenderedGraph(item.page, dense(item.control.fixture).edges),
+        /Every edge must remain visible and measurable/, 'Transparent paths or ancestors cannot improve metrics by disappearing')
+    } finally {
+      await element.evaluate((node, style) => {
+        if (style === null) node.removeAttribute('style')
+        else node.setAttribute('style', style)
+      }, original)
+    }
+  }
+}
+
+function comparisonQuality(before, after) {
+  // Set before the final comparison: allow necessary channel room, but reject
+  // an apparent improvement produced by unbounded spreading or long detours.
+  const limits = { maxBBoxAreaRatio: 1.5, maxTotalPathRatio: 1.25, maxLongestPathRatio: 1.5,
+    maxBendRatio: 1.25, minFitZoomRatio: 0.8 }
+  const checks = []
+  const add = (name, passed, actual, limit) => checks.push({ name, passed, actual, limit })
+  add('Every node and relation retained', after.nodeCount === before.nodeCount && after.edgeCount === before.edgeCount,
+    { nodes: after.nodeCount, edges: after.edgeCount }, { nodes: before.nodeCount, edges: before.edgeCount })
+  add('No node overlap', after.nodeOverlaps === 0, after.nodeOverlaps, 0)
+  const oldHits = new Set(before.hitPairs.map(pair => JSON.stringify(pair)))
+  const newHits = after.hitPairs.filter(pair => !oldHits.has(JSON.stringify(pair)))
+  add('No new edge/card intersection pairs', newHits.length === 0, newHits, [])
+  for (const scope of ['corePaths', 'fullPaths']) {
+    for (const key of ['collinearOverlapLength', 'nearParallel12Length', 'nearParallel20Length']) {
+      add(`${scope}.${key} strictly improves`, after[scope][key] < before[scope][key], after[scope][key], `< ${before[scope][key]}`)
+    }
+    for (const key of ['crossings', 'sharedEndpointCrossings', 'totalCrossings']) {
+      add(`${scope}.${key} does not increase`, after[scope][key] <= before[scope][key], after[scope][key], `<= ${before[scope][key]}`)
+    }
+  }
+  add('Bounded graph area', after.bounds.area / before.bounds.area <= limits.maxBBoxAreaRatio,
+    after.bounds.area / before.bounds.area, limits.maxBBoxAreaRatio)
+  add('Bounded total path length', after.paths.totalLength / before.paths.totalLength <= limits.maxTotalPathRatio,
+    after.paths.totalLength / before.paths.totalLength, limits.maxTotalPathRatio)
+  add('Bounded longest path', after.paths.longestLength / before.paths.longestLength <= limits.maxLongestPathRatio,
+    after.paths.longestLength / before.paths.longestLength, limits.maxLongestPathRatio)
+  add('Bounded bend count', after.paths.totalBends / before.paths.totalBends <= limits.maxBendRatio,
+    after.paths.totalBends / before.paths.totalBends, limits.maxBendRatio)
+  add('Fit zoom does not fall by more than 20%', after.fitZoom / before.fitZoom >= limits.minFitZoomRatio,
+    after.fitZoom / before.fitZoom, limits.minFitZoomRatio)
+  return { limits, checks, passed: checks.every(check => check.passed),
+    crossingDefinition: 'Proper segment-interior intersections, counted separately for non-shared-endpoint edge pairs and shared-endpoint pairs; total is their sum. Distinct crossing edge-pair counts remain reported and are not substituted for intersection counts.' }
+}
+
+async function compareArranged() {
+  const before = await arrangeAndMeasure({ baselineBuild: true })
+  const after = await arrangeAndMeasure()
+  await verifyVisibilityGuard(after)
+  const overview = sharedOverview(before.measurements, after.measurements)
+  const union = overview.unionBounds
+  const detail = { zoom: 0.75,
+    x: Math.round(before.graph.canvas.width / 2 - (union.x + union.width / 2) * 0.75),
+    y: Math.round(before.graph.canvas.height / 2 - (union.y + union.height * 0.65) * 0.75) }
+  const comparison = { fixture: 'Identical 23-paper / 74-edge synthetic graph with long skips, reverse/cyclic relations, parallel edges, long labels and fixed obstacles',
+    before: before.measurements, after: after.measurements, overview, detail,
+    ratios: { bboxArea: after.measurements.bounds.area / before.measurements.bounds.area,
+      totalPathLength: after.measurements.paths.totalLength / before.measurements.paths.totalLength,
+      longestPath: after.measurements.paths.longestLength / before.measurements.paths.longestLength,
+      fitZoom: after.measurements.fitZoom / before.measurements.fitZoom }, crops: {} }
+  for (const [name, item] of [['before', before], ['after', after]]) {
+    await writeFile(join(output, `${name}-arranged-geometry.json`), JSON.stringify(item.graph, null, 2) + '\n')
+    await useFixedViewport(item, overview)
+    comparison.crops[name + 'Overview'] = cropAtViewport(item.measurements, overview)
+    assert.deepEqual(comparison.crops[name + 'Overview'], { left: 0, top: 0, right: 0, bottom: 0 }, 'Overview must include every node and entire edge path')
+    await screenshot(item.page, `${name}-arranged-overview.png`)
+    await useFixedViewport(item, detail)
+    comparison.crops[name + 'Detail'] = cropAtViewport(item.measurements, detail)
+    await screenshot(item.page, `${name}-arranged-detail.png`)
+    assert.equal((await collectRenderedGraph(item.page, dense(item.control.fixture).edges)).routes.length, 74)
+  }
+  comparison.quality = comparisonQuality(comparison.before, comparison.after)
+  comparison.tradeoffs = ['corePaths', 'fullPaths'].flatMap(scope => comparison.after[scope].crossingEdgePairs > comparison.before[scope].crossingEdgePairs
+    ? [`${scope}: distinct non-shared-endpoint crossing edge pairs increased ${comparison.before[scope].crossingEdgePairs} → ${comparison.after[scope].crossingEdgePairs}, while proper intersection counts are assessed separately.`] : [])
+  report.comparison = comparison
+  await writeFile(join(output, 'layout-comparison.json'), JSON.stringify(comparison, null, 2) + '\n')
+  assert.deepEqual(comparison.quality.checks.filter(check => !check.passed), [], 'Visual quality gates failed; raw measurements and screenshots remain in evidence')
 }
 
 async function test(name, action) {
@@ -161,11 +287,11 @@ try {
   await context.routeWebSocket(/.*/, ws => { violations.push('Unexpected context WebSocket'); ws.close() })
 
   if (baseline) {
-    await test('Fetched-main baseline rendered against the identical synthetic fixture', async () => {
-      const { page, control } = await newPage()
-      report.metrics.baseline = await metrics(page, dense(control.fixture).edges)
-      await screenshot(page, 'before-baseline.png')
-      assert.equal(control.puts.length, 0)
+    await test('Selected baseline arranges the synthetic graph before measurement and screenshot', async () => {
+      const item = await arrangeAndMeasure()
+      report.metrics.baseline = item.measurements
+      await screenshot(item.page, 'before-baseline-arranged.png')
+      assert.equal(item.control.puts.length, 1)
     })
   } else {
     await test('Preview/compare/pan/cancel preserve the original state without any write', async () => {
@@ -345,6 +471,7 @@ try {
       assert(await arrange.count() === 0 || await arrange.isDisabled())
       assert.equal(control.puts.length, 0)
     })
+    if (comparisonStaticRoot) await test('Old-main arranged versus new arranged: identical graph, shared union viewport and complete edge metrics', compareArranged)
   }
 } finally {
   await close()
