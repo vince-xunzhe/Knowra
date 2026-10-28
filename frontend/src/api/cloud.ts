@@ -19,6 +19,7 @@
  * drops it after the call (see backend/services/cloud_ask.py).
  */
 import axios, { AxiosError, type AxiosInstance } from 'axios'
+import { assertCloudEnabled, isCloudEnabled } from '../lib/cloudPolicy'
 
 // ── runtime config (localStorage-first) ─────────────────────────────────
 
@@ -40,6 +41,7 @@ function readLs(key: string): string {
 }
 
 function writeLs(key: string, value: string | null) {
+  assertCloudEnabled()
   try {
     if (value === null || value === '') localStorage.removeItem(key)
     else localStorage.setItem(key, value)
@@ -71,6 +73,7 @@ export const CLOUD_DEFAULTS: CloudConfig = {
 }
 
 export function getCloudConfig(): CloudConfig {
+  if (!isCloudEnabled()) return { supabaseUrl: '', supabaseAnonKey: '', baseUrl: '' }
   // Vite injects literal env vars at build time via `import.meta.env`.
   // We *read* from it, never assign — assigning trips Vite's HMR
   // transform into writing `import.meta.env = {...}` into the served
@@ -85,17 +88,20 @@ export function getCloudConfig(): CloudConfig {
 }
 
 export function setCloudConfig(next: Partial<CloudConfig>) {
+  assertCloudEnabled()
   if (next.supabaseUrl !== undefined) writeLs(LS_KEYS.supabaseUrl, next.supabaseUrl.trim() || null)
   if (next.supabaseAnonKey !== undefined) writeLs(LS_KEYS.supabaseAnonKey, next.supabaseAnonKey.trim() || null)
   if (next.baseUrl !== undefined) writeLs(LS_KEYS.baseUrl, next.baseUrl.trim().replace(/\/+$/, '') || null)
 }
 
 export function isCloudConfigured(): boolean {
+  if (!isCloudEnabled()) return false
   const c = getCloudConfig()
   return Boolean(c.supabaseUrl && c.supabaseAnonKey && c.baseUrl)
 }
 
 export function getDeviceId(): string {
+  assertCloudEnabled()
   let id = readLs(LS_KEYS.deviceId)
   if (!id) {
     // RFC4122 v4-ish via crypto if available, else fall back to random
@@ -124,6 +130,7 @@ export interface CloudSession {
 }
 
 export function getStoredSession(): CloudSession | null {
+  if (!isCloudEnabled()) return null
   const raw = readLs(LS_KEYS.session)
   if (!raw) return null
   try {
@@ -166,6 +173,7 @@ export class CloudAuthError extends Error {
 }
 
 function authClient(): AxiosInstance {
+  assertCloudEnabled()
   const { supabaseUrl, supabaseAnonKey } = getCloudConfig()
   if (!supabaseUrl || !supabaseAnonKey) {
     throw new CloudAuthError('未配置 Supabase URL / anon key，请到设置 → 云同步填写', 'not_configured')
@@ -217,6 +225,7 @@ function sessionFromToken(t: SupabaseTokenResponse): CloudSession {
 }
 
 export async function cloudSignIn(email: string, password: string): Promise<CloudSession> {
+  assertCloudEnabled()
   try {
     const { data } = await authClient().post<SupabaseTokenResponse>(
       '/token?grant_type=password',
@@ -231,6 +240,7 @@ export async function cloudSignIn(email: string, password: string): Promise<Clou
 }
 
 export async function cloudSignUp(email: string, password: string): Promise<CloudSession | null> {
+  assertCloudEnabled()
   try {
     const { data } = await authClient().post<SupabaseTokenResponse | {
       // signup without auto-confirm returns a user but no tokens
@@ -251,6 +261,7 @@ export async function cloudSignUp(email: string, password: string): Promise<Clou
 }
 
 export async function cloudRefreshSession(refreshToken: string): Promise<CloudSession> {
+  assertCloudEnabled()
   try {
     const { data } = await authClient().post<SupabaseTokenResponse>(
       '/token?grant_type=refresh_token',
@@ -265,6 +276,7 @@ export async function cloudRefreshSession(refreshToken: string): Promise<CloudSe
 }
 
 export async function cloudSignOut(): Promise<void> {
+  assertCloudEnabled()
   const session = getStoredSession()
   storeSession(null)
   if (!session) return
@@ -281,6 +293,7 @@ export async function cloudSignOut(): Promise<void> {
 /** Returns a valid access token, refreshing if it's within `bufferMs` of
  *  expiry. Throws CloudAuthError if no session is stored or refresh fails. */
 export async function getFreshAccessToken(bufferMs = 60_000): Promise<string> {
+  assertCloudEnabled()
   const session = getStoredSession()
   if (!session) throw new CloudAuthError('未登录', 'no_session')
   if (Date.now() < session.expires_at - bufferMs) return session.access_token
@@ -291,6 +304,7 @@ export async function getFreshAccessToken(bufferMs = 60_000): Promise<string> {
 // ── Knowra cloud client (authenticated) ─────────────────────────────────
 
 function cloudClient(): AxiosInstance {
+  assertCloudEnabled()
   const { baseUrl } = getCloudConfig()
   if (!baseUrl) {
     throw new CloudAuthError('未配置云后端 URL，请到设置 → 云同步填写', 'not_configured')
@@ -595,6 +609,7 @@ async function withRetry<T>(
     label?: string
   } = {},
 ): Promise<T> {
+  assertCloudEnabled()
   let lastErr: unknown
   for (let i = 0; i < attempts; i += 1) {
     try {
@@ -709,6 +724,7 @@ export const cloudRemoveRecMark = (arxivId: string) =>
  *  401s without auth but proves the app is up) through withRetry
  *  rides out that window. Returns true once reachable. */
 export async function cloudWarmup(): Promise<boolean> {
+  assertCloudEnabled()
   const { baseUrl } = getCloudConfig()
   if (!baseUrl) return false
   try {
@@ -747,6 +763,7 @@ export async function performSignedUpload(
   instr: UploadInstruction,
   body: Blob | ArrayBuffer | string,
 ): Promise<void> {
+  assertCloudEnabled()
   // Up to 3 attempts: signed PUTs go straight to Supabase Storage
   // (Sydney) and a dropped connection mid-upload shouldn't fail the
   // whole sync. The signed URL is valid for minutes, so re-PUTting

@@ -8,6 +8,7 @@
  * call it on their own to avoid a sync on every page mount.
  */
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { isCloudEnabled } from '../lib/cloudPolicy'
 
 import {
   CloudAuthError,
@@ -64,6 +65,7 @@ export function CloudAuthProvider({ children }: { children: ReactNode }) {
 
   // Cross-tab sync: if another window logs in/out, mirror it here.
   useEffect(() => {
+    if (!isCloudEnabled()) return
     const onStorage = (e: StorageEvent) => {
       if (!e.key) return
       if (e.key.startsWith('knowra.cloud.')) {
@@ -78,6 +80,7 @@ export function CloudAuthProvider({ children }: { children: ReactNode }) {
   // within 5 minutes of expiry, refresh it now so the next /api/sync
   // call doesn't pay the refresh latency. Best-effort.
   useEffect(() => {
+    if (!isCloudEnabled()) return
     const session = state.session
     if (!session) return
     const msUntilExpiry = session.expires_at - Date.now()

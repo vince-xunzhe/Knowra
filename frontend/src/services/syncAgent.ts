@@ -1,4 +1,5 @@
 import { t as tr } from '../i18n/catalog'
+import { assertCloudEnabled, isCloudEnabled } from '../lib/cloudPolicy'
 /**
  * Desktop → cloud sync agent.
  *
@@ -120,6 +121,7 @@ interface PendingSession {
 }
 
 function loadPending(): PendingSession | null {
+  if (!isCloudEnabled()) return null
   try {
     const raw = localStorage.getItem(LS_PENDING)
     if (!raw) return null
@@ -135,6 +137,7 @@ function loadPending(): PendingSession | null {
 }
 
 function savePending(p: PendingSession | null) {
+  assertCloudEnabled()
   try {
     if (p === null) localStorage.removeItem(LS_PENDING)
     else localStorage.setItem(LS_PENDING, JSON.stringify(p))
@@ -240,6 +243,7 @@ export async function runSync(
   snapshot: LocalSnapshot,
   onProgress: SyncProgressFn = () => {},
 ): Promise<CommitResponse> {
+  assertCloudEnabled()
   return runSyncAttempt(snapshot, onProgress, [], true)
 }
 
@@ -427,6 +431,7 @@ export function getPendingResume(): PendingResumeInfo | null {
 export async function resumeCommit(
   onProgress: SyncProgressFn = () => {},
 ): Promise<CommitResponse | null> {
+  assertCloudEnabled()
   const pending = loadPending()
   if (!pending) return null
 

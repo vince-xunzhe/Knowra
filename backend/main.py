@@ -1,5 +1,9 @@
 import os
 
+from cloud_policy import ensure_cloud_deployment_allowed
+
+ensure_cloud_deployment_allowed()
+
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from config import load_config, is_cloud_mode

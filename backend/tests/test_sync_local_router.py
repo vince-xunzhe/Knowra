@@ -20,6 +20,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -69,6 +70,11 @@ def _make_app():
 
 class LocalSnapshotTests(unittest.TestCase):
     def setUp(self):
+        # Preserve the exporter contract for a future reviewed re-enable;
+        # production remains frozen by the source-controlled manifest.
+        enabled = patch("cloud_policy.cloud_features_enabled", return_value=True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
         # Each test gets a fresh temp WIKI_DIR. We monkey-patch the
         # module's directory constants so the router walks our test
         # tree instead of the real data/wiki/.

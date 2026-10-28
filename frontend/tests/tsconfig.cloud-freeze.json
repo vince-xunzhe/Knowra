@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.app.json",
+  "compilerOptions": { "tsBuildInfoFile": "../.tsbuildinfo/cloud-freeze.tsbuildinfo" },
+  "include": ["../src", "cloud-freeze-harness.tsx"]
+}

@@ -8,6 +8,7 @@ research database, real provider or user configuration is involved.
 from __future__ import annotations
 
 import errno
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ import tempfile
 import time
 import unittest
 import urllib.request
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -676,6 +678,73 @@ sys.addaudithook(audit)
         self.assertEqual((self.fixture / CANONICAL / "bin/python").read_bytes(), before)
         self.assertFalse((self.fixture / "data/tasks.db").exists())
         self.assertEqual(sentinel.read_bytes(), b"synthetic existing data")
+
+
+class FixtureListenerOwnershipTests(unittest.TestCase):
+    """Socket-table decisions only: no real listeners, apps or HTTP calls."""
+
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location(
+            "native_start_ownership_fixture", ROOT / "scripts/check_native_start.py")
+        cls.smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.smoke)
+
+    def setUp(self):
+        self.ports = (48100, 48101)
+        self.snapshot = Path("/synthetic-fixture")
+
+    def records(self, port):
+        return [{"pid": 101 if port == self.ports[0] else 102,
+                 "address": f"127.0.0.1:{port}"}]
+
+    def test_unbound_ports_wait_without_probing(self):
+        with patch.object(self.smoke, "descendants", return_value={101, 102}), \
+                patch.object(self.smoke, "listener_records", return_value=[]), \
+                patch.object(self.smoke, "owned_alive") as ownership:
+            self.assertEqual(self.smoke.fixture_listeners(self.ports, 100, self.snapshot), {})
+        ownership.assert_not_called()
+
+    def test_fixture_descendants_with_snapshot_cwd_are_accepted(self):
+        with patch.object(self.smoke, "descendants", return_value={101, 102}), \
+                patch.object(self.smoke, "listener_records", side_effect=self.records), \
+                patch.object(self.smoke, "owned_alive", return_value=True) as ownership:
+            result = self.smoke.fixture_listeners(self.ports, 100, self.snapshot)
+        self.assertEqual(result, {str(port): self.records(port) for port in self.ports})
+        self.assertEqual(ownership.call_count, 2)
+
+    def test_unrelated_listener_is_rejected_without_claiming_ownership(self):
+        with patch.object(self.smoke, "descendants", return_value={999}), \
+                patch.object(self.smoke, "listener_records", side_effect=self.records), \
+                patch.object(self.smoke, "owned_alive") as ownership:
+            with self.assertRaisesRegex(RuntimeError, "another process or worktree"):
+                self.smoke.fixture_listeners(self.ports, 100, self.snapshot)
+        ownership.assert_not_called()
+
+    def test_wrong_worktree_cwd_is_rejected(self):
+        with patch.object(self.smoke, "descendants", return_value={101, 102}), \
+                patch.object(self.smoke, "listener_records", side_effect=self.records), \
+                patch.object(self.smoke, "owned_alive", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "another process or worktree"):
+                self.smoke.fixture_listeners(self.ports, 100, self.snapshot)
+
+    def test_wildcard_listener_is_rejected(self):
+        with patch.object(self.smoke, "descendants", return_value={101}), \
+                patch.object(self.smoke, "listener_records", return_value=[
+                    {"pid": 101, "address": "*:48100"}]), \
+                patch.object(self.smoke, "owned_alive") as ownership:
+            with self.assertRaisesRegex(RuntimeError, "exclusively IPv4 loopback"):
+                self.smoke.fixture_listeners(self.ports, 100, self.snapshot)
+        ownership.assert_not_called()
+
+    def test_lsof_failure_or_warning_cannot_authorize_http(self):
+        for returncode, stderr in ((2, "synthetic failure"), (0, "synthetic warning")):
+            with self.subTest(returncode=returncode), \
+                    patch.object(self.smoke, "descendants", return_value={101, 102}), \
+                    patch.object(self.smoke.subprocess, "run", return_value=subprocess.CompletedProcess(
+                        [], returncode, stdout="p101\nn127.0.0.1:48100\n", stderr=stderr)):
+                with self.assertRaisesRegex(RuntimeError, "Cannot verify"):
+                    self.smoke.fixture_listeners(self.ports, 100, self.snapshot)
 
 
 if __name__ == "__main__":

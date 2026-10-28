@@ -14,6 +14,7 @@
  * cloud session in hand). See syncAgent.stampUserId for rationale.
  */
 import axios from 'axios'
+import { assertCloudEnabled } from '../lib/cloudPolicy'
 
 import type {
   KnowledgeEdgeRow,
@@ -79,6 +80,7 @@ export interface GatherOptions {
 export async function gatherLocalSnapshot(
   opts: GatherOptions = {},
 ): Promise<LocalSnapshot> {
+  assertCloudEnabled()
   const params: Record<string, string> = {}
   if (opts.skipWikiBodies) params.include_wiki_bodies = 'false'
   const { data } = await desktop.get<LocalSnapshotWire>(
@@ -111,6 +113,7 @@ export async function gatherLocalSnapshot(
 export async function previewSnapshotCounts(): Promise<{
   papers: number; knowledge_nodes: number; knowledge_edges: number; wiki_files: number
 }> {
+  assertCloudEnabled()
   const { data } = await desktop.get<LocalSnapshotWire>(
     '/sync/local_snapshot',
     { params: { include_wiki_bodies: 'false' } },

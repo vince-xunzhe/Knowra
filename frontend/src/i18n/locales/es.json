@@ -1475,5 +1475,10 @@
   "图片渲染失败，请重试或使用最新版浏览器。": "No se pudo renderizar la imagen. Reinténtalo o usa un navegador actualizado.",
   "浏览器无法分配图片内存，请收紧节点布局后重试。": "El navegador no puede asignar memoria para la imagen. Acerca los nodos y vuelve a intentarlo.",
   "PNG 编码失败，请收紧节点布局后重试。": "No se pudo codificar el PNG. Acerca los nodos y vuelve a intentarlo.",
-  "图像导出超时，请收紧节点布局后重试。": "La exportación tardó demasiado. Acerca los nodos y vuelve a intentarlo."
+  "图像导出超时，请收紧节点布局后重试。": "La exportación tardó demasiado. Acerca los nodos y vuelve a intentarlo.",
+  "云同步与移动端暂时暂停": "La sincronización en la nube y el acceso móvil están en pausa",
+  "本机论文、知识库、Ask 和推荐精选可继续使用。云同步、完整推荐与移动端暂时暂停。": "Tus artículos locales, la base de conocimiento, Ask y las recomendaciones personalizadas siguen disponibles. La sincronización en la nube, el catálogo completo de recomendaciones y el acceso móvil están en pausa.",
+  "本地流程已完成": "Proceso local completado",
+  "扫描、处理、筛选、编译与健检已完成": "Se han completado el escaneo, procesamiento, selección, compilación y revisión",
+  "按顺序执行：扫描、处理、筛选、编译、健检": "Ejecutar en orden: escaneo, procesamiento, selección, compilación y revisión"
 }
