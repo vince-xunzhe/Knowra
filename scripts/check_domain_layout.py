@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -49,7 +50,11 @@ def main() -> int:
         raise SystemExit("Existing Chrome/Chromium is required; this check never downloads a browser")
     cache = ROOT / ".cache"
     cache.mkdir(exist_ok=True)
-    snapshot = Path(tempfile.mkdtemp(prefix="domain-layout-baseline-" if args.baseline else "domain-layout-check-", dir=cache))
+    workspace = Path(tempfile.mkdtemp(prefix="domain-layout-baseline-" if args.baseline else "domain-layout-check-", dir=cache))
+    # Preserve repository-relative imports such as src/lib/cloudPolicy.ts ->
+    # ../../../cloud-capabilities.json, entirely inside this task's snapshot.
+    snapshot = workspace / "frontend"
+    snapshot.mkdir()
     files = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "frontend").decode().split("\0")
     for relative in filter(None, files):
         parts = Path(relative).parts[1:]
@@ -63,6 +68,8 @@ def main() -> int:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
     baseline_sha = None
+    policy_name = "cloud-capabilities.json"
+    policy_bytes = None
     if args.baseline:
         baseline_sha = git("rev-parse", "--verify", args.baseline + "^{commit}").decode().strip()
         # Only tracked frontend source is replaced. The latest synthetic harness stays.
@@ -74,6 +81,20 @@ def main() -> int:
             target = snapshot.joinpath(*Path(relative).parts[1:])
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(git("show", f"{baseline_sha}:{relative}"))
+        policy_entry = git("ls-tree", "-z", baseline_sha, "--", policy_name)
+        if policy_entry:
+            if policy_entry.split(b"\t", 1)[0].split()[0] not in {b"100644", b"100755"}:
+                raise SystemExit("Refusing non-file baseline cloud capability policy")
+            policy_bytes = git("show", f"{baseline_sha}:{policy_name}")
+        # Old baselines predate this policy and do not import it. Never substitute
+        # the current policy for an absent/different baseline version.
+    else:
+        policy = ROOT / policy_name
+        if policy.is_symlink() or not policy.resolve().is_relative_to(ROOT):
+            raise SystemExit("Refusing linked/outside worktree cloud capability policy")
+        policy_bytes = policy.read_bytes()
+    if policy_bytes is not None:
+        (workspace / policy_name).write_bytes(policy_bytes)
     (snapshot / "node_modules").symlink_to(ROOT / "frontend/node_modules", target_is_directory=True)
     (snapshot / "tmp").mkdir()
     (snapshot / "evidence").mkdir()
@@ -127,9 +148,11 @@ modules.syncBuiltinESMExports();
             break
         if interrupted:
             break
-    report = {"snapshot": str(snapshot), "node": version, "python": sys.version.split()[0],
+    report = {"workspace": str(workspace), "snapshot": str(snapshot), "node": version, "python": sys.version.split()[0],
               "browser": browser, "source_head": git("rev-parse", "HEAD").decode().strip(),
               "baseline_sha": baseline_sha, "source_has_changes": bool(git("status", "--porcelain")),
+              "cloud_policy": {"source": baseline_sha or "working_tree", "relative_path": policy_name,
+                               "sha256": hashlib.sha256(policy_bytes).hexdigest()} if policy_bytes is not None else None,
               "isolation": {"backend_started": False, "databases_opened": False,
                             "api_responses": "in-memory synthetic mocks only", "external_requests": "blocked",
                             "source_env_files": "excluded", "browser_profile": str(snapshot / "tmp/layout-profile")},

@@ -1488,5 +1488,10 @@
   "图片渲染失败，请重试或使用最新版浏览器。": "Image rendering failed. Retry or use an up-to-date browser.",
   "浏览器无法分配图片内存，请收紧节点布局后重试。": "The browser cannot allocate image memory. Bring the nodes closer together and retry.",
   "PNG 编码失败，请收紧节点布局后重试。": "PNG encoding failed. Bring the nodes closer together and retry.",
-  "图像导出超时，请收紧节点布局后重试。": "Image export timed out. Bring the nodes closer together and retry."
+  "图像导出超时，请收紧节点布局后重试。": "Image export timed out. Bring the nodes closer together and retry.",
+  "云同步与移动端暂时暂停": "Cloud sync and mobile access are paused",
+  "本机论文、知识库、Ask 和推荐精选可继续使用。云同步、完整推荐与移动端暂时暂停。": "Your local papers, knowledge base, Ask and personalized recommendations remain available. Cloud sync, the full recommendation feed and mobile access are paused.",
+  "本地流程已完成": "Local workflow complete",
+  "扫描、处理、筛选、编译与健检已完成": "Scanning, processing, curation, compilation and health checks are complete",
+  "按顺序执行：扫描、处理、筛选、编译、健检": "Run scanning, processing, curation, compilation and health checks in order"
 }

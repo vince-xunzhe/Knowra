@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "backend")]
 
+from cloud_policy import CloudFeaturesDisabled, require_cloud_enabled
 from config import load_config
 from services.arxiv_service import search_arxiv
 from services.personal_recommendation import (
@@ -37,6 +38,7 @@ from model_gateway.recommendations import RecommendationInferenceError, infer
 
 class WorkerClient:
     def __init__(self, url, token):
+        require_cloud_enabled()
         if not url.startswith(("https://", "http://127.0.0.1:", "http://localhost:")):
             raise ValueError("远端 worker 连接必须使用 HTTPS")
         if not token.startswith("krw_"):
@@ -45,6 +47,7 @@ class WorkerClient:
         self.token = token
 
     def post(self, path, body=None):
+        require_cloud_enabled()
         request = urllib.request.Request(
             self.url + path,
             data=json.dumps(body or {}).encode(),
@@ -305,6 +308,11 @@ def main():
     parser.add_argument("--input-cny-per-million", type=float, default=0)
     parser.add_argument("--output-cny-per-million", type=float, default=0)
     args = parser.parse_args()
+    if not args.local and not args.local_input:
+        try:
+            require_cloud_enabled()
+        except CloudFeaturesDisabled as exc:
+            parser.error(str(exc))
     cfg = {} if args.no_ai else load_config()
     if not args.no_ai and args.provider == "cli":
         # --provider cli is an explicit runtime choice. Enable the CLI adapter

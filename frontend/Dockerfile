@@ -6,6 +6,7 @@ COPY frontend/package*.json ./
 RUN npm ci
 
 COPY frontend/ .
+COPY cloud-capabilities.json /app/cloud-capabilities.json
 
 EXPOSE 5173
 

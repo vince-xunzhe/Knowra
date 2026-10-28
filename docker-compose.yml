@@ -25,6 +25,7 @@ services:
       - "${FRONTEND_PORT:-5173}:5173"
     volumes:
       - ./frontend:/app/frontend
+      - ./cloud-capabilities.json:/app/cloud-capabilities.json:ro
       - frontend_node_modules:/app/frontend/node_modules
     depends_on:
       - backend

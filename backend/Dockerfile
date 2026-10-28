@@ -23,6 +23,7 @@ RUN python -m pip install --upgrade pip \
 
 COPY backend/ .
 COPY model_gateway /app/model_gateway
+COPY cloud-capabilities.json /app/cloud-capabilities.json
 
 EXPOSE 8000
 

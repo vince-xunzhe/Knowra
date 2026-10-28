@@ -22,6 +22,7 @@ import {
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import CloudSyncSection from '../components/CloudSyncSection'
+import { CLOUD_PAUSED_TITLE, isCloudEnabled } from '../lib/cloudPolicy'
 
 type ProviderRoute = 'open_api' | 'codex'
 
@@ -398,7 +399,7 @@ export default function SettingsPage() {
 
         <SettingGroup
           title={tr("云同步")}
-          description={tr("登录云端账号后，桌面端的论文 / 概念 / wiki 会增量同步到云后端，供 iOS / Android 只读消费。")}
+          description={isCloudEnabled() ? tr("登录云端账号后，桌面端的论文 / 概念 / wiki 会增量同步到云后端，供 iOS / Android 只读消费。") : tr(CLOUD_PAUSED_TITLE)}
           defaultExpanded={false}
         >
           <CloudSyncSection />

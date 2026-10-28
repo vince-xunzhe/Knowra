@@ -182,9 +182,9 @@ def ports() -> tuple[int, int]:
 
 
 def listening(port: int) -> bool:
-    with socket.socket() as client:
-        client.settimeout(0.15)
-        return client.connect_ex(('127.0.0.1', port)) == 0
+    # Inspect the socket table without connecting to a port another task may
+    # have acquired after our fixture exited.
+    return bool(listener_records(port))
 
 
 def alive(pid: int) -> bool:
@@ -218,10 +218,42 @@ def owned_alive(pid: int, snapshot: Path) -> bool:
                for line in found.stdout.splitlines())
 
 
-def listener_addresses(port: int) -> list[str]:
-    found = subprocess.run(['/usr/sbin/lsof','-nP',f'-iTCP:{port}','-sTCP:LISTEN','-Fn'],
-                           capture_output=True,text=True)
-    return [line[1:] for line in found.stdout.splitlines() if line.startswith('n')]
+def listener_records(port: int) -> list[dict]:
+    found = subprocess.run(['/usr/sbin/lsof', '-nP', f'-iTCP:{port}', '-sTCP:LISTEN', '-Fpn'],
+                           capture_output=True, text=True)
+    if found.returncode not in (0, 1) or found.stderr.strip():
+        raise RuntimeError('Cannot verify fixture listener ownership')
+    records = []
+    pid = None
+    for line in found.stdout.splitlines():
+        if line.startswith('p'):
+            pid = int(line[1:])
+        elif line.startswith('n'):
+            if pid is None:
+                raise RuntimeError('Listener has no verifiable process owner')
+            records.append({'pid': pid, 'address': line[1:]})
+    return records
+
+
+def fixture_listeners(ports: tuple[int, int], launcher_pid: int, snapshot: Path) -> dict:
+    """Permit HTTP only after both listeners belong to this live fixture.
+
+    Port selection releases its sockets before the real entrypoint binds them.
+    Another local task can win that race; never use HTTP health responses to
+    discover who owns a port, and never add an unrelated listener to cleanup.
+    """
+    children = descendants(launcher_pid)
+    listeners = {}
+    for port in ports:
+        records = listener_records(port)
+        for record in records:
+            if record['address'] != f'127.0.0.1:{port}':
+                raise RuntimeError('Refusing HTTP: fixture listener is not exclusively IPv4 loopback')
+            if record['pid'] not in children or not owned_alive(record['pid'], snapshot):
+                raise RuntimeError('Refusing HTTP: listener belongs to another process or worktree')
+        listeners[str(port)] = records
+    # Missing listeners are only a readiness wait, never a reason to probe.
+    return listeners if all(listeners.values()) else {}
 
 
 def prepare(snapshot: Path) -> tuple[Path, dict[str, str]]:
@@ -232,9 +264,9 @@ def prepare(snapshot: Path) -> tuple[Path, dict[str, str]]:
     modules = ROOT / 'frontend/node_modules'
     if not site.is_dir() or modules.is_symlink() or not modules.is_dir():
         raise RuntimeError('Install this worktree before real startup verification')
-    tracked = subprocess.check_output(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', 'ls-files', '-z'],
+    tracked = subprocess.check_output(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
                                      cwd=ROOT, env={'PATH':os.defpath,'GIT_OPTIONAL_LOCKS':'0'}).decode().split('\0')
-    selected = {'start.sh', 'scripts/native-common.sh', 'scripts/native_runtime.py', '.python-version', '.node-version'}
+    selected = {'start.sh', 'scripts/native-common.sh', 'scripts/native_runtime.py', '.python-version', '.node-version', 'cloud-capabilities.json'}
     hashes = {}
     for name in filter(None, tracked):
         parts = Path(name).parts
@@ -382,15 +414,20 @@ with sqlite3.connect(DB_PATH) as db:
         while True:
             owned.update(descendants(run.pid))
             if run.poll() is not None: raise RuntimeError('Real launcher exited before readiness')
-            try:
-                with opener.open(api+'/',timeout=1) as response: health=json.load(response)
-                with opener.open(web+'/',timeout=1) as response: html=response.read().decode()
-                if health.get('message')=='Knowra API is running' and '<div id="root"></div>' in html: break
-            except (OSError,urllib.error.URLError): pass
+            listeners = fixture_listeners((api_port, web_port), run.pid, snapshot)
+            if listeners:
+                try:
+                    with opener.open(api+'/',timeout=1) as response: health=json.load(response)
+                    with opener.open(web+'/',timeout=1) as response: html=response.read().decode()
+                    if health.get('message')=='Knowra API is running' and '<div id="root"></div>' in html: break
+                except (OSError,urllib.error.URLError): pass
             if time.monotonic()>deadline: raise RuntimeError('Real services did not become ready in 60 seconds')
             time.sleep(.2)
+        report['checks']['listener_ownership_before_http'] = True
         report['checks']['api_health']=health
         report['checks']['vite_http']=True
+        if not fixture_listeners((api_port, web_port), run.pid, snapshot):
+            raise RuntimeError('Fixture listener disappeared before the API check')
         with opener.open(api+'/api/papers',timeout=5) as response:
             papers=json.load(response)
         report['checks']['existing_paper_read_by_api']=any(
@@ -404,9 +441,12 @@ with sqlite3.connect(DB_PATH) as db:
         if report['checks']['confirmation_prompt_seen']:
             raise RuntimeError('Default local-data startup still displayed an existing-data permission prompt')
         report['urls']={'api':api,'web':web}
-        report['listeners']={str(port):listener_addresses(port) for port in (api_port,web_port)}
-        if any(addresses!=[f'127.0.0.1:{port}'] for port,addresses in report['listeners'].items()):
-            raise RuntimeError('Actual API/Vite listener is not exclusively IPv4 loopback')
+        report['listener_ownership'] = fixture_listeners((api_port, web_port), run.pid, snapshot)
+        if not report['listener_ownership']:
+            raise RuntimeError('Fixture listener disappeared before browser verification')
+        report['listeners'] = {port: [record['address'] for record in records]
+                               for port, records in report['listener_ownership'].items()}
+        report['checks']['listener_ownership_before_browser'] = True
         print('Real API and Vite ready: '+json.dumps(report['urls']),flush=True)
         browser_output=snapshot/'.cache/browser-result.json'
         # Playwright's own pipe-based browser transport uses this process only;
@@ -509,11 +549,18 @@ with sqlite3.connect(DB_PATH) as db:
         if browser_run is not None:
             try: browser_run.wait(timeout=5)
             except subprocess.TimeoutExpired: pass
-        report['cleanup']['final_open_ports']=[port for port in (api_port,web_port) if port and listening(port)]
+        try:
+            report['cleanup']['final_open_ports']=[port for port in (api_port,web_port) if port and listening(port)]
+        except (OSError, RuntimeError, ValueError) as error:
+            # A failed ownership query must fail verification, but still leave
+            # evidence. It never authorizes probing or signaling unknown PIDs.
+            report['cleanup']['final_open_ports'] = None
+            report['cleanup']['listener_check_error'] = str(error)
+            report['exit_code'] = 1
         report['cleanup']['final_remaining_pids']=[pid for pid in sorted(owned) if alive(pid)]
         report['violations']=read_json_lines(snapshot/'.cache/violations.jsonl')
         report['blocked_probes']=read_json_lines(snapshot/'.cache/blocked-probes.jsonl')
-        if report['cleanup']['final_open_ports'] or report['cleanup']['final_remaining_pids'] or report['violations']:
+        if report['cleanup']['final_open_ports'] or report['cleanup']['final_remaining_pids'] or report['violations'] or report['cleanup'].get('listener_check_error'):
             report['exit_code']=1
         (snapshot/'.cache/smoke-result.json').write_text(json.dumps(report,indent=2)+'\n')
         (cache/'native-start-result.json').write_text(json.dumps(report,indent=2)+'\n')
