@@ -7,8 +7,10 @@ import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+
+from cloud_policy import require_cloud_api_enabled
 
 router = APIRouter(
     prefix="/api/recommendations/worker", tags=["local-recommendation-worker"]
@@ -45,9 +47,10 @@ def status():
         }
 
 
-@router.post("/start")
+@router.post("/start", dependencies=[Depends(require_cloud_api_enabled)])
 def start(body: StartWorker):
     global _process, _mode
+    require_cloud_api_enabled()
     _local_only()
     parsed = urlparse(body.url)
     if (

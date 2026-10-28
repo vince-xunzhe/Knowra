@@ -60,6 +60,7 @@ import { runSync } from '../services/syncAgent'
 import DuplicateFilesModal from './DuplicateFilesModal'
 import PromotionPromptEditor from './PromotionPromptEditor'
 import SyncStageCard from './SyncStageCard'
+import { CLOUD_PAUSED_TITLE, isCloudEnabled } from '../lib/cloudPolicy'
 
 type CandidateMode = 'off' | 'pending' | 'all'
 type ConsoleStageId = StageId | 'sync'
@@ -136,7 +137,7 @@ export default function PipelineConsole({
         if (job && !runAllInFlightRef.current) {
           const running = job.status === 'queued' || job.status === 'running'
           setRunAllStatus({ running, label: job.progress.label || tr('后台全流程编排'),
-            detail: job.error || (running ? tr('独立 worker 执行中，可离开页面') : tr('本地流程已完成；云端同步可在同步栏执行')),
+            detail: job.error || (running ? tr('独立 worker 执行中，可离开页面') : isCloudEnabled() ? tr('本地流程已完成；云端同步可在同步栏执行') : tr('本地流程已完成')),
             tone: running ? 'running' : job.status === 'completed' ? 'success' : 'warning' })
         }
       } catch {
@@ -251,6 +252,7 @@ export default function PipelineConsole({
 
   const runAll = async () => {
     if (
+      runAllInFlightRef.current ||
       runAllStatus.running ||
       busyKey ||
       state.processing?.running ||
@@ -269,7 +271,7 @@ export default function PipelineConsole({
         )
       })
 
-      if (auth.configured && auth.user) {
+      if (isCloudEnabled() && auth.configured && auth.user) {
         setRunAllStep(tr("同步到云端"), tr("准备快照"))
         const snapshot = await gatherLocalSnapshot({ since: getLastSyncAt() })
         await runSync(snapshot, progress => {
@@ -289,8 +291,8 @@ export default function PipelineConsole({
         setRunAllStatus({
           running: false,
           label: tr("本地流水线已完成"),
-          detail: tr("同步已跳过：请先登录云端账号"),
-          tone: 'warning',
+          detail: isCloudEnabled() ? tr("同步已跳过：请先登录云端账号") : tr("扫描、处理、筛选、编译与健检已完成"),
+          tone: isCloudEnabled() ? 'warning' : 'success',
         })
       }
       state.refresh()
@@ -379,7 +381,7 @@ export default function PipelineConsole({
           <button
             onClick={() => openFromIconRail('sync')}
             className="relative p-1.5 rounded-md hover:bg-slate-800/60 text-slate-400 hover:text-slate-100"
-            title={tr("⑤ 同步 — 推送到云端")}
+            title={isCloudEnabled() ? tr("⑤ 同步 — 推送到云端") : tr(CLOUD_PAUSED_TITLE)}
           >
             <CloudUpload size={14} />
           </button>
@@ -418,7 +420,7 @@ export default function PipelineConsole({
           onClick={runAll}
           disabled={runAllStatus.running || busyKey !== null || !!state.processing?.running || !!state.compileStatus?.running}
           className={`w-full inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${runAllButtonClass(runAllStatus.tone)}`}
-          title={tr("按顺序执行：扫描、处理、筛选、编译、健检，并在已登录时同步到云端")}
+          title={isCloudEnabled() ? tr("按顺序执行：扫描、处理、筛选、编译、健检，并在已登录时同步到云端") : tr("按顺序执行：扫描、处理、筛选、编译、健检")}
         >
           {runAllStatus.running ? (
             <Loader2 size={13} className="animate-spin" />

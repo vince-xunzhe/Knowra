@@ -13,6 +13,8 @@ import {
 import { downloadRecommendation, summarizeRecommendation, listPaperTeams } from '../api/client'
 import { useCloudAuth } from '../hooks/useCloudAuth'
 import PersonalRecommendations from '../components/PersonalRecommendations'
+import CloudPausedNotice from '../components/CloudPausedNotice'
+import { isCloudEnabled } from '../lib/cloudPolicy'
 
 // Session caches (module-level so they survive the 推荐 tab unmounting /
 // remounting). recCache holds the last feed; summaryCache holds per-paper summaries.
@@ -77,7 +79,7 @@ export default function RecommendPage() {
     <nav className="flex shrink-0 gap-2 border-b border-slate-800 bg-[var(--surface-0f1117)] px-5 py-2">
       {(['personal', 'public'] as const).map(value => <button key={value} onClick={() => setTab(value)} className={`rounded-lg px-4 py-2 text-sm ${tab === value ? 'bg-indigo-500/20 text-indigo-200' : 'text-slate-400 hover:bg-slate-800'}`}>{value === 'personal' ? tr("推荐精选") : tr("完整推荐")}</button>)}
     </nav>
-    <div className="min-h-0 flex-1">{tab === 'personal' ? <PersonalRecommendations key="local-workspace" onBrowseAll={() => setTab('public')} /> : <PublicRecommendPage key={auth.user?.id || 'signed-out'} />}</div>
+    <div className="min-h-0 flex-1">{tab === 'personal' ? <PersonalRecommendations key="local-workspace" onBrowseAll={() => setTab('public')} /> : isCloudEnabled() ? <PublicRecommendPage key={auth.user?.id || 'signed-out'} /> : <div className="p-5"><CloudPausedNotice /></div>}</div>
   </div>
 }
 

@@ -115,7 +115,13 @@ def main() -> int:
     ).decode().split("\0")
     results = []
     # Keep logs only in this ignored worktree cache. No root .env is copied.
-    snapshot = Path(tempfile.mkdtemp(prefix="frontend-check-", dir=CACHE))
+    workspace = Path(tempfile.mkdtemp(prefix="frontend-check-", dir=CACHE))
+    snapshot = workspace / "frontend"
+    snapshot.mkdir()
+    policy = ROOT / "cloud-capabilities.json"
+    if policy.is_symlink():
+        raise SystemExit("Refusing linked cloud capability policy")
+    shutil.copyfile(policy, workspace / policy.name)
     for relative in filter(None, files):
         source = ROOT / relative
         parts = Path(relative).parts[1:]

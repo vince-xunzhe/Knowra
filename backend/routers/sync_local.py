@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from config import is_cloud_mode
+from cloud_policy import require_cloud_api_enabled
 from database import get_db
 from models import KnowledgeEdge, KnowledgeNode, Paper
 from path_utils import resolve_paper_path
@@ -47,7 +48,11 @@ from services.edge_provenance import serialize_edge_provenance
 from services.wiki_compiler import WIKI_CONCEPTS_DIR, WIKI_DIR, WIKI_PAPERS_DIR
 
 
-router = APIRouter(prefix="/api/sync", tags=["sync-local"])
+router = APIRouter(
+    prefix="/api/sync",
+    tags=["sync-local"],
+    dependencies=[Depends(require_cloud_api_enabled)],
+)
 
 
 # Deterministic UUIDs for wiki rows — keyed on rel_path so the same .md
@@ -335,6 +340,7 @@ def local_snapshot(
     ``cloudPrepare`` — the agent only has to stamp user_id and add
     deletions (which the desktop doesn't track yet).
     """
+    require_cloud_api_enabled()
     if is_cloud_mode():
         # Defense in depth — this router should never be hit in the cloud
         # deploy. Treat as a 404 to keep the API surface tight.

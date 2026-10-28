@@ -1,5 +1,7 @@
 # Knowra Mobile
 
+> 当前暂停移动端构建与发布，源码和应用身份保留。没有发布暂停页到已有安装版本；云依赖与数据恢复边界见 [冻结说明](../docs/CLOUD-FREEZE.md)。以下步骤仅作后续恢复参考。
+
 iOS + Android 移动端，只读消费云端知识库。当前包清单为 React Native 0.81.5 + Expo SDK 54 + TypeScript。
 
 `package-lock.json` 中 React Native 要求 Node `>=20.19.4`。保留现有锁文件；项目尚未固定原生 Node/npm 版本，根安装文档中的“Node 20 或更新版本”也未表达完整约束。设备、Expo Go 与所选运行时的兼容性仍需在实际环境验证。

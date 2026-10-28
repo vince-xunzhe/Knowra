@@ -4,6 +4,7 @@ import axios from 'axios'
 import { resolveJobResult, type BackgroundJob } from './jobs'
 import { readWithRetry, singleFlight } from './polling'
 import { notifyPaperCategoriesChanged } from '../lib/paperCategoryEvents'
+import { assertCloudEnabled } from '../lib/cloudPolicy'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
 
@@ -1324,7 +1325,10 @@ export const importRecommendation = (payload: { arxiv_id: string; title: string;
   api.post<{ status: string; paper_id: string; arxiv_id: string }>('/recommendations/import', payload).then(r => r.data)
 
 export const localRecommendationWorker = () => api.get<{ running: boolean; exit_code: number | null }>('/recommendations/worker').then(r => r.data)
-export const startLocalRecommendationWorker = (url: string, token: string) => api.post('/recommendations/worker/start', { url, token }).then(r => r.data)
+export const startLocalRecommendationWorker = (url: string, token: string) => {
+  assertCloudEnabled()
+  return api.post('/recommendations/worker/start', { url, token }).then(r => r.data)
+}
 export const stopLocalRecommendationWorker = () => api.post('/recommendations/worker/stop').then(r => r.data)
 
 export const startWorkspaceRecommendationWorker = () => api.post('/recommendations/worker/start-local').then(r => r.data)

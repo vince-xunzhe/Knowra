@@ -34,13 +34,19 @@ import {
 } from '../services/syncAgent'
 import { gatherLocalSnapshot, previewSnapshotCounts } from '../services/gatherLocalSnapshot'
 import { cloudMe, getLastSyncAt, type MeResponse } from '../api/cloud'
+import { isCloudEnabled } from '../lib/cloudPolicy'
+import CloudPausedNotice from './CloudPausedNotice'
 
 interface Props {
   expanded: boolean
   onToggle: () => void
 }
 
-export default function SyncStageCard({ expanded, onToggle }: Props) {
+export default function SyncStageCard(props: Props) {
+  return isCloudEnabled() ? <EnabledSyncStageCard {...props} /> : <CloudPausedNotice />
+}
+
+function EnabledSyncStageCard({ expanded, onToggle }: Props) {
   const locale = useLocale()
   const auth = useCloudAuth()
   const [progress, setProgress] = useState<SyncProgress>({

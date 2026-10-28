@@ -24,6 +24,8 @@ TESTS = (
     "tests.test_task_executor",
     "tests.test_paper_background_dispatch",
     "tests.test_postgres_safety",
+    "tests.test_cloud_freeze",
+    "tests.test_sync_local_router",
 )
 
 
@@ -135,6 +137,10 @@ def main() -> int:
     cache.mkdir(exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="backend-check-", dir=cache)).resolve()
     try:
+        policy = project / "cloud-capabilities.json"
+        if policy.is_symlink():
+            raise ValueError("cloud-capabilities.json must be a physical source file")
+        shutil.copyfile(policy, root / policy.name)
         # Avoid recursing into virtual environments, caches or real runtime data.
         for folder in ("backend", "model_gateway"):
             source_root = project / folder

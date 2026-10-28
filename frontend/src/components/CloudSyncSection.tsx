@@ -22,10 +22,16 @@ import {
 
 import { useCloudAuth } from '../hooks/useCloudAuth'
 import { getLastSyncAt } from '../api/cloud'
+import { isCloudEnabled } from '../lib/cloudPolicy'
+import CloudPausedNotice from './CloudPausedNotice'
 
 type Mode = 'signin' | 'signup'
 
 export default function CloudSyncSection() {
+  return isCloudEnabled() ? <EnabledCloudSyncSection /> : <CloudPausedNotice />
+}
+
+function EnabledCloudSyncSection() {
   useLocale()
   const auth = useCloudAuth()
   const [mode, setMode] = useState<Mode>('signin')
