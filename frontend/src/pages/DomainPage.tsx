@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowDown,
@@ -51,6 +51,8 @@ import {
 import { arrangeRoadmap, roadmapApi, type RoadmapLayoutOrientation } from '../api/roadmaps'
 import { localApiErrorMessage } from '../api/errors'
 import { addPaperCategory, deletePaperCategory, renamePaperCategory } from '../api/client'
+import { useDomainLayoutPreview } from '../hooks/useDomainLayoutPreview'
+import { computeDomainEdgeGeometries } from '../lib/domainGeometry'
 import { useDomainWorkspace } from '../hooks/useDomainWorkspace'
 import { useDomainAgent } from '../hooks/useDomainAgent'
 import { useDomainInspectorResize } from '../hooks/useDomainInspectorResize'
@@ -232,10 +234,13 @@ export default function DomainPage({
   const run = agent.runs.find(r => r.boardId === liveBoard?.id)
   const [layoutBusy, setLayoutBusy] = useState(false)
   const [layoutMenu, setLayoutMenu] = useState(false)
-  const readOnly = !agent.ready || agent.busy || layoutBusy || run?.status === 'pending' || run?.status === 'preview'
-  const board = liveBoard && run?.status === 'preview' && run.proposal
+  const baseReadOnly = !agent.ready || agent.busy || layoutBusy || run?.status === 'pending' || run?.status === 'preview'
+  const layout = useDomainLayoutPreview(liveBoard, active && !isRoadmap && !baseReadOnly, update)
+  const { preview: layoutPreview, patchViewport: patchLayoutViewport, cancel: cancelLayout } = layout
+  const readOnly = baseReadOnly || !!layoutPreview
+  const board = layout.board ?? (liveBoard && run?.status === 'preview' && run.proposal
     ? { ...run.proposal.board, name: liveBoard.name, category: liveBoard.category, viewport: liveBoard.viewport }
-    : liveBoard
+    : liveBoard)
   const protect = workspace.protect
   useEffect(() => {
     protect(agent.ready ? agent.runs.filter(r => r.status === 'pending' || r.status === 'preview').map(r => r.boardId) : null)
@@ -282,10 +287,17 @@ export default function DomainPage({
   const paperMap = new Map(papers.map((p) => [p.id, p]))
   const patchBoard = useCallback(
     (fn: (b: DomainBoard) => DomainBoard, record = true) => {
+      if (layoutPreview) { patchLayoutViewport(fn); return }
       update((s) => ({ ...s, boards: s.boards.map((b) => (b.id === s.activeId ? fn(b) : b)) }), record)
     },
-    [update],
+    [update, layoutPreview, patchLayoutViewport],
   )
+  const edgeNodes = board?.nodes, boardEdges = board?.edges
+  const domainEdgeGeometries = useMemo(() => !isRoadmap && edgeNodes && boardEdges
+    ? computeDomainEdgeGeometries({ nodes: edgeNodes, edges: boardEdges }, sizes) : null,
+  [isRoadmap, edgeNodes, boardEdges, sizes])
+  const simplifiedRouting = useMemo(() => !!domainEdgeGeometries &&
+    [...domainEdgeGeometries.values()].some(route => route.simplified), [domainEdgeGeometries])
   const onSize = useCallback((key: string, width: number, height: number) => {
     if (!width || !height) return
     setSizes((s) =>
@@ -464,6 +476,7 @@ export default function DomainPage({
         event.preventDefault()
       }
       if (event.key === 'Escape') {
+        cancelLayout()
         setPopover(null)
         setLinkSource(null)
         setSelected(new Set())
@@ -806,6 +819,7 @@ export default function DomainPage({
     setImportSelected(new Set())
   }
   const selectBoard = useCallback((boardId: string) => {
+    cancelLayout()
     setFrameworkDialogBoard(null)
     update((s) => ({ ...s, activeId: boardId }), false)
     setSelected(new Set())
@@ -813,7 +827,7 @@ export default function DomainPage({
     setPopover(null)
     setLinkSource(null)
     setSearch('')
-  }, [update])
+  }, [update, cancelLayout])
   const pendingCategorySelection = useRef<string | null>(null)
   const submitName = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1084,7 +1098,7 @@ export default function DomainPage({
         <button
           className="domain-new-board"
           aria-label={tr('新建领域')}
-          disabled={!state || agent.busy || !agent.ready || taxonomyBusy}
+          disabled={!state || agent.busy || !agent.ready || taxonomyBusy || !!layoutPreview}
           onClick={() => {
             setTaxonomyError('')
             setNameDraft('')
@@ -1126,6 +1140,9 @@ export default function DomainPage({
       </div>
       {exportError && <div className="domain-error" role="alert">{exportError}</div>}
       {exportNotice && <div className="domain-export-notice" role="status">{exportNotice}</div>}
+      {simplifiedRouting && <div className="domain-export-notice" role="status">
+        {tr('当前画布使用简化连线路径；全部关系保留，部分连线可能穿过卡片。')}
+      </div>}
       {paperError && (
         <div className="domain-error" role="alert">
           {tr(isRoadmap ? '调研论文加载失败，请重试。' : '论文回顾加载失败，暂时无法导入。')}
@@ -1142,6 +1159,7 @@ export default function DomainPage({
         <span>{tr('先筛选经典论文，再评估关键论文全文；按证据等级梳理关系，报告中标明全文缺口。')}</span>
         <span>{tr('下载仅保存论文到库，不自动生成回顾。')}</span>
       </div>}
+      {!isRoadmap && actionError && <div className="domain-error" role="alert">{tr(actionError)}</div>}
       {isRoadmap && (imports.error || actionError) && <div className="domain-error" role="alert">
         {tr(actionError || imports.error)}<button onClick={() => { setActionError(''); imports.refresh() }}>{tr('重试')}</button>
       </div>}
@@ -1194,16 +1212,13 @@ export default function DomainPage({
                     const source = board.nodes.find((n) => n.id === e.source),
                       target = board.nodes.find((n) => n.id === e.target)
                     if (!source || !target) return null
+                    const domainGeometry = domainEdgeGeometries?.get(e.id)
                     const geometry = isRoadmap ? roadmapEdgeGeometry(source, target,
-                      sizes[source.id]?.height ?? source.height, sizes[target.id]?.height ?? target.height) : (() => {
-                      const forward = target.x >= source.x
-                      const sx = source.x + (forward ? source.width : 0), tx = target.x + (forward ? 0 : target.width)
-                      const sy = source.y + Math.min(sizes[source.id]?.height ?? source.height, 160) / 2,
-                        ty = target.y + Math.min(sizes[target.id]?.height ?? target.height, 160) / 2
-                      const bend = Math.max(60, Math.abs(tx - sx) / 2) * (forward ? 1 : -1)
-                      return { sx, sy, tx, ty, vertical: false, d: `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}` }
-                    })()
+                      sizes[source.id]?.height ?? source.height, sizes[target.id]?.height ?? target.height) : domainGeometry
+                    if (!geometry) return null
                     const { sx, sy, tx, ty, d, vertical } = geometry
+                    const labelX = domainGeometry?.labelX ?? (sx + tx) / 2
+                    const labelY = domainGeometry?.labelY ?? (sy + ty) / 2
                     return (
                       <g
                         key={e.id}
@@ -1222,11 +1237,11 @@ export default function DomainPage({
                         <path className="domain-edge-hit" d={d} />
                         <path className="domain-edge-line" d={d} markerEnd={`url(#${mode}-arrow)`} />
                         {e.label && (
-                          <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 14 / board.viewport.zoom} textAnchor="middle">
+                          <text x={labelX} y={labelY - 14 / board.viewport.zoom} textAnchor="middle">
                             {e.label}
                           </text>
                         )}
-                        <g transform={`translate(${(sx + tx) / 2} ${(sy + ty) / 2}) scale(${1 / board.viewport.zoom})`}>
+                        <g transform={`translate(${labelX} ${labelY}) scale(${1 / board.viewport.zoom})`}>
                           <foreignObject x={-8} y={-8} width={16} height={16} className="domain-edge-lock-container">
                             <button
                               className="domain-edge-lock"
@@ -1410,8 +1425,19 @@ export default function DomainPage({
               </button>
             </div>
           )}
-          <div className="domain-agent-bar" onPointerDown={e => e.stopPropagation()}>
-            {run?.status === 'pending' ? <>
+          <div className={`domain-agent-bar${layoutPreview ? ' domain-layout-preview' : ''}`} onPointerDown={e => e.stopPropagation()}>
+            {layoutPreview ? <div data-testid="domain-layout-preview">
+              <div className="domain-layout-preview-heading"><Network size={16} /><strong>{tr(layoutPreview.showOriginal ? '原布局对照' : '布局预览')}</strong>
+                <span>{tr('移动 {0} 张论文卡片 · 保留全部 {1} 条关系', { 0: layoutPreview.moved, 1: layoutPreview.board.edges.length })}</span></div>
+              <p>{tr('按连线方向分层；分组、组内卡片、备注与锁定位置保持原样。')}</p>
+              {layoutPreview.fixedOverlaps > 0 && <p>{tr('固定元素之间仍有重叠，可解锁或手动调整后再整理。')}</p>}
+              {!layoutPreview.moved && <p>{tr('无需移动：可整理的卡片已就位，或当前位置受保护。')}</p>}
+              <div className="domain-layout-preview-actions">
+                <button onClick={layout.toggle}>{tr(layoutPreview.showOriginal ? '查看整理结果' : '查看原布局')}</button>
+                <button className="domain-primary" disabled={!layoutPreview.moved} onClick={layout.apply}><Check size={14} />{tr('应用布局')}</button>
+                <button onClick={cancelLayout}>{tr('取消预览')}</button>
+              </div>
+            </div> : run?.status === 'pending' ? <>
               <Loader2 size={16} className="spin" />
               <span>{run.progress.label || tr(isRoadmap ? '调研任务已排队' : '代连任务已排队')} · {tr('当前类别只读')}</span>
               <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('取消生成')}</button>
@@ -1426,6 +1452,14 @@ export default function DomainPage({
               })}>{tr('应用方案')}</button>
               <button disabled={agent.busy} onClick={() => void agent.act(() => api.discard(run.id))}>{tr('放弃方案')}</button>
             </> : <>
+              {!isRoadmap && <button disabled={!board?.nodes.length || readOnly || papersLoading || paperError}
+                title={tr('本地预览布局，应用后可撤销；不改论文与连线内容。')}
+                onClick={() => {
+                  setActionError('')
+                  setLinkSource(null); setPopover(null); gesture.current = null; setRubber(null)
+                  try { layout.start(sizes, canvasSize) }
+                  catch { setActionError(tr('布局整理失败，原画布与未保存编辑已保留。')) }
+                }}><Network size={16} />{tr('整理布局')}</button>}
               {isRoadmap && board?.nodes.some(node => node.roadmapRole === 'topic') && <div className="roadmap-layout-picker">
                 <button
                   aria-haspopup="menu"

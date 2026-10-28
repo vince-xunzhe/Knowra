@@ -9,7 +9,7 @@
     "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "test:e2e": "playwright test",
-    "test:unit": "node --test tests/polling.test.mjs"
+    "test:unit": "node --test tests/polling.test.mjs tests/domain-layout.test.mjs tests/domain-geometry.test.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
