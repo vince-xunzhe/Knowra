@@ -1,0 +1,326 @@
+{
+  "tested_merge_commit": "c9375f70fbc3cd7e5c2ca120724bc8b9ae7454c6",
+  "mode": "after",
+  "checks": [
+    {
+      "check": "types",
+      "exit_code": 0,
+      "recovery_cleanup": false,
+      "remaining_owned_process_count": 0,
+      "unverified_process_count": 0
+    },
+    {
+      "check": "build",
+      "exit_code": 0,
+      "recovery_cleanup": false,
+      "remaining_owned_process_count": 0,
+      "unverified_process_count": 0
+    },
+    {
+      "check": "browser",
+      "exit_code": 0,
+      "recovery_cleanup": false,
+      "remaining_owned_process_count": 0,
+      "unverified_process_count": 0
+    }
+  ],
+  "browser": {
+    "mode": "after",
+    "tests": [
+      {
+        "name": "Existing login and expired pending sync survive bootstrap, tab events and timer advancement",
+        "status": "passed",
+        "ms": 218
+      },
+      {
+        "name": "Every direct cloud/auth/sync/upload/remote worker entry rejects before network or local mutation",
+        "status": "passed",
+        "ms": 492
+      },
+      {
+        "name": "Fresh profiles and malformed pending state stay unchanged without creating device or login state",
+        "status": "passed",
+        "ms": 682
+      },
+      {
+        "name": "Page switches and repeated public recommendation clicks remain paused without retries",
+        "status": "passed",
+        "ms": 1155
+      },
+      {
+        "name": "Local recommendations keep focus, feedback, worker start and refresh on local APIs",
+        "status": "passed",
+        "ms": 595
+      },
+      {
+        "name": "Local model configuration and provider-test clients remain available with synthetic responses",
+        "status": "passed",
+        "ms": 244
+      },
+      {
+        "name": "User-triggered pipeline completes locally once despite same-tick double click",
+        "status": "passed",
+        "ms": 2123
+      },
+      {
+        "name": "Leaving a running pipeline and restoring it never resumes cloud synchronization",
+        "status": "passed",
+        "ms": 2198
+      }
+    ],
+    "requests": [
+      {
+        "path": "/api/recommendations/personal",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/batches",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/events",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/batches",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/events",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/batches",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/events",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/batches",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/events",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/focus",
+        "method": "PUT",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/events",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/worker/start-local",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/recommendations/personal/refresh",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/config",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/config",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/config/model_gateway/providers/synthetic-provider/test",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/jobs/latest",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/pipeline/run",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/jobs/synthetic-pipeline",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/jobs/latest",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/pipeline/run",
+        "method": "POST",
+        "mode": "after"
+      },
+      {
+        "path": "/api/jobs/synthetic-pipeline",
+        "method": "GET",
+        "mode": "after"
+      },
+      {
+        "path": "/api/jobs/latest",
+        "method": "GET",
+        "mode": "after"
+      }
+    ],
+    "externalAttempts": [],
+    "violations": [],
+    "storageChecks": [
+      {
+        "label": "old-login-expired-pending",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "31f0bff2a2d650e1b6ba6875d934bd6c8ef0f8433fd605997daa54938b4e5d2a"
+      },
+      {
+        "label": "all-direct-entry-points",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "7f9958efd13ef6b972345eaa27ef5bc8510bcdb9ab5f384b2c4b2d448004cf10"
+      },
+      {
+        "label": "fresh-profile",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "033c31621f215d582aacdf5509f585d7ad7dbf888928592c842533b5b8c8e593"
+      },
+      {
+        "label": "malformed-pending",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "ca5de3c8a7356b79e9fa82d1f7f102e510479132d4c1b14e11a48662ee7c1998"
+      },
+      {
+        "label": "navigation-and-repeated-clicks",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "b530539d38abfcd00da3eca4035d692ff963cca3606cf26e832477451d7cde77"
+      },
+      {
+        "label": "local-recommendations",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "1d48f90adfdd0e753ebf0c7f7c7f99f26c9b9e30ec307fca522f458087baa4dc"
+      },
+      {
+        "label": "local-model-clients",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "9e8865636dc360edd1a20749defe6b2ad01fe03a36a67e7f9c6342389fa6ccc2"
+      },
+      {
+        "label": "local-pipeline-complete",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "1979e116ea91349665ad9ba166d0d5d9d41840b7cf24687546fbdfe20472a51a"
+      },
+      {
+        "label": "pipeline-page-switch",
+        "key_count": 9,
+        "unchanged": true,
+        "mutation_count": 0,
+        "sha256": "eea4d6778db35f20c7407d992956dfe2bd0a4b9cb9c9f1d7836906a01a40cc6c"
+      }
+    ],
+    "screenshots": [
+      {
+        "filename": "after-cloud-paused.png",
+        "sha256": "cf6fa329dee5e8bfe7a412446f5be0fb66b211072376c940c4cedc391af21c09",
+        "width": 1680,
+        "height": 1050
+      },
+      {
+        "filename": "after-local-recommendations.png",
+        "sha256": "7ac288a73732871031b8032cf6a6f675ff56feb57077348ceacf6885ac6da886",
+        "width": 1680,
+        "height": 1050
+      },
+      {
+        "filename": "after-local-pipeline.png",
+        "sha256": "2f9d8ef56c9962913d7640a143914241e2a4f51903007cf8f2b5460dc4c351e9",
+        "width": 1680,
+        "height": 1050
+      }
+    ],
+    "cleanupConfirmed": true,
+    "fixture_port": 54445,
+    "boundary": "Static loopback fixture; every business API mocked; all external requests and WebSockets blocked; no backend, database, task worker or model process"
+  },
+  "node_boundary_violation_count": 0,
+  "exit_code": 0
+}

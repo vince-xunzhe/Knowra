@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-28",
+  "pr": "https://github.com/vince-xunzhe/Knowra/pull/34",
+  "tested_code_commit": "c9375f70fbc3cd7e5c2ca120724bc8b9ae7454c6",
+  "main": "5fa246f7afcfb63532ae8503f0dcf3b570140797",
+  "original_pr_head": "5f5ba2fa18b82aa5daacff38da09faaa46e04599",
+  "test_timing": "Checks ran on the resolved, uncommitted merge tree. Every listed runtime/test source file was verified unchanged before and after the merge commit; subsequent changes are evidence/documentation only.",
+  "environment": {
+    "os": "macOS 26.5.1",
+    "python": "3.12.13",
+    "node": "24.14.1",
+    "vite": "8.0.10",
+    "typescript": "6.0.3",
+    "chrome": "156.0.8078.48"
+  },
+  "checks": {
+    "unified_with_real_start": {
+      "exit_code": 0,
+      "native_startup_tests": 29,
+      "isolated_backend_tests": 58,
+      "frontend_unit_tests": 22,
+      "lifecycle_browser_tests": 5,
+      "types": "passed",
+      "build": "passed",
+      "eslint_errors": 0,
+      "eslint_warnings": 0,
+      "native_start": "passed"
+    },
+    "cloud_freeze_browser_tests": 8,
+    "cloud_direct_entry_points": 31,
+    "layout_browser_groups": 8,
+    "fetched_main_baseline": "passed",
+    "independent_merge_review": "no blocking findings"
+  },
+  "snapshot_identity": {
+    "native_source_hashes_matched": 325,
+    "cloud_source_hashes_matched": 128,
+    "layout_frontend_files_matched": 127,
+    "unified_frontend_files_checked": 127,
+    "unified_expected_changes": "Only tsBuildInfoFile paths in tsconfig.app.json and tsconfig.node.json rewritten to the snapshot cache by the existing runner; remaining files byte-identical."
+  },
+  "cloud_policy": {
+    "enabled": false,
+    "sha256": "4a30c9be3f878a9b2ecf59f5e0ada934c9d7e390f09c232597a46d5b4e929a50"
+  },
+  "metrics": {
+    "synthetic_papers": 23,
+    "synthetic_relations": 42,
+    "node_overlaps_before": 4,
+    "node_overlaps_after": 0,
+    "edge_nonendpoint_card_hit_pairs_before": 48,
+    "edge_nonendpoint_card_hit_pairs_after": 0,
+    "samples_per_svg_path": 220
+  },
+  "privacy": "Only synthetic fixtures and raw screenshots; no daily database, paper collection, credentials, real user profile or private reference image. Real startup used newly created synthetic SQLite files, disabled queued task execution and guarded idle fixture recommendation worker.",
+  "limitations": [
+    "No real research data or real provider/LLM calls",
+    "No cross-browser, unrestricted application E2E, PostgreSQL RLS, mobile or deployment tests",
+    "Local checks are not GitHub CI",
+    "Fixed groups and locked/note positions preserved; dense edge crossings/labels may remain",
+    "Large graphs or exhausted routing budget use disclosed simplified routes without removing relationships"
+  ],
+  "evidence_sha256": {
+    "after-cloud-paused.png": "cf6fa329dee5e8bfe7a412446f5be0fb66b211072376c940c4cedc391af21c09",
+    "source-manifest.json": "a5160dfbe0791c79f8f989eeb7a5ec7b9441fbb08f69669cc803409c26636088",
+    "after-save-failure.png": "f1b2813eb1d1b59b4c60b7351014ad99989081a6c6a6b78c6c6516c0a3075fcc",
+    "before-baseline.png": "b217155dc62ec834361aac8878541a3994864bf0f01f2b9b3e837c30782139ff",
+    "native-start-results.json": "a1de08dc6a0164ac0fee4da51f3f568d8660a03097ff3efe06758075a16bb219",
+    "after-applied.png": "76847c2cfecb5464dd0198ae7bca7ebfb881e0867f49e9162ab22f6f1fad8c4c",
+    "unit-results.txt": "ca62fc012a60467c09ff41b13faac588bf7be5314ab79225e7d33af8fdf9362e",
+    "after-preview.png": "095e2bf67dc905433382f3657c61fb9fe2427cc81e0537a6598d588dc371cc71",
+    "baseline-results.json": "9f8c23a5be67a9e8ecf6799e9d6788a4ffb1a00b47b383ef65de992b95dd6a66",
+    "browser-results.json": "ef2ff11ea5387e5d09406e17d5f247b6f1d9b5b08e627735985ddf9dc84e2502",
+    "frontend-results.json": "09cda95a3b5bc1f96a1b25e2c0c84929ed01b61c55e3052488b967ee91dcf611",
+    "cloud-results.json": "51b240930490262371bad9d9487f4177d99cae73cc6564901c3216d9b588891f",
+    "after-edge-detail.png": "9cc8703d0928dcc12c0fba215dcab825079a7e79dad8c558c7dd2843f0235350"
+  }
+}

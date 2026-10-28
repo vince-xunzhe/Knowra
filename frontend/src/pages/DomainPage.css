@@ -577,6 +577,7 @@
   fill: none;
   stroke-width: 1.8;
 }
+.domain-page:not(.roadmap-page) .domain-edge-line { stroke-linejoin: round; stroke-linecap: round; }
 .domain-edge-hit {
   stroke: transparent;
   fill: none;
@@ -1136,6 +1137,14 @@
 .domain-agent-bar { position: absolute; top: 20px; left: 80px; z-index: 4; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 100px); flex-wrap: wrap; padding: 6px; border: 1px solid var(--domain-border); border-radius: 10px; background: var(--domain-panel); box-shadow: 0 4px 16px #0002; font-size: 12px; }
 .domain-agent-bar span { max-width: 340px; }
 .domain-agent-bar button { padding: 7px 10px; }
+.domain-layout-preview { max-width: min(680px, calc(100% - 100px)); padding: 12px 14px; }
+.domain-layout-preview-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.domain-layout-preview-heading > svg { color: var(--color-indigo-300, #a5b4fc); flex-shrink: 0; }
+.domain-layout-preview-heading strong { color: var(--domain-text); }
+.domain-layout-preview-heading span { color: var(--domain-muted); }
+.domain-layout-preview p { margin: 7px 0 0; color: var(--domain-muted); line-height: 1.5; }
+.domain-layout-preview-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.domain-layout-preview-actions button { display: inline-flex; align-items: center; gap: 5px; }
 .roadmap-layout-picker { position: relative; }
 .roadmap-layout-picker > button { display: inline-flex; align-items: center; gap: 7px; }
 .roadmap-layout-menu {
