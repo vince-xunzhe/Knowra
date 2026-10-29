@@ -1,0 +1,42 @@
+{
+  "theme": "light",
+  "zoom": 1.25,
+  "metrics": {
+    "Synthetic Active Completed": {
+      "color": "rgb(23, 36, 59)",
+      "background": [
+        219.00000000000003,
+        244.97647058823532,
+        235.94117647058826
+      ],
+      "contrast": 13.52185122275645
+    },
+    "Synthetic Learning Paper": {
+      "color": "oklch(0.984 0.019 200.873)",
+      "background": [
+        241,
+        250.9921568627451,
+        253.0235294117647
+      ],
+      "contrast": 1.011554082912229
+    },
+    "Synthetic Completed Paper": {
+      "color": "oklch(0.979 0.021 166.113)",
+      "background": [
+        241,
+        250.9921568627451,
+        248.02745098039216
+      ],
+      "contrast": 1.0020785431647063
+    },
+    "Synthetic Not Started Paper": {
+      "color": "rgb(55, 71, 95)",
+      "background": [
+        255,
+        255,
+        255
+      ],
+      "contrast": 9.421328709545122
+    }
+  }
+}
