@@ -1,7 +1,9 @@
 {
   "date": "2026-10-29",
   "branch": "codex/fix-light-paper-titles-20261029",
+  "pull_request": "https://github.com/vince-xunzhe/Knowra/pull/37",
   "base_sha": "408953b2df18001ece19fbfc4cc4d07cfcf7ba4c",
+  "tested_sha": "90e50953d9264138624ce62e9387c8799b073c78",
   "environment": {
     "python": "3.12.13",
     "node": "24.14.1",

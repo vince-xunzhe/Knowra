@@ -1,11 +1,12 @@
 # 白色主题论文标题对比度修复 DOD
 
-交付 PR：尚未创建。本目录只含合成论文与本地 mock API 生成的公开证据；用户参考截图仅在私有临时目录查看，没有复制进仓库。
+交付：[PR #37](https://github.com/vince-xunzhe/Knowra/pull/37)，非 Draft，等待用户合并。本目录只含合成论文与本地 mock API 生成的公开证据；用户参考截图仅在私有临时目录查看，没有复制进仓库。
 
 - 日期：2026-10-29。
 - worktree：`/tmp/knowra-light-paper-titles-20261029`（macOS 解析为 `/private/tmp/knowra-light-paper-titles-20261029`）。
 - 分支：`codex/fix-light-paper-titles-20261029`。
 - freshly fetched 基线：`408953b2df18001ece19fbfc4cc4d07cfcf7ba4c`。
+- 完整代码与验证提交：`90e50953d9264138624ce62e9387c8799b073c78`；后续提交仅回填 PR 链接与最终交付元数据。
 - 已核实上一轮 [PR #36](https://github.com/vince-xunzhe/Knowra/pull/36) 为非 Draft，并于 2026-10-29 合并为 `408953b`；本轮以该提交为基线。
 
 ## 根因与最小修复
