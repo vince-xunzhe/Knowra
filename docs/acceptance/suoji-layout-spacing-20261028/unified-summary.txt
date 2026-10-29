@@ -1,0 +1,13 @@
+Actual verdict lines from scripts/check.sh, exit code 0. Full local output retained in ignored worktree cache.
+
+Ran 29 tests in 39.521s
+OK
+Ran 58 tests in 6.965s
+OK
+{"check": "unit", "exit_code": 0}
+{"check": "types", "exit_code": 0}
+{"check": "build", "exit_code": 0}
+{"check": "lint", "exit_code": 0, "errors": 0, "warnings": 0}
+{"check": "lifecycle-types", "exit_code": 0}
+{"check": "lifecycle-build", "exit_code": 0}
+{"check": "lifecycle-ui", "exit_code": 0, "tests": [{"name": "Ask session drafts, error clearing and synthesis title ownership", "status": "passed", "ms": 421}, {"name": "Ask reopen ignores stale index and cross-session export responses", "status": "passed", "ms": 508}, {"name": "Review keeps active note draft, merges refreshed notes and resets on paper switch", "status": "passed", "ms": 843}, {"name": "Review paper switch ignores an older chat response", "status": "passed", "ms": 337}, {"name": "Rescue recall survives close/reopen and cannot be submitted twice", "status": "passed", "ms": 305}], "violations": []}

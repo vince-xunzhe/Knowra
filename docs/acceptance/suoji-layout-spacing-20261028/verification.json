@@ -1,0 +1,172 @@
+{
+  "date": "2026-10-28",
+  "tested_code_commit": "5a33566e05cc573fa89b00029221c19ed05eaa4f",
+  "baseline": "a392c6f56ccb20ea6ebdf6e41a0e9c063e94276b",
+  "branch": "codex/suoji-layout-spacing-20261028",
+  "environment": {
+    "os": "macOS 26.5.1",
+    "python": "3.12.13",
+    "node": "24.14.1",
+    "vite": "8.0.10",
+    "typescript": "6.0.3",
+    "chrome": "156.0.8078.48"
+  },
+  "checks": {
+    "install_native": "passed",
+    "preflight_ports": [
+      8119,
+      5199
+    ],
+    "unified_exit_code": 0,
+    "startup_fixture_tests": 29,
+    "isolated_backend_tests": 58,
+    "frontend_unit_tests": 33,
+    "lifecycle_browser_tests": 5,
+    "typescript": "passed",
+    "vite_build": "passed",
+    "eslint_errors": 0,
+    "eslint_warnings": 0,
+    "layout_browser_groups": 9,
+    "visual_quality_checks": 20,
+    "highlight_browser_groups": 10,
+    "cloud_freeze_browser_groups": 8,
+    "cloud_direct_entry_points": 31,
+    "independent_code_and_pixel_review": "no blocking findings"
+  },
+  "source_identity": {
+    "runtime_and_test_hashes_unchanged": 343,
+    "layout_current_snapshot_hashes_matched": 120,
+    "layout_baseline_git_source_policy_entries_matched": 83,
+    "highlight_snapshot_hashes_matched": 120,
+    "cloud_snapshot_hashes_matched": 134,
+    "unified_snapshot": "All frontend files match; two tsconfig tsBuildInfoFile paths intentionally redirected by the existing runner."
+  },
+  "viewport": {
+    "screenshot": [
+      1800,
+      1100
+    ],
+    "overview": {
+      "zoom": 0.39,
+      "x": 285.06,
+      "y": -137.11,
+      "unionBounds": {
+        "x": 60,
+        "y": 930,
+        "width": 2372,
+        "height": 1579,
+        "area": 3745388
+      }
+    },
+    "detail": {
+      "zoom": 0.75,
+      "x": -163,
+      "y": -984
+    },
+    "crops": {
+      "beforeOverview": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "beforeDetail": {
+        "left": 118,
+        "top": 286.5,
+        "right": 0,
+        "bottom": 0
+      },
+      "afterOverview": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "afterDetail": {
+        "left": 118,
+        "top": 286.5,
+        "right": 119,
+        "bottom": 0
+      }
+    }
+  },
+  "metrics": {
+    "before": {
+      "nodeCount": 25,
+      "edgeCount": 74,
+      "nodeOverlaps": 0,
+      "edgeNodeHits": 4,
+      "paths": {
+        "totalLength": 64300.66,
+        "longestLength": 2399.71,
+        "totalBends": 186,
+        "maxBends": 4
+      },
+      "bounds": {
+        "x": 60,
+        "y": 930,
+        "width": 2100,
+        "height": 1477,
+        "area": 3101700
+      },
+      "fitZoom": 0.55
+    },
+    "after": {
+      "nodeCount": 25,
+      "edgeCount": 74,
+      "nodeOverlaps": 0,
+      "edgeNodeHits": 0,
+      "paths": {
+        "totalLength": 69101.48,
+        "longestLength": 2724.71,
+        "totalBends": 208,
+        "maxBends": 8
+      },
+      "bounds": {
+        "x": 60,
+        "y": 930,
+        "width": 2372,
+        "height": 1579,
+        "area": 3745388
+      },
+      "fitZoom": 0.51
+    },
+    "ratios": {
+      "bboxArea": 1.2075274849276203,
+      "totalPathLength": 1.0746620641218922,
+      "longestPath": 1.1354330314913053,
+      "fitZoom": 0.9272727272727272
+    },
+    "tradeoffs": [
+      "corePaths: distinct non-shared-endpoint crossing edge pairs increased 261 → 262, while proper intersection counts are assessed separately.",
+      "fullPaths: distinct non-shared-endpoint crossing edge pairs increased 290 → 310, while proper intersection counts are assessed separately."
+    ]
+  },
+  "privacy": "Only generated synthetic fixtures and original browser captures. No real research database, paper collection, user screenshot, credentials, user browser profile or cloud account included. No application backend, migrations, task execution or user-service changes.",
+  "limitations": [
+    "Dense central bundles and long labels can still overlap, especially at 39% zoom",
+    "Some distinct crossing edge-pair counts increase despite fewer intersection points",
+    "Local spacing caps do not guarantee the same global area ratio on arbitrary locked/grouped drawings",
+    "Over 200 non-group nodes or 800 relations uses existing disclosed simplified routes; tight fixed gaps can remain obstructed",
+    "No real data/provider, cross-browser, unrestricted full E2E, PostgreSQL RLS, mobile, deployment or CI validation; no native-startup change so --real-start not run"
+  ],
+  "evidence_sha256": {
+    "source-manifest.json": "ed72a0faa118cc9603aac825ce464e03bbfd2c46324849a972b9cc7a1205280b",
+    "before-arranged-geometry.json": "f97ba9e9fbb2518ed94198a29c093adb1b30071ff8790d59f8f42b4f84c589c0",
+    "before-arranged-detail.png": "b36825461ec3371ad45528e06e8ff396c3e6018992fd1e91e29faf06489906d4",
+    "before-arranged-overview.png": "62d367b651c85724a9f779b70fed9952832d94ad23acc2ada6ffa989da8cb3d0",
+    "unified-summary.txt": "1eb33f7b6f540f784c1d7b29b7ce69384c18800610527a9d215b1352072724f1",
+    "layout-comparison.json": "f33e97ad87cdb2d0b590fa2535955b9a7ccf6564270b48c5b8775ccd9647a9c6",
+    "after-arranged-geometry.json": "1fde170abee6adc701a17a7724f87d673f49b05669bf588fb4ab1e9764202d09",
+    "highlight-results.json": "c695057a1bd7e059b64868c7f53e6e30099865a1bb4924a72511b97134d97296",
+    "unit-results.txt": "0599f0a28727319c5e3045373eb46270adf15b3c22d4eeed7a922a20f5b59380",
+    "after-arranged-overview.png": "8d0e918edfe254e12419a4a435d9b162cda16f1083a94e23d53f5702a1fd3900",
+    "highlight-after.png": "688c8e647b5c1f8a320083abb0adfae680dce7ebc0dba3acbf0089060ffbe350",
+    "frontend-results.json": "dcbfbc911d1271264369f020ea1f760a320b6d6ea9d852235d549c03662d160a",
+    "layout-results.json": "2f0f021c85e3381a45a6b140aee876774e63d91c17cf9eaf8c15b97db8e350f6",
+    "layout-snapshot-source.json": "5c967ece647d4001cd207c14a1456b57f4c350973cb22189291358bde15b4291",
+    "cloud-results.json": "fe0e62cb214b3ddeea66882780f50147667d53a566d1fe0c44067399f1a35ff4",
+    "after-arranged-detail.png": "522808e236afbac06b904faa541f261f05d6278ccefd628887d0dbdb7ce083a5"
+  },
+  "pr": "https://github.com/vince-xunzhe/Knowra/pull/36"
+}

@@ -1,0 +1,395 @@
+{
+  "fixture": "7 synthetic papers; 6 relations (incoming, outgoing, reciprocal, unrelated); locked node/edge; isolated node; second domain reuses node IDs",
+  "baseline": false,
+  "tests": [
+    {
+      "name": "Incoming/outgoing/reciprocal edges pulse briefly then stay highlighted; data and layout remain identical",
+      "status": "passed",
+      "ms": 4258
+    },
+    {
+      "name": "Repeated switching/reselecting, Shift selection, double-click, isolated paper and blank cancellation never save",
+      "status": "passed",
+      "ms": 1413
+    },
+    {
+      "name": "A 1–4px pointer tremor is still a no-write click; a drag beyond threshold and back never activates another paper",
+      "status": "passed",
+      "ms": 1601
+    },
+    {
+      "name": "Reduced motion is static immediately; Enter selects and Escape clears without intercepting inner buttons",
+      "status": "passed",
+      "ms": 1039
+    },
+    {
+      "name": "Domain/page changes clear transient focus even when IDs are reused; reload never persists focus",
+      "status": "passed",
+      "ms": 1237
+    },
+    {
+      "name": "Zoom/pan and dragging preserve focus; dragging another card does not retarget; locked nodes remain fixed",
+      "status": "passed",
+      "ms": 4790
+    },
+    {
+      "name": "Layout preview permits inspection without mutation; compare/cancel keep original geometry and apply/undo preserve relations",
+      "status": "passed",
+      "ms": 2125
+    },
+    {
+      "name": "Highlight does not block relation evidence, lock keyboard controls or explicit connection mode",
+      "status": "passed",
+      "ms": 2880
+    },
+    {
+      "name": "Dense 23-paper graph at 39% zoom highlights every connected edge without changing routes or records",
+      "status": "passed",
+      "ms": 5043
+    },
+    {
+      "name": "Pending Agent remains read-only while allowing highlighting; shared Roadmap mode has no incident highlight",
+      "status": "passed",
+      "ms": 1998
+    }
+  ],
+  "violations": [],
+  "requests": [
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains/agent/runs",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "PUT /api/domains",
+    "PUT /api/domains",
+    "GET /api/domains/agent/runs",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/domains/agent/runs",
+    "PUT /api/domains",
+    "GET /api/domains",
+    "GET /api/domains/agent/runs",
+    "GET /api/domains/papers",
+    "GET /api/roadmaps",
+    "GET /api/roadmaps/agent/runs",
+    "GET /api/roadmaps/papers",
+    "GET /api/roadmaps/imports",
+    "GET /api/roadmaps/papers"
+  ],
+  "screenshots": [
+    "before-current.png",
+    "after-pulse.png",
+    "after-static.png",
+    "after-reduced-motion.png",
+    "after-zoom-drag-lock.png",
+    "after-layout-preview.png",
+    "after-evidence.png",
+    "dense-before-39-percent.png",
+    "dense-after-39-percent.png",
+    "dense-after-61-percent.png"
+  ],
+  "animation": {
+    "started": [
+      {
+        "id": "e0",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 0.0680000000000125,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e1",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 0.0680000000000125,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e2",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 0.0680000000000125,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e5",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 0.0680000000000125,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      }
+    ],
+    "midPulse": [
+      {
+        "id": "e0",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 650.088,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "0.653469",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "3.98811px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e1",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 650.088,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "0.653469",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "3.98811px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e2",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 650.088,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "0.653469",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "3.98811px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e5",
+        "animations": [
+          {
+            "name": "domain-edge-focus-pulse",
+            "state": "running",
+            "currentTime": 650.088,
+            "duration": 1400,
+            "iterations": 2
+          }
+        ],
+        "paths": [
+          {
+            "opacity": "0.653469",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "3.98811px",
+            "pointerEvents": "none"
+          }
+        ]
+      }
+    ],
+    "settled": [
+      {
+        "id": "e0",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e1",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e2",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e5",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      }
+    ],
+    "reducedMotion": [
+      {
+        "id": "e0",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e1",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e2",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      },
+      {
+        "id": "e5",
+        "animations": [],
+        "paths": [
+          {
+            "opacity": "1",
+            "stroke": "oklch(0.785 0.115 274.713)",
+            "strokeWidth": "2.8px",
+            "pointerEvents": "none"
+          }
+        ]
+      }
+    ]
+  },
+  "cleanupConfirmed": true,
+  "staticPort": 63834,
+  "networkScope": "Only random loopback static origin; API responses are in-memory browser mocks; no backend/database"
+}
