@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-29",
+  "branch": "codex/fix-light-paper-titles-20261029",
+  "pull_request": "https://github.com/vince-xunzhe/Knowra/pull/37",
+  "base_sha": "408953b2df18001ece19fbfc4cc4d07cfcf7ba4c",
+  "tested_sha": "90e50953d9264138624ce62e9387c8799b073c78",
+  "environment": {
+    "python": "3.12.13",
+    "node": "24.14.1",
+    "vite": "8.0.10",
+    "typescript": "6.0.3",
+    "browser": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  },
+  "checks": {
+    "native_preflight": "passed; API 8137 / Web 5217; no services started",
+    "native_startup_fixtures": { "passed": 29, "failed": 0 },
+    "isolated_backend": { "passed": 58, "failed": 0 },
+    "frontend_unit": { "passed": 33, "failed": 0 },
+    "typescript": "passed",
+    "vite_build": "passed",
+    "eslint": { "errors": 0, "warnings": 0 },
+    "lifecycle_browser": { "passed": 6, "failed": 0, "violations": 0 },
+    "diff_check": "passed"
+  },
+  "contrast": {
+    "threshold": 4.5,
+    "light_125_percent": {
+      "active_completed": { "before": 13.52185122275645, "after": 13.52185122275645 },
+      "learning": { "before": 1.011554082912229, "after": 6.905824765008221 },
+      "completed": { "before": 1.0020785431647063, "after": 7.278948286482581 },
+      "not_started": { "before": 9.421328709545122, "after": 9.421328709545122 }
+    }
+  },
+  "coverage": [
+    "light and dark themes",
+    "not started, learning and completed titles",
+    "active paper switch",
+    "category and team grouping",
+    "80% and 125% CSS zoom"
+  ],
+  "initial_expected_failure": "The new regression failed on baseline learning-title contrast at 1.01:1.",
+  "resolved_check_failure": "The first unified run stopped before frontend tests because direct baseline capture left a generated frontend/tmp directory. Only this run's generated browser artifacts were removed; a complete rerun passed.",
+  "real_start": "not run; no native startup change",
+  "data_scope": "synthetic fixtures and mock APIs only"
+}

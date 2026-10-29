@@ -997,8 +997,8 @@ function learningStatusRowClass(status: PaperLearningStatus, active: boolean): s
 
 function learningStatusTitleClass(status: PaperLearningStatus, active: boolean): string {
   if (active) return 'text-foreground font-medium'
-  if (status === 'learning') return 'text-cyan-50 font-medium'
-  if (status === 'completed') return 'text-emerald-50 font-medium'
+  if (status === 'learning') return 'text-cyan-200 font-medium'
+  if (status === 'completed') return 'text-emerald-200 font-medium'
   return 'text-slate-300'
 }
 

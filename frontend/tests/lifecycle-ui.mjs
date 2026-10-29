@@ -60,11 +60,11 @@ const sessions = {
 const indexStatus = { exists: true, path: 'fixture/index.md', size: 1024, current_papers: 2, current_concepts: 0, stale: false }
 const chat = { messages: [], thread_created_at: null, expires_at: null, days_remaining: null, ttl_days: 30, ready: true }
 const notes = blocks => '<!--notes-v2-->\n' + JSON.stringify(blocks)
-function paper(id, title, category) {
+function paper(id, title, category, learningStatus = 'not_started') {
   return { id, title, filename: `fixture-${id}.pdf`, filepath: `fixture/${id}.pdf`, authors: ['Synthetic Author'], num_pages: 1,
     processed: true, processed_at: null, paper_category: category, paper_category_model: category,
     paper_category_override: category, paper_category_source: 'manual', paper_team: null, paper_team_model: null,
-    paper_team_override: null, paper_team_source: 'none', learning_status: 'not_started', year: 2026, error: null,
+    paper_team_override: null, paper_team_source: 'none', learning_status: learningStatus, year: 2026, error: null,
     created_at: null, extracted_text: null, raw_llm_response: JSON.stringify({ title, abstract_summary: 'Synthetic abstract' }),
     extraction: { title, abstract_summary: 'Synthetic abstract' }, extraction_model: 'fixture-only',
     notes: notes([{ id: `note-${id}`, title: `${title} note`, content: `${title} original content` }]),
@@ -76,7 +76,7 @@ const deferred = () => { let release; const promise = new Promise(done => { rele
 // absence; an immediate negative assertion could pass before a stale callback.
 const settled = page => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))))
 
-async function newPage(component, apiHandler) {
+async function newPage(component, apiHandler, options = {}) {
   const page = await context.newPage()
   page.setDefaultTimeout(8000)
   page.on('pageerror', error => violations.push(String(error)))
@@ -84,8 +84,9 @@ async function newPage(component, apiHandler) {
   await page.addInitScript(seed => {
     localStorage.clear()
     localStorage.setItem('knowra.locale', 'zh')
-    localStorage.setItem('knowra:ask-drawer:sessions', JSON.stringify(seed))
-  }, sessions)
+    localStorage.setItem('knowra.theme', seed.theme)
+    localStorage.setItem('knowra:ask-drawer:sessions', JSON.stringify(seed.sessions))
+  }, { sessions, theme: options.theme ?? 'dark' })
   await page.routeWebSocket(/.*/, ws => { violations.push('Unexpected WebSocket'); ws.close() })
   await page.route('**/*', async route => {
     const request = route.request()
@@ -276,6 +277,79 @@ try {
       await expect(page.getByRole('heading', { name: 'Fixture Beta', exact: true })).toBeVisible()
     } finally { pending.release() }
   })
+  await test('Review titles preserve status contrast in both themes, selections, groups and zoom levels', async () => {
+    const papers = [
+      paper(101, 'Synthetic Active Completed', 'World models', 'completed'),
+      paper(102, 'Synthetic Learning Paper', 'World models', 'learning'),
+      paper(103, 'Synthetic Completed Paper', 'World models', 'completed'),
+      paper(104, 'Synthetic Not Started Paper', 'World models', 'not_started'),
+    ]
+    const page = await newPage('review', async (route, path) => {
+      if (path === '/api/papers') { await json(route, papers); return true }
+      if (path === '/api/paper-categories') { await json(route, { categories: [{ name: 'World models', builtin: false, removable: true, count: papers.length }] }); return true }
+      if (path === '/api/status') { await json(route, { running: false, current: null }); return true }
+      const match = path.match(/^\/api\/papers\/(101|102|103|104)(\/first_page)?$/)
+      if (!match) return false
+      if (match[2]) await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' })
+      else await json(route, papers.find(item => item.id === Number(match[1])))
+      return true
+    }, { theme: 'light' })
+    const list = page.getByTestId('review-paper-list')
+    const title = name => list.getByText(name, { exact: true })
+    const metrics = async locator => locator.evaluate(element => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 1
+      const context = canvas.getContext('2d', { willReadFrequently: true })
+      const parse = value => {
+        context.clearRect(0, 0, 1, 1)
+        context.fillStyle = value
+        context.fillRect(0, 0, 1, 1)
+        const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
+        return { rgb: [red, green, blue], alpha: alpha / 255 }
+      }
+      const over = (front, back) => front.rgb.map((value, index) => value * front.alpha + back[index] * (1 - front.alpha))
+      const ancestors = []
+      for (let node = element; node; node = node.parentElement) ancestors.push(node)
+      let background = [255, 255, 255]
+      for (const node of ancestors.reverse()) background = over(parse(getComputedStyle(node).backgroundColor), background)
+      const foreground = parse(getComputedStyle(element).color).rgb
+      const luminance = rgb => {
+        const linear = rgb.map(channel => {
+          const value = channel / 255
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+        })
+        return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+      }
+      const lighter = Math.max(luminance(foreground), luminance(background))
+      const darker = Math.min(luminance(foreground), luminance(background))
+      return { color: getComputedStyle(element).color, background, contrast: (lighter + 0.05) / (darker + 0.05) }
+    })
+    const names = ['Synthetic Active Completed', 'Synthetic Learning Paper', 'Synthetic Completed Paper', 'Synthetic Not Started Paper']
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    await page.evaluate(() => { document.documentElement.style.zoom = '125%' })
+    for (const name of names) await expect(title(name)).toBeVisible()
+    const light = Object.fromEntries(await Promise.all(names.map(async name => [name, await metrics(title(name))])))
+    const evidenceDir = process.env.KNOWRA_REVIEW_EVIDENCE_DIR
+    const evidenceName = process.env.KNOWRA_REVIEW_EVIDENCE_NAME
+    if (evidenceDir && evidenceName) {
+      await page.screenshot({ path: join(evidenceDir, `${evidenceName}.png`), animations: 'disabled' })
+      await writeFile(join(evidenceDir, `${evidenceName}-metrics.json`), JSON.stringify({ theme: 'light', zoom: 1.25, metrics: light }, null, 2) + '\n')
+    }
+    for (const result of Object.values(light)) assert.ok(result.contrast >= 4.5, `Light title contrast ${result.contrast.toFixed(2)} must be at least 4.5`)
+    await page.getByRole('button', { name: '按团队分组', exact: true }).click()
+    for (const name of names) await expect(title(name)).toBeVisible()
+    await page.evaluate(() => { document.documentElement.style.zoom = '80%' })
+    await title('Synthetic Learning Paper').click()
+    await expect(page.getByRole('heading', { name: 'Synthetic Learning Paper', exact: true })).toBeVisible()
+    assert.ok((await metrics(title('Synthetic Learning Paper'))).contrast >= 4.5)
+    await page.evaluate(() => {
+      localStorage.setItem('knowra.theme', 'dark')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'knowra.theme', newValue: 'dark' }))
+    })
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+    const dark = await Promise.all(names.map(name => metrics(title(name))))
+    for (const result of dark) assert.ok(result.contrast >= 4.5, `Dark title contrast ${result.contrast.toFixed(2)} must be at least 4.5`)
+  })
   await test('Rescue recall survives close/reopen and cannot be submitted twice', async () => {
     const pending = deferred()
     let loads = 0, recalls = 0
@@ -313,5 +387,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 5 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 6 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }
