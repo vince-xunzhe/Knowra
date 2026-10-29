@@ -108,7 +108,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search_wiki",
-            "description": "在 wiki/papers + wiki/concepts 里做 FTS5 全文搜索。返回最多 12 个 hit。",
+            "description": "在 wiki/papers + wiki/concepts 里做 FTS5 全文搜索。返回实际查询模式、尝试记录和最多 12 个 hit。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -175,7 +175,7 @@ RESPONSES_TOOLS = [
     {
         "type": "function",
         "name": "search_wiki",
-        "description": "在 wiki/papers + wiki/concepts 里做 FTS5 全文搜索。返回最多 12 个 hit。",
+        "description": "在 wiki/papers + wiki/concepts 里做 FTS5 全文搜索。返回实际查询模式、尝试记录和最多 12 个 hit。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -272,9 +272,8 @@ def _tool_list_wiki_index() -> str:
 def _tool_search_wiki(q: str) -> str:
     if not q or len(q.strip()) < 2:
         return "[搜索词太短，至少 2 字符]"
-    hits = wiki_search.search(q.strip(), limit=SEARCH_HIT_LIMIT)
-    if not hits:
-        return f"[没有匹配的 wiki 文件，关键词：{q!r}]"
+    search_result = wiki_search.search_with_fallback(q.strip(), limit=SEARCH_HIT_LIMIT)
+    hits = search_result["hits"]
     # Compact JSON so the LLM can both eyeball and machine-parse it.
     compact = [
         {
@@ -285,7 +284,24 @@ def _tool_search_wiki(q: str) -> str:
         }
         for h in hits
     ]
-    return json.dumps(compact, ensure_ascii=False, indent=2)
+    payload = {
+        "mode": search_result["mode"],
+        "executed_queries": [
+            attempt["query"]
+            for attempt in (
+                search_result["attempts"][1:]
+                if len(search_result["attempts"]) > 1
+                else search_result["attempts"]
+            )
+        ],
+        "query": search_result["query"],
+        "terms": search_result["terms"],
+        "attempts": search_result["attempts"],
+        "hits": compact,
+    }
+    if not hits:
+        payload["message"] = "没有匹配的 wiki 文件"
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _tool_read_wiki(filename: str, kind: str) -> str:
@@ -544,6 +560,8 @@ def _parse_search_hits(search_result: str) -> list[dict[str, Any]]:
         parsed = json.loads(search_result)
     except Exception:
         return []
+    if isinstance(parsed, dict):
+        parsed = parsed.get("hits")
     if not isinstance(parsed, list):
         return []
     hits: list[dict[str, Any]] = []

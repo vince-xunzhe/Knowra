@@ -19,13 +19,20 @@ import re
 import sqlite3
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from path_utils import DATA_DIR
 
 
 DB_PATH = DATA_DIR / "wiki_search.sqlite"
 WIKI_DIR = DATA_DIR / "wiki"
+
+MAX_FALLBACK_TERMS = 6
+MAX_FRONTMATTER_CHARS = 64_000
+_EntitySignature = tuple[str, int, int, str]
+_ENTITY_CACHE: Optional[
+    tuple[_EntitySignature, tuple[tuple[str, str], ...]]
+] = None
 
 
 def _log(msg: str) -> None:
@@ -103,6 +110,11 @@ def _parse_md(path: Path) -> tuple:
     )
 
 
+def _clear_entity_cache() -> None:
+    global _ENTITY_CACHE
+    _ENTITY_CACHE = None
+
+
 def _iter_dir(subdir: str, kind: str):
     base = WIKI_DIR / subdir
     if not base.exists():
@@ -145,6 +157,7 @@ def rebuild_index() -> dict:
                 )
                 counts["concept"] += 1
         total = counts["paper"] + counts["concept"]
+        _clear_entity_cache()
         _log(f"rebuilt: {total} docs ({counts['paper']} papers, {counts['concept']} concepts)")
         return {"indexed": total, **counts}
     finally:
@@ -170,9 +183,8 @@ def _sanitize(query: str) -> str:
     return " ".join(quoted)
 
 
-def search(query: str, limit: int = 20) -> List[dict]:
-    safe = _sanitize(query)
-    if not safe:
+def _search_match(match_query: str, limit: int) -> List[dict]:
+    if not match_query:
         return []
     conn = _open()
     try:
@@ -188,14 +200,249 @@ def search(query: str, limit: int = 20) -> List[dict]:
         LIMIT ?
         """
         try:
-            cur = conn.execute(sql, (safe, limit))
+            cur = conn.execute(sql, (match_query, limit))
         except sqlite3.OperationalError as e:
-            _log(f"query failed for {safe!r}: {e}")
+            _log(f"query failed for {match_query!r}: {e}")
             return []
         cols = ["kind", "filename", "path", "title", "compiled_at", "snippet", "score"]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
     finally:
         conn.close()
+
+
+def search(query: str, limit: int = 20) -> List[dict]:
+    safe = _sanitize(query)
+    return _search_match(safe, limit)
+
+
+def _entity_cache_signature() -> _EntitySignature:
+    try:
+        stat = DB_PATH.stat()
+        mtime_ns, size = stat.st_mtime_ns, stat.st_size
+    except OSError:
+        mtime_ns, size = 0, 0
+    return (str(DB_PATH.resolve()), mtime_ns, size, str(WIKI_DIR.resolve()))
+
+
+def _known_entity_surfaces() -> list[tuple[str, str]]:
+    """Return (surface, canonical title) pairs from the compiled Wiki.
+
+    The FTS table remains unchanged. Aliases and slugs are read from page
+    frontmatter only when a strict Ask query misses, then cached until the
+    derived FTS database changes.
+    """
+    global _ENTITY_CACHE
+    signature = _entity_cache_signature()
+    cached = _ENTITY_CACHE
+    if cached is not None and cached[0] == signature:
+        return list(cached[1])
+
+    from services.wiki_compiler import _parse_frontmatter
+
+    conn = _open()
+    try:
+        rows = conn.execute(
+            "SELECT kind, filename, title FROM wiki_fts ORDER BY kind, filename"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    surfaces: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for kind, filename, raw_title in rows:
+        title = str(raw_title or Path(filename).stem).strip()
+        if not title:
+            continue
+        candidates: list[Any] = [title]
+        subdir = "papers" if kind == "paper" else "concepts"
+        path = WIKI_DIR / subdir / filename
+        try:
+            frontmatter_lines: list[str] = []
+            frontmatter_size = 0
+            with path.open("r", encoding="utf-8") as stream:
+                if stream.readline() != "---\n":
+                    meta = {}
+                else:
+                    for line in stream:
+                        frontmatter_size += len(line)
+                        if frontmatter_size > MAX_FRONTMATTER_CHARS:
+                            meta = {}
+                            break
+                        if line == "---\n":
+                            text = "---\n" + "".join(frontmatter_lines) + "---\n"
+                            meta, _ = _parse_frontmatter(text)
+                            break
+                        frontmatter_lines.append(line)
+                    else:
+                        meta = {}
+        except (OSError, UnicodeError):
+            meta = {}
+        aliases = meta.get("aliases")
+        if isinstance(aliases, list):
+            candidates.extend(aliases)
+        candidates.append(meta.get("slug"))
+        for raw_surface in candidates:
+            surface = str(raw_surface or "").strip()
+            normalized = surface.casefold()
+            key = (normalized, title.casefold())
+            if len(normalized) < 2 or key in seen:
+                continue
+            seen.add(key)
+            surfaces.append((surface, title))
+
+    # One immutable snapshot avoids publishing a key from one rebuild with
+    # entity values from another when concurrent Ask requests race a reindex.
+    _ENTITY_CACHE = (signature, tuple(surfaces))
+    return surfaces
+
+
+def _surface_spans(query: str, surface: str) -> list[tuple[int, int]]:
+    if surface.isascii():
+        escaped = re.escape(surface)
+        prefix = r"(?<![A-Za-z0-9_])" if surface[0].isalnum() else ""
+        suffix = r"(?![A-Za-z0-9_])" if surface[-1].isalnum() else ""
+        return [
+            match.span()
+            for match in re.finditer(prefix + escaped + suffix, query, re.IGNORECASE)
+        ]
+    folded_query = query.casefold()
+    folded_surface = surface.casefold()
+    spans: list[tuple[int, int]] = []
+    start = folded_query.find(folded_surface)
+    while start >= 0:
+        spans.append((start, start + len(folded_surface)))
+        start = folded_query.find(folded_surface, start + 1)
+    return spans
+
+
+def _extract_known_terms(query: str) -> list[str]:
+    """Resolve explicit titles/aliases in a question to canonical titles.
+
+    Longest non-overlapping mentions win, so a generic concept such as
+    ``模型`` does not crowd out two explicit mentions such as ``世界模型`` and
+    ``动作模型``. This is deterministic entity matching, not synonym search.
+    """
+    matches: list[tuple[int, int, str, str]] = []
+    for surface, canonical in _known_entity_surfaces():
+        for start, end in _surface_spans(query, surface):
+            matches.append((start, end, surface, canonical))
+
+    selected: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for start, end, _surface, canonical in sorted(
+        matches,
+        key=lambda item: (-(item[1] - item[0]), item[0], item[3].casefold()),
+    ):
+        if any(start < used_end and end > used_start for used_start, used_end in occupied):
+            continue
+        occupied.append((start, end))
+        selected.append((start, end, canonical))
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for _start, _end, canonical in sorted(selected, key=lambda item: item[0]):
+        normalized = canonical.casefold()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        terms.append(canonical)
+        if len(terms) >= MAX_FALLBACK_TERMS:
+            break
+    return terms
+
+
+def _combine_terms(terms: list[str], operator: str) -> str:
+    groups = [_sanitize(term) for term in terms]
+    groups = [group for group in groups if group]
+    if not groups:
+        return ""
+    if len(groups) == 1:
+        return groups[0]
+    return f" {operator} ".join(f"({group})" for group in groups)
+
+
+def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
+    """Search for Ask with a strict-first deterministic entity fallback.
+
+    Existing strict hits and their ordering are returned unchanged. Only a
+    zero-hit query consults known Wiki titles/aliases. AND matches are ranked
+    first; OR matches fill the remaining slots without duplicates.
+    """
+    strict_query = _sanitize(query)
+    strict_hits = _search_match(strict_query, limit)
+    attempts = [{
+        "mode": "strict",
+        "query": strict_query,
+        "hit_count": len(strict_hits),
+    }]
+    if strict_hits:
+        return {
+            "mode": "strict",
+            "query": query,
+            "terms": [],
+            "attempts": attempts,
+            "hits": strict_hits,
+        }
+
+    terms = _extract_known_terms(query)
+    if not terms:
+        return {
+            "mode": "strict_no_match",
+            "query": query,
+            "terms": [],
+            "attempts": attempts,
+            "hits": [],
+        }
+
+    if len(terms) == 1:
+        entity_query = _combine_terms(terms, "AND")
+        entity_hits = _search_match(entity_query, limit)
+        attempts.append({
+            "mode": "entity",
+            "query": entity_query,
+            "hit_count": len(entity_hits),
+        })
+        return {
+            "mode": "entity",
+            "query": query,
+            "terms": terms,
+            "attempts": attempts,
+            "hits": entity_hits,
+        }
+
+    and_query = _combine_terms(terms, "AND")
+    and_hits = _search_match(and_query, limit)
+    attempts.append({
+        "mode": "entity_and",
+        "query": and_query,
+        "hit_count": len(and_hits),
+    })
+
+    or_query = _combine_terms(terms, "OR")
+    or_hits = _search_match(or_query, limit)
+    attempts.append({
+        "mode": "entity_or",
+        "query": or_query,
+        "hit_count": len(or_hits),
+    })
+
+    merged: list[dict] = []
+    seen_hits: set[tuple[Any, Any]] = set()
+    for hit in [*and_hits, *or_hits]:
+        key = (hit.get("kind"), hit.get("filename"))
+        if key in seen_hits:
+            continue
+        seen_hits.add(key)
+        merged.append(hit)
+        if len(merged) >= limit:
+            break
+    return {
+        "mode": "entity_and_or",
+        "query": query,
+        "terms": terms,
+        "attempts": attempts,
+        "hits": merged,
+    }
 
 
 def index_stats() -> dict:
