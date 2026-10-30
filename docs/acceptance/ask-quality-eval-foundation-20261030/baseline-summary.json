@@ -1,0 +1,36 @@
+{
+  "report_schema_version": 1,
+  "dataset": "synthetic-cross-paper-evidence-v1",
+  "tested_base_sha": "8f100da9186d383ecb601c84bbaed06bd5035518",
+  "mode": "offline_deterministic_production_fts",
+  "oracle": {
+    "long-evolution-two-entities": {
+      "source_claim_coverage": 1.0,
+      "extraction_claim_coverage": 1.0,
+      "wiki_claim_coverage": 1.0
+    },
+    "long-evolution-one-entity": {
+      "source_claim_coverage": 1.0,
+      "extraction_claim_coverage": 1.0,
+      "wiki_claim_coverage": 1.0
+    },
+    "concept-retention-oracle": {
+      "source_claim_coverage": 1.0,
+      "extraction_claim_coverage": 1.0,
+      "wiki_claim_coverage": 0.0
+    }
+  },
+  "production": {
+    "mean_recall_at_k": 0.5,
+    "mean_precision_at_k": 0.166666,
+    "mean_reciprocal_rank": 0.5,
+    "mean_ndcg_at_k": 0.5,
+    "mean_retrieved_wiki_claim_coverage": 0.25,
+    "no_answer_accuracy": 1.0,
+    "long_evolution_recall_at_k": {
+      "two_entities": 0.0,
+      "one_entity": 0.0
+    }
+  },
+  "caveat": "Synthetic diagnostic labels only. These scores establish a reproducible baseline and do not claim real-corpus or live-model answer quality. Machine-specific latency is intentionally omitted."
+}

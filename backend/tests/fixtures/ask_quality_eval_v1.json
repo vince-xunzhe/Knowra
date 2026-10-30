@@ -1,0 +1,99 @@
+{
+  "fixture_schema_version": 1,
+  "dataset": "synthetic-cross-paper-evidence-v1",
+  "privacy": "Synthetic questions, statements, entities and stable claim IDs only; no user papers, titles, questions, or database content.",
+  "description": "A fully fictional diagnostic corpus that separates extraction/Wiki retention from retrieval while preserving only the structural shape of a long cross-document evolution question.",
+  "documents": [
+    {
+      "id": "paper:separate-dynamics",
+      "kind": "paper",
+      "filename": "0001-latent-dynamics-study.md",
+      "title": "Latent Dynamics Study",
+      "aliases": ["LDS"],
+      "body": "早期方法分别训练星图编码器与轨迹解码器。星图编码器表示虚构星座，轨迹解码器在表示结果上生成航线。",
+      "source_claim_ids": ["evolution:separate-models"],
+      "extracted_claim_ids": ["evolution:separate-models"],
+      "wiki_claim_ids": ["evolution:separate-models"]
+    },
+    {
+      "id": "paper:action-conditioned",
+      "kind": "paper",
+      "filename": "0002-controlled-prediction-study.md",
+      "title": "Controlled Prediction Study",
+      "aliases": ["CPS"],
+      "body": "后续方法把轨迹作为星图编码器的条件，使星座表示直接反映航线选择，形成联合的轨迹条件编码。",
+      "source_claim_ids": ["evolution:action-conditioned"],
+      "extracted_claim_ids": ["evolution:action-conditioned"],
+      "wiki_claim_ids": ["evolution:action-conditioned"]
+    },
+    {
+      "id": "concept:predictive-control",
+      "kind": "concept",
+      "filename": "0100-predictive-control.md",
+      "title": "Predictive Control",
+      "aliases": ["PC"],
+      "body": "该概念页概述多篇虚构导航研究，但当前摘要没有保留各阶段如何改变编码耦合方式。",
+      "source_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "extracted_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "wiki_claim_ids": []
+    },
+    {
+      "id": "paper:unrelated",
+      "kind": "paper",
+      "filename": "0003-static-recognition-study.md",
+      "title": "Static Recognition Study",
+      "aliases": ["SRS"],
+      "body": "该合成论文只讨论静态图像分类，不讨论动力学、控制或模型演进。",
+      "source_claim_ids": ["task:static-recognition"],
+      "extracted_claim_ids": ["task:static-recognition"],
+      "wiki_claim_ids": ["task:static-recognition"]
+    }
+  ],
+  "queries": [
+    {
+      "id": "long-evolution-two-entities",
+      "category": "cross-paper-evolution",
+      "question": "星图编码器与轨迹解码器的结合，在建模上经历了哪些变化？",
+      "relevant_document_ids": ["paper:separate-dynamics", "paper:action-conditioned"],
+      "required_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "should_answer": true,
+      "k": 3
+    },
+    {
+      "id": "long-evolution-one-entity",
+      "category": "cross-paper-evolution",
+      "question": "星图编码器在建模上经历了哪些变化？",
+      "relevant_document_ids": ["paper:separate-dynamics", "paper:action-conditioned"],
+      "required_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "should_answer": true,
+      "k": 3
+    },
+    {
+      "id": "exact-title-control",
+      "category": "exact-title",
+      "question": "Latent Dynamics Study",
+      "relevant_document_ids": ["paper:separate-dynamics"],
+      "required_claim_ids": ["evolution:separate-models"],
+      "should_answer": true,
+      "k": 3
+    },
+    {
+      "id": "concept-retention-oracle",
+      "category": "compiled-concept-retention",
+      "question": "Predictive Control",
+      "relevant_document_ids": ["concept:predictive-control"],
+      "required_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "should_answer": true,
+      "k": 3
+    },
+    {
+      "id": "no-answer-control",
+      "category": "no-answer",
+      "question": "合成知识库中的量子引力实验结论是什么？",
+      "relevant_document_ids": [],
+      "required_claim_ids": [],
+      "should_answer": false,
+      "k": 3
+    }
+  ]
+}
