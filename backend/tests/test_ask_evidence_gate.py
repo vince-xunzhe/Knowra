@@ -161,7 +161,10 @@ class AskEvidenceGateTests(unittest.TestCase):
         self.assertIn("## 证据不足", result.answer)
         self.assertNotIn("Invented claim", result.answer)
         self.assertEqual(result.citations, [])
-        self.assertEqual([step.tool for step in result.trace], ["evidence_gate"])
+        self.assertEqual(
+            [step.tool for step in result.trace],
+            ["retrieval_budget", "evidence_gate"],
+        )
 
     def test_failed_read_does_not_become_a_citation(self):
         first = SimpleNamespace(
@@ -304,6 +307,15 @@ class AskEvidenceGateTests(unittest.TestCase):
         self.assertNotIn("fake.md", result.answer)
         self.assertEqual(result.cited_files, ["data/wiki/papers/0007-alpha.md"])
         self.assertEqual(result.citations[0]["paper_id"], 7)
+        budget_step = next(
+            step for step in result.trace if step.tool == "retrieval_budget"
+        )
+        budget = json.loads(budget_step.raw_result)
+        self.assertEqual(budget["used"]["model_calls"], 2)
+        self.assertEqual(budget["used"]["read_calls"], 1)
+        for call in client.chat.completions.create.call_args_list:
+            self.assertGreater(call.kwargs["timeout"], 0)
+            self.assertLessEqual(call.kwargs["timeout"], 180)
 
     def test_verified_graph_path_allows_only_a_structural_answer(self):
         first = SimpleNamespace(
