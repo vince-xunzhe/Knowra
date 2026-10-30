@@ -15,6 +15,8 @@ MAX_CLAIMS = 10
 MAX_EVIDENCE = 6
 MAX_PAPERS = 8
 MAX_TEMPORAL_REPAIR_CALLS = 2
+MAX_SOURCE_DRILLDOWN_CALLS = 5
+_SOURCE_SECTION_QUERY = "abstract introduction conclusion"
 _REFERENCE_HEADING = re.compile(r"^(?:references|bibliography|参考文献)\b", re.IGNORECASE)
 _TEMPORAL_MARKERS = ("演进", "变化", "经历", "发展", "evolution", "over time", "history")
 _LATIN_TERM = re.compile(r"[a-z][a-z0-9-]{2,}", re.IGNORECASE)
@@ -23,6 +25,10 @@ _GENERIC_ANCHOR_TERMS = {
     "approach", "approaches", "architecture", "architectures", "change", "changes",
     "evolution", "learned", "learning", "mechanism", "mechanisms", "method", "methods",
     "model", "models",
+}
+_GENERIC_CJK_ANCHORS = {
+    "在建模", "建模上", "模上经", "上经历", "经历了",
+    "历了哪", "了哪些", "哪些变", "些变化",
 }
 
 
@@ -63,9 +69,13 @@ def _primary_anchor_groups(query: str) -> tuple[list[str], list[str]]:
         for term in _LATIN_TERM.findall(query)
         if (normalized := _normalized_latin_term(term)) not in _GENERIC_ANCHOR_TERMS
     ))
-    cjk = list(dict.fromkeys(
-        term for term in _CJK_TERM.findall(query) if term not in {"演进", "变化"}
-    ))
+    cjk: list[str] = []
+    for run in _CJK_TERM.findall(query):
+        if run in {"演进", "变化"}:
+            continue
+        width = 3 if len(run) >= 3 else len(run)
+        cjk.extend(run[index:index + width] for index in range(len(run) - width + 1))
+    cjk = list(dict.fromkeys(term for term in cjk if term not in _GENERIC_CJK_ANCHORS))
     return latin, cjk
 
 
@@ -111,10 +121,9 @@ def _ranked_routes(
         )
         calls += 1
         for rank, item in enumerate(result["results"], 1):
-            if item["kind"] == "evidence" and (
-                not _quality_evidence(item)
-                or (anchor_query is not None and not _matches_primary_anchors(anchor_query, item))
-            ):
+            if item["kind"] == "evidence" and not _quality_evidence(item):
+                continue
+            if anchor_query is not None and not _matches_primary_anchors(anchor_query, item):
                 continue
             entry = aggregate.setdefault(
                 item["id"], {**item, "route_indexes": [], "route_score": 0.0}
@@ -199,7 +208,9 @@ def _temporal_evidence_supplements(
     stay empty, so this cannot manufacture chronological coverage.
     """
     represented = {
-        item["paper_id"] for item in _diverse(evidence_ranked, MAX_EVIDENCE)
+        item["paper_id"]
+        for item in _diverse(evidence_ranked, MAX_EVIDENCE)
+        if item.get("selection_mode") != "source_drilldown"
     }
     claim_routes: dict[str, list[int]] = {}
     for claim in claims:
@@ -234,6 +245,46 @@ def _temporal_evidence_supplements(
     return supplements, calls
 
 
+def _source_drilldown(
+    retriever: HybridClaimRetriever, papers: Sequence[str]
+) -> tuple[list[dict[str, Any]], int]:
+    """Read one bounded overview chunk per claim-selected paper.
+
+    This is a lexical cross-language fallback: paper relevance still comes from
+    the anchored claim stage, while the returned material is original source
+    text rather than the extracted claim.  It never treats the claim as evidence.
+    """
+    evidence: list[dict[str, Any]] = []
+    calls = 0
+    for paper_id in papers[:MAX_SOURCE_DRILLDOWN_CALLS]:
+        result = retriever.search(
+            _SOURCE_SECTION_QUERY,
+            kinds=["evidence"],
+            paper_ids=[paper_id],
+            limit=10,
+        )
+        calls += 1
+        candidates = [item for item in result["results"] if _quality_evidence(item)]
+        match = min(
+            candidates,
+            key=lambda item: (
+                0 if str(item.get("field_path") or "").endswith("/abstract") else 1,
+                int((item.get("locator") or {}).get("page_number") or 10**9),
+                -int(item.get("text_characters") or len(str(item.get("text") or ""))),
+                item["id"],
+            ),
+            default=None,
+        )
+        if match is not None:
+            evidence.append({
+                **match,
+                "route_indexes": [],
+                "route_score": 0.0,
+                "selection_mode": "source_drilldown",
+            })
+    return evidence, calls
+
+
 def execute_two_stage_shadow_retrieval(
     retriever: HybridClaimRetriever,
     *,
@@ -247,7 +298,10 @@ def execute_two_stage_shadow_retrieval(
     if not question.strip() or not 1 <= len(normalized) <= MAX_QUERY_ROUTES:
         raise TwoStageRetrievalError("invalid question or query route count")
     claims_ranked, claim_calls = _ranked_routes(
-        retriever, normalized, kinds=["claim"]
+        retriever,
+        normalized,
+        kinds=["claim"],
+        anchor_query=_evidence_anchor_query(normalized),
     )
     claims = _diverse(claims_ranked, MAX_CLAIMS)
     papers, years, temporal = _candidate_papers(
@@ -263,6 +317,11 @@ def execute_two_stage_shadow_retrieval(
             paper_ids=papers,
             anchor_query=anchor_query,
         )
+    drilldown_calls = 0
+    source_drilldown_used = False
+    if papers and not evidence_ranked:
+        evidence_ranked, drilldown_calls = _source_drilldown(retriever, papers)
+        source_drilldown_used = bool(evidence_ranked)
     supplements: list[dict[str, Any]] = []
     repair_calls = 0
     if temporal and papers:
@@ -274,11 +333,18 @@ def execute_two_stage_shadow_retrieval(
         [*supplements, *[item for item in evidence_ranked if item["id"] not in supplement_ids]],
         MAX_EVIDENCE,
     )
-    evidence_papers = {item["paper_id"] for item in evidence}
-    evidence_years = {years[item["paper_id"]] for item in evidence if item["paper_id"] in years}
+    anchored_evidence = [
+        item for item in evidence if item.get("selection_mode") != "source_drilldown"
+    ]
+    evidence_papers = {item["paper_id"] for item in anchored_evidence}
+    evidence_years = {
+        years[item["paper_id"]]
+        for item in anchored_evidence
+        if item["paper_id"] in years
+    }
     temporal_years_sufficient = not temporal or len(evidence_years) >= 2
     answerable = (
-        len(evidence) >= required_evidence
+        len(anchored_evidence) >= required_evidence
         and len(evidence_papers) >= required_papers
         and temporal_years_sufficient
     )
@@ -290,18 +356,24 @@ def execute_two_stage_shadow_retrieval(
         "answerable": answerable,
         "coverage": {
             "claim_papers": len(set(item["paper_id"] for item in claims)),
-            "evidence_records": len(evidence),
+            "evidence_records": len(anchored_evidence),
+            "candidate_source_records": len(evidence),
             "evidence_papers": len(evidence_papers),
             "required_papers": required_papers,
             "required_evidence": required_evidence,
             "temporal_intent": temporal,
             "temporal_years_sufficient": temporal_years_sufficient,
+            "source_drilldown_used": source_drilldown_used,
             "candidate_years": sorted({years[paper] for paper in papers if paper in years}),
             "evidence_years": sorted(evidence_years),
         },
         "budget": {
-            "search_calls": claim_calls + evidence_calls + repair_calls,
-            "max_search_calls": MAX_QUERY_ROUTES * 2 + MAX_TEMPORAL_REPAIR_CALLS,
+            "search_calls": claim_calls + evidence_calls + drilldown_calls + repair_calls,
+            "max_search_calls": (
+                MAX_QUERY_ROUTES * 2
+                + MAX_SOURCE_DRILLDOWN_CALLS
+                + MAX_TEMPORAL_REPAIR_CALLS
+            ),
             "elapsed_ms": round((perf_counter() - started) * 1000, 3),
         },
     }

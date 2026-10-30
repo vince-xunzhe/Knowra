@@ -87,8 +87,10 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
                 self.calls.append((query, tuple(kinds), tuple(paper_ids or ())))
                 if kinds == ["claim"]:
                     return {"results": [
-                        {"id": "claim-old", "paper_id": "paper-old", "kind": "claim"},
-                        {"id": "claim-new", "paper_id": "paper-new", "kind": "claim"},
+                        {"id": "claim-old", "paper_id": "paper-old", "kind": "claim",
+                         "title": "World action", "text": "world action dynamics"},
+                        {"id": "claim-new", "paper_id": "paper-new", "kind": "claim",
+                         "title": "World action", "text": "world action dynamics"},
                     ]}
                 if paper_ids == ["paper-old"]:
                     rows = ([{
@@ -131,8 +133,10 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
             def search(self, query, *, kinds, paper_ids=None, limit=10):
                 if kinds == ["claim"]:
                     return {"results": [
-                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim"},
-                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim"},
+                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim",
+                         "title": "扩散模型", "text": "扩散模型采样算法"},
+                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim",
+                         "title": "扩散模型", "text": "扩散模型采样算法"},
                     ]}
                 return {"results": [
                     {
@@ -166,9 +170,12 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
             def search(self, query, *, kinds, paper_ids=None, limit=10):
                 if kinds == ["claim"]:
                     return {"results": [
-                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim"},
-                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim"},
-                        {"id": "claim-c", "paper_id": "paper-c", "kind": "claim"},
+                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim",
+                         "title": "Diffusion sampling", "text": "diffusion sampling"},
+                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim",
+                         "title": "Diffusion sampling", "text": "diffusion sampling"},
+                        {"id": "claim-c", "paper_id": "paper-c", "kind": "claim",
+                         "title": "Diffusion sampling", "text": "diffusion sampling"},
                     ]}
                 return {"results": [
                     {
@@ -192,6 +199,77 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["evidence_papers"], 2)
         self.assertEqual(result["coverage"]["evidence_years"], [2020])
         self.assertFalse(result["coverage"]["temporal_years_sufficient"])
+
+    def test_source_drilldown_is_candidate_only_and_never_satisfies_coverage(self):
+        class DrilldownOnlyRetriever:
+            def paper_years(self, paper_ids):
+                return {"paper-a": 2018, "paper-b": 2024}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [
+                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim",
+                         "title": "世界模型", "text": "世界模型动作预测"},
+                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim",
+                         "title": "世界模型", "text": "世界模型动作预测"},
+                    ]}
+                if query == "abstract introduction conclusion":
+                    return {"results": [{
+                        "id": f"overview-{paper_ids[0]}", "paper_id": paper_ids[0],
+                        "kind": "evidence", "field_path": "pages/1/abstract",
+                        "title": "Abstract", "text": "generic overview text " * 20,
+                    }]}
+                return {"results": []}
+
+        result = execute_two_stage_shadow_retrieval(
+            DrilldownOnlyRetriever(),
+            question="世界模型在建模上经历了哪些变化？",
+            queries=["世界模型 建模 变化"],
+        )
+        self.assertFalse(result["answerable"])
+        self.assertTrue(result["coverage"]["source_drilldown_used"])
+        self.assertEqual(result["coverage"]["candidate_source_records"], 2)
+        self.assertEqual(result["coverage"]["evidence_records"], 0)
+        self.assertEqual(result["coverage"]["evidence_years"], [])
+
+    def test_source_drilldown_does_not_suppress_anchored_endpoint_repair(self):
+        class DrilldownAndRepairRetriever:
+            def paper_years(self, paper_ids):
+                return {"paper-old": 2018, "paper-new": 2024}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [
+                        {"id": "claim-old", "paper_id": "paper-old", "kind": "claim",
+                         "title": "World model", "text": "world model action dynamics"},
+                        {"id": "claim-new", "paper_id": "paper-new", "kind": "claim",
+                         "title": "World model", "text": "world model action dynamics"},
+                    ]}
+                if query == "abstract introduction conclusion":
+                    return {"results": [{
+                        "id": f"overview-{paper_ids[0]}", "paper_id": paper_ids[0],
+                        "kind": "evidence", "field_path": "pages/1/abstract",
+                        "title": "Abstract", "text": "generic overview text " * 20,
+                    }]}
+                if paper_ids and len(paper_ids) == 1:
+                    return {"results": [{
+                        "id": f"evidence-{paper_ids[0]}", "paper_id": paper_ids[0],
+                        "kind": "evidence", "field_path": "pages/2/body",
+                        "title": "World model action dynamics",
+                        "text": "world model action dynamics transition " * 20,
+                    }]}
+                return {"results": []}
+
+        result = execute_two_stage_shadow_retrieval(
+            DrilldownAndRepairRetriever(),
+            question="How did world models change over time?",
+            queries=["world model action dynamics"],
+        )
+        self.assertTrue(result["answerable"])
+        self.assertTrue(result["coverage"]["source_drilldown_used"])
+        self.assertEqual(result["coverage"]["candidate_source_records"], 4)
+        self.assertEqual(result["coverage"]["evidence_records"], 2)
+        self.assertEqual(result["coverage"]["evidence_years"], [2018, 2024])
 
 
 if __name__ == "__main__":

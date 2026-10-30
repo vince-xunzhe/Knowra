@@ -96,6 +96,8 @@ ASK_SYSTEM_PROMPT = (
     "7. index 和 search_wiki 只能用于定位，不能单独支持论文内容结论；内容结论必须来自成功的 read_wiki\n"
     "8. 只引用本轮工具实际成功读取或返回的来源，不得把未读取的文件或 [[paper:id]] 当成引用\n"
     f"9. 根据结果调整路径：零命中时换用另一个明确标题/实体查询；有命中后读取候选，证据不足才继续检索。"
+    "跨论文、机制或演进问题最多使用 4 条互补的紧凑搜索路由；每条保留核心主题，"
+    "在中英文材料可能并存时加入明确的英文术语或别名，不要把整句问题重复作为所有路由。\n"
     f"每轮最多 {MAX_SEARCH_CALLS} 次搜索、{MAX_READ_CALLS} 次读取、{MAX_MODEL_CALLS} 次模型调用，"
     f"总工具调用不超过 {MAX_TOOL_CALLS} 次、图查询不超过 {MAX_GRAPH_CALLS} 次，"
     f"read_wiki 正文不超过 {MAX_RUN_READ_CHARS} 字符、index 最多 {MAX_INDEX_CHARS} 字符，"
@@ -842,10 +844,22 @@ def _finish_result(
         gate_payload,
         0,
     ))
+    shadow_routes = []
+    for step in trace:
+        if step.tool != "search_wiki":
+            continue
+        route = str(step.args.get("q") or "").strip()
+        if route and route not in shadow_routes:
+            shadow_routes.append(route)
+        if len(shadow_routes) == 4:
+            break
+    if not shadow_routes:
+        shadow_routes = [question]
     shadow_started = perf_counter()
     shadow_observation = ask_shadow_integration.observe_question(
         question,
         adapter="cli" if model.startswith("codex-cli/") else "api",
+        query_routes=shadow_routes,
     )
     if shadow_observation["status"] != "disabled":
         shadow_duration_ms = max(
