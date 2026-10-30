@@ -28,12 +28,59 @@ class AskQualityEvaluationTests(unittest.TestCase):
         oracle = {case["id"]: case for case in report["oracle"]["cases"]}
         observed = oracle["long-evolution-two-entities"]
         self.assertEqual(observed["source_claim_upper_bound"]["coverage"], 1.0)
+        self.assertEqual(observed["evidence_claim_upper_bound"]["coverage"], 1.0)
         self.assertEqual(observed["extraction_claim_upper_bound"]["coverage"], 1.0)
         self.assertEqual(observed["wiki_claim_upper_bound"]["coverage"], 1.0)
 
         concept = oracle["concept-retention-oracle"]
         self.assertEqual(concept["extraction_claim_upper_bound"]["coverage"], 1.0)
         self.assertEqual(concept["wiki_claim_upper_bound"]["coverage"], 0.0)
+
+    def test_evidence_oracle_exposes_parser_loss_and_ungrounded_extraction(self):
+        fixture = copy.deepcopy(self.fixture)
+        fixture["documents"][0]["evidence_claim_ids"] = []
+
+        report = evaluate_fixture(fixture)
+        oracle = {case["id"]: case for case in report["oracle"]["cases"]}
+        case = oracle["long-evolution-two-entities"]
+        self.assertEqual(case["source_claim_upper_bound"]["coverage"], 1.0)
+        self.assertEqual(case["evidence_claim_upper_bound"]["coverage"], 0.5)
+        self.assertEqual(case["extraction_claim_upper_bound"]["coverage"], 1.0)
+        self.assertEqual(
+            case["extraction_without_evidence_claim_ids"],
+            ["evolution:separate-models"],
+        )
+
+    def test_missing_evidence_annotations_are_unavailable_not_source_fallback(self):
+        fixture = copy.deepcopy(self.fixture)
+        del fixture["documents"][0]["evidence_claim_ids"]
+
+        report = evaluate_fixture(fixture)
+        oracle = {case["id"]: case for case in report["oracle"]["cases"]}
+        evidence = oracle["long-evolution-two-entities"][
+            "evidence_claim_upper_bound"
+        ]
+        self.assertFalse(evidence["available"])
+        self.assertIsNone(evidence["coverage"])
+        self.assertEqual(
+            evidence["reason"], "evidence_claim_ids_not_annotated"
+        )
+        self.assertEqual(
+            evidence["unannotated_document_ids"],
+            ["paper:separate-dynamics"],
+        )
+        self.assertIsNone(
+            oracle["long-evolution-two-entities"][
+                "extraction_without_evidence_claim_ids"
+            ]
+        )
+
+    def test_fixture_validation_rejects_evidence_without_source_support(self):
+        fixture = copy.deepcopy(self.fixture)
+        fixture["documents"][0]["evidence_claim_ids"] = ["claim:not-in-source"]
+
+        with self.assertRaisesRegex(FixtureError, "evidence claims lack source support"):
+            evaluate_fixture(fixture)
 
     def test_long_evolution_question_shape_fails_without_body_aware_retrieval(self):
         report = evaluate_fixture(self.fixture)

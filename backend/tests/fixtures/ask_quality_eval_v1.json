@@ -12,6 +12,7 @@
       "aliases": ["LDS"],
       "body": "早期方法分别训练星图编码器与轨迹解码器。星图编码器表示虚构星座，轨迹解码器在表示结果上生成航线。",
       "source_claim_ids": ["evolution:separate-models"],
+      "evidence_claim_ids": ["evolution:separate-models"],
       "extracted_claim_ids": ["evolution:separate-models"],
       "wiki_claim_ids": ["evolution:separate-models"]
     },
@@ -23,6 +24,7 @@
       "aliases": ["CPS"],
       "body": "后续方法把轨迹作为星图编码器的条件，使星座表示直接反映航线选择，形成联合的轨迹条件编码。",
       "source_claim_ids": ["evolution:action-conditioned"],
+      "evidence_claim_ids": ["evolution:action-conditioned"],
       "extracted_claim_ids": ["evolution:action-conditioned"],
       "wiki_claim_ids": ["evolution:action-conditioned"]
     },
@@ -34,6 +36,7 @@
       "aliases": ["PC"],
       "body": "该概念页概述多篇虚构导航研究，但当前摘要没有保留各阶段如何改变编码耦合方式。",
       "source_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
+      "evidence_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
       "extracted_claim_ids": ["evolution:separate-models", "evolution:action-conditioned"],
       "wiki_claim_ids": []
     },
@@ -45,6 +48,7 @@
       "aliases": ["SRS"],
       "body": "该合成论文只讨论静态图像分类，不讨论动力学、控制或模型演进。",
       "source_claim_ids": ["task:static-recognition"],
+      "evidence_claim_ids": ["task:static-recognition"],
       "extracted_claim_ids": ["task:static-recognition"],
       "wiki_claim_ids": ["task:static-recognition"]
     }

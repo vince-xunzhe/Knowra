@@ -1,8 +1,9 @@
 """Deterministic, privacy-safe quality evaluation for the Ask evidence pipeline.
 
-The evaluator deliberately separates three questions that production tests used
+The evaluator deliberately separates four questions that production tests used
 to conflate:
 
+* did page evidence preserve a source-supported claim?
 * did extraction preserve a source-supported claim?
 * did the compiled Wiki retain that claim?
 * did production retrieval rank a document containing the claim?
@@ -98,6 +99,19 @@ def validate_fixture(fixture: dict[str, Any]) -> None:
             )
             for field in ("source_claim_ids", "extracted_claim_ids", "wiki_claim_ids")
         }
+        if "evidence_claim_ids" in document:
+            claims["evidence_claim_ids"] = set(_as_unique_strings(
+                document["evidence_claim_ids"],
+                field=f"documents[{index}].evidence_claim_ids",
+            ))
+            unsupported_evidence = (
+                claims["evidence_claim_ids"] - claims["source_claim_ids"]
+            )
+            if unsupported_evidence:
+                raise FixtureError(
+                    f"documents[{index}] evidence claims lack source support: "
+                    f"{sorted(unsupported_evidence)}"
+                )
         unsupported_extraction = claims["extracted_claim_ids"] - claims["source_claim_ids"]
         if unsupported_extraction:
             raise FixtureError(
@@ -219,7 +233,8 @@ def _claim_coverage(
     required = set(required_claim_ids)
     available: set[str] = set()
     for document_id in document_ids:
-        available.update(documents[document_id].get(field, []))
+        document = documents[document_id]
+        available.update(document.get(field, []))
     covered = sorted(required & available)
     missing = sorted(required - available)
     return {
@@ -229,6 +244,37 @@ def _claim_coverage(
         "covered_claim_ids": covered,
         "missing_claim_ids": missing,
     }
+
+
+def _optional_evidence_claim_coverage(
+    document_ids: list[str],
+    documents: dict[str, dict[str, Any]],
+    required_claim_ids: list[str],
+) -> dict[str, Any]:
+    """Report unannotated evidence as unavailable, never as source-equivalent."""
+    missing_annotations = [
+        document_id
+        for document_id in document_ids
+        if "evidence_claim_ids" not in documents[document_id]
+    ]
+    if missing_annotations:
+        return {
+            "available": False,
+            "reason": "evidence_claim_ids_not_annotated",
+            "unannotated_document_ids": missing_annotations,
+            "required": len(required_claim_ids),
+            "covered": None,
+            "coverage": None,
+            "covered_claim_ids": [],
+            "missing_claim_ids": [],
+        }
+    result = _claim_coverage(
+        document_ids,
+        documents,
+        required_claim_ids,
+        "evidence_claim_ids",
+    )
+    return {"available": True, **result}
 
 
 def _write_document(root: Path, document: dict[str, Any]) -> None:
@@ -380,6 +426,10 @@ def _oracle_report(fixture: dict[str, Any]) -> dict[str, Any]:
         if not query["should_answer"]:
             continue
         relevant = query["relevant_document_ids"]
+        evidence_annotations_available = all(
+            "evidence_claim_ids" in documents[document_id]
+            for document_id in relevant
+        )
         cases.append(
             {
                 "id": query["id"],
@@ -389,6 +439,11 @@ def _oracle_report(fixture: dict[str, Any]) -> dict[str, Any]:
                     documents,
                     query.get("required_claim_ids", []),
                     "source_claim_ids",
+                ),
+                "evidence_claim_upper_bound": _optional_evidence_claim_coverage(
+                    relevant,
+                    documents,
+                    query.get("required_claim_ids", []),
                 ),
                 "extraction_claim_upper_bound": _claim_coverage(
                     relevant,
@@ -402,6 +457,22 @@ def _oracle_report(fixture: dict[str, Any]) -> dict[str, Any]:
                     query.get("required_claim_ids", []),
                     "wiki_claim_ids",
                 ),
+                "extraction_without_evidence_claim_ids": sorted(
+                    {
+                        claim
+                        for document_id in relevant
+                        for claim in documents[document_id].get(
+                            "extracted_claim_ids", []
+                        )
+                    }
+                    - {
+                        claim
+                        for document_id in relevant
+                        for claim in documents[document_id].get(
+                            "evidence_claim_ids", []
+                        )
+                    }
+                ) if evidence_annotations_available else None,
             }
         )
     return {
@@ -432,7 +503,7 @@ def evaluate_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
         "mode": "offline_deterministic_production_fts",
         "scope": {
             "measured": [
-                "source/extraction/Wiki claim-label upper bounds",
+                "source/evidence/extraction/Wiki claim-label upper bounds",
                 "production FTS retrieval recall, ranking, abstention, and latency",
                 "retrieved Wiki claim-label coverage",
             ],
