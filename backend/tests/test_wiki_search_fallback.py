@@ -182,6 +182,9 @@ class WikiSearchFallbackTests(unittest.TestCase):
             len([step for step in result.trace if step.tool == "read_wiki"]),
             2,
         )
+        self.assertEqual(result.trace[-1].tool, "evidence_gate")
+        self.assertIn('"status":"supported"', result.trace[-1].result_summary)
+        self.assertGreaterEqual(len(result.citations), 2)
         self.assertIn("[read_wiki 材料]", model_call.call_args.kwargs["user"])
 
     def test_api_tool_loop_receives_structured_fallback_result(self):

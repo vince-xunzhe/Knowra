@@ -99,12 +99,16 @@ class AskAgentResponsesTests(unittest.TestCase):
             model="gpt-5.4",
         )
 
-        self.assertEqual(result.answer, "## Answer\n\nDone.")
+        self.assertIn("## Answer\n\nDone.", result.answer)
+        self.assertIn("仅基于 Wiki 索引", result.answer)
+        self.assertIn("data/wiki/index.md", result.answer)
         self.assertEqual(result.model, "gpt-5.4")
-        self.assertEqual(result.steps, 1)
-        self.assertEqual(len(result.trace), 1)
+        self.assertEqual(result.steps, 2)
+        self.assertEqual(len(result.trace), 2)
         self.assertEqual(result.trace[0].tool, "list_wiki_index")
         self.assertEqual(result.trace[0].args, {})
+        self.assertEqual(result.trace[1].tool, "evidence_gate")
+        self.assertEqual(result.citations[0]["kind"], "index")
         mock_dispatch_tool.assert_called_once_with(ANY, "list_wiki_index", {})
 
         first_call = client.responses.create.call_args_list[0].kwargs
@@ -157,12 +161,13 @@ class AskAgentResponsesTests(unittest.TestCase):
             reasoning_effort="high",
         )
 
-        self.assertEqual(result.answer, "## Answer\n\nLocal Codex.")
+        self.assertIn("## Answer\n\nLocal Codex.", result.answer)
+        self.assertIn("当前只成功读取 1 份 Wiki 内容材料", result.answer)
         self.assertEqual(result.model, "codex-cli/gpt-5.4")
-        self.assertEqual(result.steps, 3)
+        self.assertEqual(result.steps, 4)
         self.assertEqual(
             [step.tool for step in result.trace],
-            ["list_wiki_index", "search_wiki", "read_wiki"],
+            ["list_wiki_index", "search_wiki", "read_wiki", "evidence_gate"],
         )
         self.assertIn("data/wiki/papers/0001-test.md", result.cited_files)
         self.assertEqual(result.citations[0]["kind"], "paper")
