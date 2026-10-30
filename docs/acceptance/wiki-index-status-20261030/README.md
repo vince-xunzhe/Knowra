@@ -99,6 +99,8 @@ Environment:
 
 - Base: `origin/main` at `7780a9df09ff10e2305e6d9ef48ee40a81edca6c`
   (merged PR #40)
+- Tested implementation commit: `767b1aa2ebdfcec1581480647b447e8d6b5ecca1`;
+  the following delivery commit only records the PR and tested SHA
 - Branch: `codex/wiki-index-status-20261030`
 - Worktree: `/private/tmp/knowra-wiki-index-status-20261030`
 - Python: 3.12.13, worktree-local `backend/.venv`
@@ -137,8 +139,9 @@ was not run because no native startup path changed and this iteration is
 restricted to synthetic checks without starting services. PostgreSQL RLS,
 unrestricted E2E, real providers, mobile, deployment, and merge were omitted.
 
-Delivery PR and the exact tested commit SHA are filled after the reviewed diff
-is committed and published.
+Delivery: [PR #41](https://github.com/vince-xunzhe/Knowra/pull/41), opened
+non-Draft for user review. GitHub status and checks are verified after the
+delivery commit is pushed; no merge or deployment is performed.
 
 ## Independent review
 
