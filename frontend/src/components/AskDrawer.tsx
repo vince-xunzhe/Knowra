@@ -1044,7 +1044,7 @@ function AssistantTurn({
     },
     [onExport, exporting],
   )
-  const citations = useMemo(() => {
+  const citations = useMemo<AskCitation[]>(() => {
     if (turn.citations && turn.citations.length > 0) {
       return turn.citations
     }
@@ -1109,8 +1109,13 @@ function AssistantTurn({
             <div className="text-[10px] font-medium text-slate-400">{tr("引用来源")}</div>
             <ul className="mt-1.5 space-y-1 text-[10.5px] text-slate-500">
               {citations.map((citation, index) => (
-                <li key={`${citation.ref}-${index}`} className="truncate">
-                  <code>{formatCitation(citation)}</code>
+                <li key={`${citation.ref}-${index}`}>
+                  <code className="block truncate">{formatCitation(citation)}</code>
+                  {citation.quote && (
+                    <blockquote className="mt-1 border-l-2 border-indigo-500/30 pl-2 text-[10px] leading-4 text-slate-400 line-clamp-3">
+                      {citation.quote}
+                    </blockquote>
+                  )}
                 </li>
               ))}
             </ul>
@@ -1186,16 +1191,18 @@ function formatCitation(citation: AskCitation): string {
     : citation.kind === 'graph_edge'
       ? `${tr("结构关系")} · `
       : `${tr("Wiki 内容")} · `
-  if (citation.path && citation.path.trim()) {
-    return prefix + citation.path
+  const source = citation.path?.trim()
+    || citation.ref?.trim()
+    || citation.filename?.trim()
+    || 'unknown'
+  const location: string[] = []
+  if (citation.page_number != null) location.push(`p.${citation.page_number}`)
+  const section = citation.section_heading?.trim() || citation.section_kind?.trim()
+  if (section) location.push(section)
+  if (citation.char_start != null && citation.char_end != null) {
+    location.push(`chars ${citation.char_start}-${citation.char_end}`)
   }
-  if (citation.ref && citation.ref.trim()) {
-    return prefix + citation.ref
-  }
-  if (citation.filename && citation.filename.trim()) {
-    return prefix + citation.filename
-  }
-  return prefix + 'unknown'
+  return prefix + source + (location.length > 0 ? ` · ${location.join(' · ')}` : '')
 }
 
 function SynthesisSaveModal({

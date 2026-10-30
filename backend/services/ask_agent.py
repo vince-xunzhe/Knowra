@@ -40,7 +40,7 @@ ensure_project_root_on_path()
 from model_gateway import create_openai_client_for_model
 from model_gateway import call_text_model, get_model_entry, get_provider_entry
 from model_gateway import task_context, track_call
-from services import graph_query_service, wiki_index, wiki_search
+from services import ask_shadow_integration, graph_query_service, wiki_index, wiki_search
 from services.ask_retrieval_budget import (
     MAX_GRAPH_CALLS,
     MAX_INDEX_CHARS,
@@ -842,6 +842,29 @@ def _finish_result(
         gate_payload,
         0,
     ))
+    shadow_started = perf_counter()
+    shadow_observation = ask_shadow_integration.observe_question(
+        question,
+        adapter="cli" if model.startswith("codex-cli/") else "api",
+    )
+    if shadow_observation["status"] != "disabled":
+        shadow_duration_ms = max(
+            0, int(round((perf_counter() - shadow_started) * 1_000))
+        )
+        shadow_payload = ask_shadow_integration.observation_trace_payload(
+            shadow_observation
+        )
+        trace.append(_trace_step(
+            len(trace),
+            "shadow_retrieval",
+            {
+                "mode": "observe",
+                "generation_id": shadow_observation.get("generation_id"),
+            },
+            shadow_payload,
+            shadow_duration_ms,
+        ))
+        duration_ms += shadow_duration_ms
     return AskResult(
         answer=_finalize_answer(answer, assessment, citations),
         cited_files=cited_files,

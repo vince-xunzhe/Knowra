@@ -161,6 +161,53 @@ try {
     await expect(title).toHaveValue('')
     assert.equal(asks, 1, 'One click must issue exactly one ask')
   })
+  await test('Ask renders exact page citations without exposing shadow candidates', async () => {
+    let asks = 0
+    const page = await newPage('ask', async (route, path) => {
+      if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
+      if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
+      if (path === '/api/wiki/ask') {
+        asks++
+        await json(route, {
+          answer: '## 合成回答\n\n动作成为潜在转移的显式输入。',
+          cited_files: ['data/wiki/papers/0001-fixture.md'],
+          citations: [{
+            kind: 'paper',
+            ref: 'data/wiki/papers/0001-fixture.md',
+            path: 'data/wiki/papers/0001-fixture.md',
+            filename: '0001-fixture.md',
+            paper_id: 1,
+            page_number: 7,
+            section_kind: 'method',
+            section_heading: '3. Method',
+            quote: 'Actions enter the latent transition directly.',
+            char_start: 120,
+            char_end: 165,
+            evidence_id: 'evidence:fixture',
+            support_record_id: 'support:fixture',
+            manifest_id: 'manifest:fixture',
+            relationship: 'supports',
+            provenance_status: 'adjudicated_support',
+          }],
+          trace: [{ step: 0, tool: 'shadow_retrieval', args: { mode: 'observe' }, result_summary: 'candidate-only', duration_ms: 2, hit_node_ids: [] }],
+          model: 'fixture-model',
+          session_title: '合成证据',
+          session_id: 'fixture-a',
+          duration_ms: 12,
+          steps: 1,
+        })
+        return true
+      }
+      return false
+    })
+    const input = page.getByPlaceholder(/^问点什么/)
+    await input.fill('How did action enter the model?')
+    await page.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(page.getByText('Actions enter the latent transition directly.', { exact: true })).toBeVisible()
+    await expect(page.getByText(/p\.7 · 3\. Method · chars 120-165/)).toBeVisible()
+    await expect(page.getByText('candidate-only', { exact: false })).toHaveCount(0)
+    assert.equal(asks, 1)
+  })
   await test('Ask reopen ignores stale index and cross-session export responses', async () => {
     const oldIndex = deferred(), exportReply = deferred()
     let indexes = 0, exports = 0
@@ -451,5 +498,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 7 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 8 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

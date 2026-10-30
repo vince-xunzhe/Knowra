@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+from collections.abc import Mapping
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -78,7 +79,24 @@ class AskCitation(BaseModel):
     ref: str
     path: Optional[str] = None
     filename: Optional[str] = None
-    paper_id: Optional[int] = None
+    paper_id: Optional[Union[int, str]] = None
+    page_number: Optional[int] = Field(default=None, ge=1)
+    section_kind: Optional[str] = Field(default=None, max_length=100)
+    section_heading: Optional[str] = Field(default=None, max_length=200)
+    quote: Optional[str] = Field(default=None, max_length=3000)
+    char_start: Optional[int] = Field(default=None, ge=0)
+    char_end: Optional[int] = Field(default=None, ge=0)
+    evidence_id: Optional[str] = Field(default=None, max_length=200)
+    support_record_id: Optional[str] = Field(default=None, max_length=200)
+    manifest_id: Optional[str] = Field(default=None, max_length=200)
+    number: Optional[int] = Field(default=None, ge=1)
+    claim_id: Optional[str] = Field(default=None, max_length=200)
+    assessor_version: Optional[str] = Field(default=None, max_length=200)
+    source_file_hash: Optional[str] = Field(default=None, max_length=64)
+    chunk_char_start: Optional[int] = Field(default=None, ge=0)
+    chunk_char_end: Optional[int] = Field(default=None, ge=0)
+    relationship: Optional[str] = Field(default=None, max_length=20)
+    provenance_status: Optional[str] = Field(default=None, max_length=100)
 
 
 class AskResponse(BaseModel):
@@ -138,6 +156,58 @@ def _suggest_ask_session_title(
     return cleaned or None
 
 
+def _normalize_ask_citation(item: Mapping[str, object]) -> AskCitation:
+    """Map legacy citations and claim/span citations onto one HTTP contract."""
+    raw_locator = item.get("locator")
+    locator = raw_locator if isinstance(raw_locator, Mapping) else {}
+    relationship = item.get("relationship")
+    if relationship not in {"supports", "contradicts", "insufficient"}:
+        relationship = None
+    provenance_status = item.get("provenance_status")
+    if not isinstance(provenance_status, str) and relationship is not None:
+        provenance_status = {
+            "supports": "adjudicated_support",
+            "contradicts": "adjudicated_contradiction",
+            "insufficient": "adjudicated_insufficient",
+        }[relationship]
+    paper_id = item.get("paper_id", locator.get("paper_id"))
+    path = item.get("path")
+    filename = item.get("filename")
+    ref = item.get("ref") or path or filename
+    if not ref and paper_id is not None:
+        ref = f"paper:{paper_id}"
+    return AskCitation(
+        kind=str(item.get("kind") or ("paper" if locator else "unknown")),
+        ref=str(ref or ""),
+        path=path if isinstance(path, str) else None,
+        filename=filename if isinstance(filename, str) else None,
+        paper_id=paper_id,
+        page_number=item.get("page_number", locator.get("page_number")),
+        section_kind=item.get("section_kind", locator.get("section_kind")),
+        section_heading=item.get(
+            "section_heading", locator.get("section_heading")
+        ),
+        quote=item.get("quote"),
+        char_start=item.get("char_start", locator.get("page_char_start")),
+        char_end=item.get("char_end", locator.get("page_char_end")),
+        evidence_id=item.get("evidence_id"),
+        support_record_id=item.get("support_record_id"),
+        manifest_id=item.get("manifest_id", locator.get("manifest_id")),
+        number=item.get("number"),
+        claim_id=item.get("claim_id"),
+        assessor_version=item.get("assessor_version"),
+        source_file_hash=item.get(
+            "source_file_hash", locator.get("source_file_hash")
+        ),
+        chunk_char_start=item.get(
+            "chunk_char_start", locator.get("chunk_char_start")
+        ),
+        chunk_char_end=item.get("chunk_char_end", locator.get("chunk_char_end")),
+        relationship=relationship,
+        provenance_status=provenance_status,
+    )
+
+
 @router.post("/ask", response_model=AskResponse)
 def ask(body: AskRequest, db: Session = Depends(get_db)):
     question = (body.question or "").strip()
@@ -169,13 +239,7 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
         answer=result.answer,
         cited_files=result.cited_files,
         citations=[
-            AskCitation(
-                kind=str(item.get("kind") or "unknown"),
-                ref=str(item.get("ref") or ""),
-                path=item.get("path"),
-                filename=item.get("filename"),
-                paper_id=item.get("paper_id"),
-            )
+            _normalize_ask_citation(item)
             for item in result.citations
             if isinstance(item, dict)
         ],

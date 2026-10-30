@@ -154,6 +154,8 @@ DoD：claim 支持率、引用定位准确率、完整性和拒答正确率达�
 
 当前进展：合成端到端链路已串通 evidence→claim compile→hybrid retrieve→span adjudication→exact citation/refusal。固定长中文问题相对词法基线的四项 oracle Recall@4 从 0.00 到 1.00，Precision@4=1.00；随机无答案完整走到无引用拒答，与 `world/action/model/dynamics` 重叠且向量非正交的制造业负例被召回后仍被证据门槛拒绝，未披露冲突同样拒绝。这只证明接口组合与门槛，不证明真实 embedding、自动 adjudication 或私有语料质量。真实 shadow 重编译尚未获批，必须先完成下一节的一致备份与隔离恢复验证；在此之前生产 Ask 不变且不发布本次 PR 链。
 
+等待备份决策期间的默认关闭接线：生产 Ask 已增加 `off`／`observe` 两态 shadow bridge；默认不解析 storage，observe 只读由实际文件 SHA-256/字节数与 corpus/dense 元数据共同绑定的隔离索引，并输出无正文候选计数、coverage 与完整观察预算 trace，绝不改变现有答案或引用。SQLite immutable 读取、前后文件复核与检索共享有界耗时，损坏记录 fail closed。CLI/API 共享语义；HTTP/前端无损投影现有 claim/span 引用的页、章节、quote、字符 span、claim／support／manifest／source hash 与 adjudication 字段。文件 hash 不是外部可信签名；没有 `enforce` 模式、真实 generation 或 runtime embedding provider，故这不是生产切换，也不缩短备份和私有评测门禁。
+
 ## 5. 真实数据重编译前的备份与恢复门禁
 
 本轮没有执行备份，也没有读取或改动真实资料。真正需要重编译时，必须先由用户确定备份目标、加密、保留周期和维护窗口，然后执行独立任务：
