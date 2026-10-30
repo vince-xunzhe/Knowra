@@ -30,6 +30,7 @@ TESTS = (
     "tests.test_wiki_index_status",
     "tests.test_ask_evidence_gate",
     "tests.test_ask_retrieval_orchestration",
+    "tests.test_ask_quality_eval",
 )
 
 
@@ -153,7 +154,12 @@ def main() -> int:
                 for filename in files:
                     source = Path(parent) / filename
                     relative = source.relative_to(project)
-                    if source.is_symlink() or not (source.suffix == ".py" or ("prompt_locales" in relative.parts and source.suffix == ".md")):
+                    is_source = source.suffix == ".py"
+                    is_prompt = "prompt_locales" in relative.parts and source.suffix == ".md"
+                    is_test_fixture = relative == Path(
+                        "backend/tests/fixtures/ask_quality_eval_v1.json"
+                    )
+                    if source.is_symlink() or not (is_source or is_prompt or is_test_fixture):
                         continue
                     target = root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
