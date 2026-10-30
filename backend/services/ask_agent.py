@@ -331,6 +331,7 @@ def _tool_search_wiki(q: str) -> str:
                 if len(search_result["attempts"]) > 1
                 else search_result["attempts"]
             )
+            if attempt.get("query")
         ],
         "query": search_result["query"],
         "terms": search_result["terms"],

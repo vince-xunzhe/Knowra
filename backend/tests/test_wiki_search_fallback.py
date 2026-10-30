@@ -14,6 +14,7 @@ from services.wiki_compiler import _render_frontmatter
 
 
 QUESTION = "世界模型与动作模型的结合，在建模上经历了哪些变化？"
+SINGLE_TERM_QUESTION = "世界模型在建模上经历了哪些变化？"
 
 
 def _write_page(path: Path, *, title: str, aliases: list[str], body: str) -> None:
@@ -120,7 +121,7 @@ class WikiSearchFallbackTests(unittest.TestCase):
         self.assertEqual(filenames[0], "0003-world-action-integration.md")
         self.assertEqual(len(filenames), len(set(filenames)))
 
-    def test_unknown_question_stops_after_strict_search(self):
+    def test_unknown_question_without_technical_terms_stops_after_strict_search(self):
         result = wiki_search.search_with_fallback("完全未知且无实体的问题", limit=12)
 
         self.assertEqual(result["mode"], "strict_no_match")
@@ -222,6 +223,278 @@ class WikiSearchFallbackTests(unittest.TestCase):
         tool_output = client.responses.create.call_args_list[1].kwargs["input"][0]["output"]
         payload = json.loads(tool_output)
         self.assertEqual(payload["mode"], "entity_and_or")
+        self.assertGreater(len(payload["hits"]), 0)
+        self.assertEqual(result.trace[0].tool, "search_wiki")
+
+
+class WikiBodyTermFallbackTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.wiki_dir = root / "wiki"
+        self.papers_dir = self.wiki_dir / "papers"
+        self.concepts_dir = self.wiki_dir / "concepts"
+        self.db_path = root / "wiki_search.sqlite"
+        _write_page(
+            self.papers_dir / "0001-latent-dynamics.md",
+            title="Latent Dynamics Study",
+            aliases=["LD"],
+            body="该工作使用世界模型预测环境状态并支持规划。",
+        )
+        _write_page(
+            self.papers_dir / "0002-controllable-policy.md",
+            title="Controllable Policy Study",
+            aliases=["CPS"],
+            body="该工作使用动作模型表示可控动作并生成策略。",
+        )
+        _write_page(
+            self.concepts_dir / "0003-joint-predictive-control.md",
+            title="Joint Predictive Control",
+            aliases=["JPC"],
+            body="后续方法联合世界模型和动作模型，在想象环境中执行闭环控制。",
+        )
+        _write_page(
+            self.concepts_dir / "0004-unrelated.md",
+            title="Unrelated Baseline",
+            aliases=["UB"],
+            body="这是一份完全无关的合成材料。",
+        )
+        self.db_patch = patch.object(wiki_search, "DB_PATH", self.db_path)
+        self.wiki_patch = patch.object(wiki_search, "WIKI_DIR", self.wiki_dir)
+        self.db_patch.start()
+        self.wiki_patch.start()
+        wiki_search._clear_entity_cache()
+        wiki_search.rebuild_index()
+
+    def tearDown(self):
+        wiki_search._clear_entity_cache()
+        self.wiki_patch.stop()
+        self.db_patch.stop()
+        self.temporary.cleanup()
+
+    def test_original_two_term_question_recovers_body_only_phrases(self):
+        self.assertEqual(wiki_search.search(QUESTION), [])
+        self.assertEqual(wiki_search._extract_known_terms(QUESTION), [])
+
+        result = wiki_search.search_with_fallback(QUESTION, limit=12)
+
+        self.assertEqual(result["mode"], "body_and_or")
+        self.assertEqual(result["terms"], ["世界模型", "动作模型"])
+        self.assertEqual(
+            [attempt["mode"] for attempt in result["attempts"]],
+            ["strict", "body_probe", "body_and", "body_or"],
+        )
+        self.assertLessEqual(
+            result["attempts"][1]["probe_count"],
+            wiki_search.MAX_BODY_FALLBACK_PROBES,
+        )
+        filenames = [hit["filename"] for hit in result["hits"]]
+        self.assertEqual(filenames[0], "0003-joint-predictive-control.md")
+        self.assertIn("0001-latent-dynamics.md", filenames)
+        self.assertIn("0002-controllable-policy.md", filenames)
+
+    def test_original_single_term_question_recovers_body_only_phrase(self):
+        self.assertEqual(wiki_search.search(SINGLE_TERM_QUESTION), [])
+        self.assertEqual(wiki_search._extract_known_terms(SINGLE_TERM_QUESTION), [])
+
+        result = wiki_search.search_with_fallback(SINGLE_TERM_QUESTION, limit=12)
+
+        self.assertEqual(result["mode"], "body")
+        self.assertEqual(result["terms"], ["世界模型"])
+        self.assertEqual(
+            [attempt["mode"] for attempt in result["attempts"]],
+            ["strict", "body_probe", "body"],
+        )
+        self.assertGreater(len(result["hits"]), 0)
+
+    def test_common_body_phrase_is_rejected_before_or_expansion(self):
+        for index in range(5, 14):
+            _write_page(
+                self.concepts_dir / f"{index:04d}-common-background.md",
+                title=f"Common Background {index}",
+                aliases=[f"CB{index}"],
+                body="智能系统是所有这些合成页面都会提到的普通背景。",
+            )
+        _write_page(
+            self.concepts_dir / "0014-rare-policy.md",
+            title="Rare Policy Study",
+            aliases=["RPS"],
+            body="量子策略只在这一份合成材料中出现。",
+        )
+        wiki_search.rebuild_index()
+
+        result = wiki_search.search_with_fallback(
+            "智能系统与量子策略如何结合？",
+            limit=12,
+        )
+
+        self.assertEqual(result["mode"], "body")
+        self.assertEqual(result["terms"], ["量子策略"])
+        self.assertGreater(result["attempts"][1]["common_rejected"], 0)
+        self.assertEqual(
+            [hit["filename"] for hit in result["hits"]],
+            ["0014-rare-policy.md"],
+        )
+
+        common_only = wiki_search.search_with_fallback(
+            "智能系统有哪些变化？",
+            limit=12,
+        )
+        self.assertEqual(common_only["mode"], "strict_no_match")
+        self.assertEqual(common_only["terms"], [])
+        self.assertEqual(common_only["hits"], [])
+        self.assertGreater(common_only["attempts"][1]["common_rejected"], 0)
+
+    def test_technical_suffix_does_not_match_inside_unrelated_compounds(self):
+        _write_page(
+            self.papers_dir / "0001-latent-dynamics.md",
+            title="Boundary Study",
+            aliases=["BS"],
+            body="该工作只讨论边界模型，不讨论问题中的目标概念。",
+        )
+        _write_page(
+            self.papers_dir / "0002-controllable-policy.md",
+            title="Production Study",
+            aliases=["PS"],
+            body="该工作只讨论制作模型，不讨论问题中的目标概念。",
+        )
+        _write_page(
+            self.concepts_dir / "0003-joint-predictive-control.md",
+            title="Unrelated Control",
+            aliases=["UC"],
+            body="这份合成材料没有相关模型。",
+        )
+        wiki_search.rebuild_index()
+
+        single = wiki_search.search_with_fallback(SINGLE_TERM_QUESTION, limit=12)
+        combined = wiki_search.search_with_fallback(QUESTION, limit=12)
+
+        self.assertEqual(single["mode"], "strict_no_match")
+        self.assertEqual(single["terms"], [])
+        self.assertEqual(single["hits"], [])
+        self.assertEqual(combined["mode"], "strict_no_match")
+        self.assertEqual(combined["terms"], [])
+        self.assertEqual(combined["hits"], [])
+
+    def test_rare_question_wording_is_not_used_as_a_generic_ngram(self):
+        _write_page(
+            self.concepts_dir / "0004-unrelated.md",
+            title="Rare Wording",
+            aliases=["RW"],
+            body="材料原句是领域经历了哪些变化，但没有技术概念。",
+        )
+        wiki_search.rebuild_index()
+
+        result = wiki_search.search_with_fallback(
+            "这个领域经历了哪些变化？",
+            limit=12,
+        )
+
+        self.assertEqual(result["mode"], "strict_no_match")
+        self.assertEqual(result["terms"], [])
+        self.assertEqual(result["hits"], [])
+        self.assertEqual(
+            [attempt["mode"] for attempt in result["attempts"]],
+            ["strict"],
+        )
+
+    def test_codex_cli_reads_body_hits_before_evidence_gate(self):
+        with patch.object(ask_agent, "WIKI_PAPERS_DIR", self.papers_dir), patch.object(
+            ask_agent, "WIKI_CONCEPTS_DIR", self.concepts_dir,
+        ), patch(
+            "services.ask_agent._tool_list_wiki_index",
+            return_value="# Synthetic index",
+        ), patch(
+            "services.ask_agent._provider_type_for_model",
+            return_value="codex_cli",
+        ), patch(
+            "services.ask_agent.load_config", return_value={},
+        ), patch(
+            "services.ask_agent.call_text_model", return_value="## Synthetic answer",
+        ) as model_call:
+            result = ask_agent.run_ask_agent(
+                MagicMock(),
+                question=QUESTION,
+                api_key="",
+                model="codex-cli/gpt-test",
+            )
+
+        search_steps = [step for step in result.trace if step.tool == "search_wiki"]
+        read_steps = [step for step in result.trace if step.tool == "read_wiki"]
+        self.assertIn('"mode": "body_and_or"', search_steps[0].result_summary)
+        self.assertLessEqual(len(search_steps), ask_agent.MAX_SEARCH_CALLS)
+        self.assertGreaterEqual(len(read_steps), 2)
+        self.assertIn('"status":"supported"', result.trace[-1].result_summary)
+        self.assertIn('"required_content_sources":2', result.trace[-1].result_summary)
+        self.assertGreaterEqual(len(result.citations), 2)
+        model_call.assert_called_once()
+
+    def test_codex_cli_unknown_question_keeps_evidence_gate_closed(self):
+        with patch.object(ask_agent, "WIKI_PAPERS_DIR", self.papers_dir), patch.object(
+            ask_agent, "WIKI_CONCEPTS_DIR", self.concepts_dir,
+        ), patch(
+            "services.ask_agent._tool_list_wiki_index",
+            return_value="# Synthetic index",
+        ), patch(
+            "services.ask_agent._provider_type_for_model",
+            return_value="codex_cli",
+        ), patch(
+            "services.ask_agent.load_config", return_value={},
+        ), patch("services.ask_agent.call_text_model") as model_call:
+            result = ask_agent.run_ask_agent(
+                MagicMock(),
+                question="完全未知且没有答案的研究问题？",
+                api_key="",
+                model="codex-cli/gpt-test",
+            )
+
+        self.assertEqual(
+            [step for step in result.trace if step.tool == "read_wiki"],
+            [],
+        )
+        self.assertIn('"status":"insufficient"', result.trace[-1].result_summary)
+        self.assertEqual(result.citations, [])
+        model_call.assert_not_called()
+
+    def test_api_tool_loop_receives_body_fallback_result(self):
+        first_response = SimpleNamespace(
+            id="resp_search",
+            output=[SimpleNamespace(
+                type="function_call",
+                name="search_wiki",
+                arguments=json.dumps({"q": QUESTION}, ensure_ascii=False),
+                call_id="call_search",
+            )],
+            output_text="",
+        )
+        second_response = SimpleNamespace(
+            id="resp_done",
+            output=[],
+            output_text="## Synthetic API answer",
+        )
+        client = MagicMock()
+        client.responses.create.side_effect = [first_response, second_response]
+
+        with patch("services.ask_agent.load_config", return_value={}), patch(
+            "services.ask_agent._provider_type_for_model", return_value="openai",
+        ), patch(
+            "services.ask_agent.create_openai_client_for_model",
+            return_value=(client, "gpt-test", {"id": "openai"}, {}),
+        ), patch("services.ask_agent.model_uses_responses_api", return_value=True):
+            result = ask_agent.run_ask_agent(
+                MagicMock(),
+                question=QUESTION,
+                api_key="test",
+                model="gpt-test",
+            )
+
+        tool_output = (
+            client.responses.create.call_args_list[1].kwargs["input"][0]["output"]
+        )
+        payload = json.loads(tool_output)
+        self.assertEqual(payload["mode"], "body_and_or")
+        self.assertEqual(payload["terms"], ["世界模型", "动作模型"])
+        self.assertEqual(payload["attempts"][1]["mode"], "body_probe")
         self.assertGreater(len(payload["hits"]), 0)
         self.assertEqual(result.trace[0].tool, "search_wiki")
 
