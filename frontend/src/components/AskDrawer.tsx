@@ -22,13 +22,16 @@ import {
   askWiki,
   createSynthesisConcept,
   getWikiIndexStatus,
+  getWikiSearchIndexStatus,
   rebuildWikiIndex,
+  rebuildWikiSearchIndex,
   renderWikiOutput,
   type AskCitation,
   type AskResponse,
   type AskTraceStep,
   type SynthesisConceptResult,
   type WikiIndexStatus,
+  type WikiSearchIndexStatus,
   type WikiOutputFormat,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from './TaskNotice'
@@ -90,6 +93,21 @@ interface IndexNotice {
   tone: TaskNoticeTone
   title: string
   detail?: string
+  target?: 'overview' | 'search'
+}
+
+function formatBytes(bytes = 0): string {
+  if (bytes < 1024) return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
+}
+
+function formatTokens(tokens = 0): string {
+  if (tokens < 1000) return `~${tokens}`
+  return `~${(tokens / 1000).toFixed(1)}k`
+}
+
+function formatLatency(ms = 0): string {
+  return ms < 1 ? '<1 ms' : `${ms} ms`
 }
 
 function isPristineSession(session: AskSession): boolean {
@@ -319,8 +337,11 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<{ tone: 'emerald' | 'amber'; text: string } | null>(null)
-  const [indexStatus, setIndexStatus] = useState<WikiIndexStatus | null>(null)
-  const [rebuilding, setRebuilding] = useState(false)
+  const [overviewStatus, setOverviewStatus] = useState<WikiIndexStatus | null>(null)
+  const [searchIndexStatus, setSearchIndexStatus] = useState<WikiSearchIndexStatus | null>(null)
+  const [indexStatusesLoading, setIndexStatusesLoading] = useState(open)
+  const [rebuildingOverview, setRebuildingOverview] = useState(false)
+  const [rebuildingSearch, setRebuildingSearch] = useState(false)
   const [indexNotice, setIndexNotice] = useState<IndexNotice | null>(null)
   const [wasOpen, setWasOpen] = useState(open)
   const [synthesisDraft, setSynthesisDraft] = useState<SynthesisDraft | null>(null)
@@ -344,7 +365,10 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   // drafts and any in-flight Ask/rebuild operation alive across closing.
   if (wasOpen !== open) {
     setWasOpen(open)
-    if (open) setIndexNotice(null)
+    if (open) {
+      setIndexNotice(null)
+      setIndexStatusesLoading(true)
+    }
   }
 
   // Refresh index status whenever the drawer opens — cheap GET, gives the
@@ -354,12 +378,12 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     if (!open) return
     let cancelled = false
     const requestId = ++indexRequestId.current
-    getWikiIndexStatus()
-      .then(status => {
-        if (!cancelled && requestId === indexRequestId.current) setIndexStatus(status)
-      })
-      .catch(() => {
-        if (!cancelled && requestId === indexRequestId.current) setIndexStatus(null)
+    Promise.allSettled([getWikiIndexStatus(), getWikiSearchIndexStatus()])
+      .then(([overview, search]) => {
+        if (cancelled || requestId !== indexRequestId.current) return
+        setOverviewStatus(overview.status === 'fulfilled' ? overview.value : null)
+        setSearchIndexStatus(search.status === 'fulfilled' ? search.value : null)
+        setIndexStatusesLoading(false)
       })
     const focusFrame = requestAnimationFrame(() => inputRef.current?.focus())
     return () => {
@@ -525,36 +549,71 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   }, [activeSession.id, resetSessionView, submitting])
 
   const handleRebuildIndex = useCallback(async () => {
-    setRebuilding(true)
+    setRebuildingOverview(true)
     setIndexNotice({
       tone: 'info',
+      target: 'overview',
       title: tr("正在重建 index.md…"),
       detail: tr("Ask 会在重建完成后自动读取最新索引。"),
     })
     try {
-      await rebuildWikiIndex()
-      const requestId = ++indexRequestId.current
-      const fresh = await getWikiIndexStatus()
-      if (requestId === indexRequestId.current) setIndexStatus(fresh)
+      const rebuilt = await rebuildWikiIndex()
+      const fresh = rebuilt.summary
+      ++indexRequestId.current
+      setOverviewStatus(fresh)
       setIndexNotice({
         tone: 'success',
+        target: 'overview',
         title: tr("index.md 重建完成"),
-        detail: tr("{0} 论文 · {1} 概念 · {2} KB", { 0: fresh.current_papers ?? 0, 1: fresh.current_concepts ?? 0, 2: (fresh.size / 1024).toFixed(1) }),
+        detail: tr("{0} 论文 · {1} 概念 · {2}", { 0: fresh.current_papers ?? 0, 1: fresh.current_concepts ?? 0, 2: formatBytes(fresh.size) }),
       })
     } catch (e) {
       setIndexNotice({
         tone: 'error',
+        target: 'overview',
         title: tr("重建索引失败"),
         detail: getApiErrorDetail(e),
       })
     } finally {
-      setRebuilding(false)
+      setRebuildingOverview(false)
+    }
+  }, [])
+
+  const handleRebuildSearchIndex = useCallback(async () => {
+    setRebuildingSearch(true)
+    setIndexNotice({
+      tone: 'info',
+      target: 'search',
+      title: tr("正在刷新全文搜索索引…"),
+      detail: tr("刷新期间继续使用旧索引，成功后再原子切换。"),
+    })
+    try {
+      const rebuilt = await rebuildWikiSearchIndex()
+      ++indexRequestId.current
+      setSearchIndexStatus(rebuilt.summary)
+      setIndexNotice({
+        tone: 'success',
+        target: 'search',
+        title: tr("全文搜索索引刷新完成"),
+        detail: tr("{0} 篇文档 · {1} · {2} ms", { 0: rebuilt.indexed, 1: formatBytes(rebuilt.db_size), 2: rebuilt.duration_ms }),
+      })
+    } catch (e) {
+      setIndexNotice({
+        tone: 'error',
+        target: 'search',
+        title: tr("全文搜索索引刷新失败"),
+        detail: getApiErrorDetail(e),
+      })
+    } finally {
+      setRebuildingSearch(false)
     }
   }, [])
 
   if (!open) return null
 
-  const indexMissing = indexStatus !== null && !indexStatus.exists
+  const overviewMissing = overviewStatus !== null && !overviewStatus.exists
+  const searchMissing = searchIndexStatus !== null && !searchIndexStatus.exists
+  const rebuildingAnyIndex = rebuildingOverview || rebuildingSearch
 
   return (
     <div className="fixed inset-0 z-40 flex pointer-events-none">
@@ -623,53 +682,105 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           <span className="truncate">{tr("保存在本机浏览器")}</span>
         </div>
 
-        {/* index.md status strip */}
-        <div className="px-5 py-1.5 border-b border-slate-800/70 flex items-center gap-2 text-[10.5px] text-slate-500">
-          {indexStatus === null ? (
+        {/* Ask uses two distinct indexes: the orienting index.md overview and
+            the SQLite FTS corpus. Keep their health/actions separate. */}
+        <div
+          data-testid="wiki-index-statuses"
+          className="px-5 py-2 border-b border-slate-800/70 space-y-1.5 text-[10.5px] text-slate-500"
+        >
+          {indexStatusesLoading && overviewStatus === null && searchIndexStatus === null ? (
             <span className="text-slate-600">{tr("索引状态加载中…")}</span>
-          ) : indexMissing ? (
-            <>
-              <AlertTriangle size={11} className="text-amber-400" />
-              <span className="text-amber-200">
-                {tr("index.md 未生成，agent 会跳过总览这一步")}</span>
-              <button
-                onClick={handleRebuildIndex}
-                disabled={rebuilding}
-                className="ml-auto inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 disabled:opacity-50 transition-colors"
-              >
-                {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                {tr("生成索引")}</button>
-            </>
-          ) : indexStatus.stale ? (
-            <>
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-              <span className="text-amber-200">
-                {tr("索引过期 ·")}{' '}{indexStatus.indexed_papers ?? '?'} → {indexStatus.current_papers ?? '?'} {tr("论文 ·")}{' '}{' '}
-                {indexStatus.indexed_concepts ?? '?'} → {indexStatus.current_concepts ?? '?'} {tr("概念")}</span>
-              <button
-                onClick={handleRebuildIndex}
-                disabled={rebuilding}
-                className="ml-auto inline-flex items-center gap-1 text-[10.5px] px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-200 disabled:opacity-50 transition-colors"
-                title={tr("知识库内容自上次索引后变了，建议重建以让 agent 看到全部新条目")}
-              >
-                {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                {tr("重建索引")}</button>
-            </>
           ) : (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span>
-                index.md · {(indexStatus.size / 1024).toFixed(1)} KB ·{' '}
-                {indexStatus.current_papers ?? 0} {tr("论文 ·")}{' '}{' '}
-                {indexStatus.current_concepts ?? 0} {tr("概念")}</span>
-              <button
-                onClick={handleRebuildIndex}
-                disabled={rebuilding}
-                className="ml-auto inline-flex items-center gap-1 text-[10.5px] text-slate-500 hover:text-slate-200 disabled:opacity-50 transition-colors"
-                title={tr("重新生成索引（LLM 全量改写）")}
-              >
-                {rebuilding ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
-                {tr("重建索引")}</button>
+              <div data-testid="wiki-overview-status" className="flex min-w-0 items-center gap-2">
+                <span className="w-[4.5rem] shrink-0 font-medium text-slate-300">{tr("Wiki 总览")}</span>
+                {overviewStatus === null ? (
+                  <span className="text-rose-300">{tr("状态读取失败")}</span>
+                ) : overviewMissing ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                    <span className="truncate text-amber-200">{tr("index.md 未生成，agent 会跳过总览这一步")}</span>
+                  </>
+                ) : overviewStatus.healthy === false ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-rose-400" />
+                    <span className="truncate text-rose-300">{tr("index.md 无法读取")}</span>
+                  </>
+                ) : overviewStatus.source_healthy === false ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-rose-400" />
+                    <span className="truncate text-rose-300">{tr("Wiki 源文件无法读取")}</span>
+                  </>
+                ) : overviewStatus.stale ? (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                    <span className="truncate text-amber-200">
+                      {tr("过期 ·")}{' '}{overviewStatus.indexed_papers ?? '?'} → {overviewStatus.current_papers ?? '?'} {tr("论文 ·")}{' '}
+                      {overviewStatus.indexed_concepts ?? '?'} → {overviewStatus.current_concepts ?? '?'} {tr("概念")}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                    <span className="truncate">
+                      index.md · {formatBytes(overviewStatus.size)} · {formatTokens(overviewStatus.estimated_tokens)} tokens ·{' '}
+                      {formatLatency(overviewStatus.read_latency_ms)} · {overviewStatus.current_papers ?? 0} {tr("论文")} /{' '}
+                      {overviewStatus.current_concepts ?? 0} {tr("概念")}</span>
+                  </>
+                )}
+                <button
+                  onClick={handleRebuildIndex}
+                  disabled={rebuildingAnyIndex}
+                  className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-800/70 hover:text-slate-100 disabled:opacity-50"
+                  title={tr("重新生成 Wiki 总览（LLM 全量改写）")}
+                >
+                  {rebuildingOverview ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
+                  {overviewMissing ? tr("生成总览") : tr("刷新总览")}</button>
+              </div>
+
+              <div data-testid="wiki-search-status" className="flex min-w-0 items-center gap-2">
+                <span className="w-[4.5rem] shrink-0 font-medium text-slate-300">{tr("全文搜索")}</span>
+                {searchIndexStatus === null ? (
+                  <span className="text-rose-300">{tr("状态读取失败")}</span>
+                ) : searchMissing ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                    <span className="truncate text-amber-200">{tr("全文索引未生成")}</span>
+                  </>
+                ) : !searchIndexStatus.healthy ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-rose-400" />
+                    <span className="truncate text-rose-300">{tr("全文索引无法读取")}</span>
+                  </>
+                ) : searchIndexStatus.stale ? (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                    <span className="truncate text-amber-200">
+                      {tr("过期 ·")}{' '}{searchIndexStatus.total} → {searchIndexStatus.source.files} {tr("篇文档")}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                    <span className="truncate">
+                      FTS5 · {searchIndexStatus.total} {tr("篇文档 ·")}{' '}{formatBytes(searchIndexStatus.db_size)} ·{' '}
+                      {formatTokens(searchIndexStatus.estimated_tokens)} tokens · {formatLatency(searchIndexStatus.status_latency_ms)}</span>
+                  </>
+                )}
+                <button
+                  onClick={handleRebuildSearchIndex}
+                  disabled={rebuildingAnyIndex}
+                  className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-800/70 hover:text-slate-100 disabled:opacity-50"
+                  title={tr("从当前 Wiki 页面原子刷新全文搜索索引")}
+                >
+                  {rebuildingSearch ? <Loader2 size={9} className="animate-spin" /> : <RefreshCw size={9} />}
+                  {tr("刷新全文索引")}</button>
+              </div>
+
+              {searchIndexStatus && (
+                <div className="pl-[5rem] text-[10px] text-slate-600">
+                  {tr("Wiki 目录 ·")}{' '}{searchIndexStatus.source.files} {tr("个文件 ·")}{' '}
+                  {formatBytes(searchIndexStatus.source.bytes)} · {formatTokens(searchIndexStatus.source.estimated_tokens)} tokens ·{' '}
+                  {formatLatency(searchIndexStatus.source.measurement_ms)}</div>
+              )}
             </>
           )}
         </div>
@@ -680,9 +791,16 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
               tone={indexNotice.tone}
               title={indexNotice.title}
               detail={indexNotice.detail}
-              busy={rebuilding && indexNotice.tone === 'info'}
-              onRetry={indexNotice.tone === 'error' ? () => { void handleRebuildIndex() } : undefined}
-              retryLabel={tr("重试重建")}
+              busy={rebuildingAnyIndex && indexNotice.tone === 'info'}
+              onRetry={
+                indexNotice.tone === 'error'
+                  ? () => {
+                      if (indexNotice.target === 'search') void handleRebuildSearchIndex()
+                      else void handleRebuildIndex()
+                    }
+                  : undefined
+              }
+              retryLabel={indexNotice.target === 'search' ? tr("重试刷新") : tr("重试重建")}
             />
           </div>
         )}

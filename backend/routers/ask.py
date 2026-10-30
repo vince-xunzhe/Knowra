@@ -200,16 +200,26 @@ def ask(body: AskRequest, db: Session = Depends(get_db)):
 
 @router.post("/index/rebuild")
 def rebuild_index(db: Session = Depends(get_db)):
-    cfg = load_config()
-    api_key = cfg.get("openai_api_key") or ""
-    model = task_model_id(cfg, "wiki_compile")
+    previous = wiki_index.index_summary()
     try:
+        cfg = load_config()
+        api_key = cfg.get("openai_api_key") or ""
+        model = task_model_id(cfg, "wiki_compile")
         path = wiki_index.rebuild_index(db, api_key=api_key, model=model)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        current = wiki_index.index_summary()
+        preserved = bool(previous.get("exists") and current.get("healthy"))
+        detail = (
+            "Wiki 总览刷新失败；旧 index.md 仍可用。"
+            if preserved
+            else "Wiki 总览刷新失败，且没有可用的旧 index.md。"
+        )
+        raise HTTPException(status_code=500, detail=f"{detail} {exc}")
+    summary = wiki_index.index_summary()
     return {
         "path": str(path),
         "size": path.stat().st_size,
+        "summary": summary,
     }
 
 

@@ -35,6 +35,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session
@@ -44,10 +45,15 @@ from services.wiki_compiler import (
     _call_llm,
     _hash_payload,
     _parse_frontmatter,
-    _read_frontmatter_from_path,
     list_concept_pages,
     list_paper_pages,
     _render_frontmatter,
+)
+from services.wiki_metrics import (
+    TOKEN_ESTIMATE_METHOD,
+    atomic_write_text,
+    estimate_tokens,
+    wiki_directory_metrics,
 )
 
 INDEX_PATH = WIKI_DIR / "index.md"
@@ -103,11 +109,10 @@ def _clean_summary_line(line: str) -> str:
 
 
 def _summary_from_markdown(path: str | Path, max_len: int) -> str:
-    p = Path(path)
-    try:
-        text = p.read_text(encoding="utf-8")
-    except OSError:
+    if not path:
         return ""
+    p = Path(path)
+    text = p.read_text(encoding="utf-8")
     _, body = _parse_frontmatter(text)
     in_code = False
     for raw in body.splitlines():
@@ -198,11 +203,19 @@ def _summarize_paper_for_prompt(meta: dict) -> dict:
 
 
 def _read_full_md(path: str | Path) -> str:
-    p = Path(path)
-    try:
-        return p.read_text(encoding="utf-8")
-    except OSError:
+    if not path:
         return ""
+    p = Path(path)
+    return p.read_text(encoding="utf-8")
+
+
+def _assert_sources_readable() -> None:
+    metrics = wiki_directory_metrics(WIKI_DIR)
+    unreadable = metrics["unreadable_files"]
+    if unreadable:
+        raise OSError(
+            f"Wiki source scan found {unreadable} unreadable Markdown file(s)"
+        )
 
 
 def _gather_inputs(db: Session) -> dict[str, Any]:
@@ -313,7 +326,9 @@ def rebuild_index(
 ) -> Path:
     """Full rebuild via one LLM call. Run rarely (first setup, or when
     user explicitly asks). Incremental updates use `patch_*` helpers."""
+    _assert_sources_readable()
     payload = _gather_inputs(db)
+    _assert_sources_readable()
 
     if not payload["papers"] and not payload["concepts"]:
         # Nothing to index — write a stub so downstream code can still
@@ -328,6 +343,7 @@ def rebuild_index(
             max_tokens=4000,
             task_id="wiki_compile",
         )
+    _assert_sources_readable()
     source = _source_snapshot()
 
     meta = {
@@ -340,8 +356,7 @@ def rebuild_index(
         "source_digest": source["digest"],
     }
     full = _render_frontmatter(meta) + "\n" + body.strip() + "\n"
-    WIKI_DIR.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(full, encoding="utf-8")
+    atomic_write_text(INDEX_PATH, full)
     return INDEX_PATH
 
 
@@ -351,8 +366,10 @@ def refresh_index() -> Path:
     This avoids an extra LLM call on incremental compiles while keeping Ask's
     index.md aligned with the latest page titles/summaries.
     """
+    _assert_sources_readable()
     source = _source_snapshot()
     body = _render_incremental_body(source["papers"], source["concepts"])
+    _assert_sources_readable()
     meta = {
         "kind": "index",
         "updated_at": _now_iso(),
@@ -363,8 +380,7 @@ def refresh_index() -> Path:
         "source_digest": source["digest"],
     }
     full = _render_frontmatter(meta) + "\n" + body.strip() + "\n"
-    WIKI_DIR.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(full, encoding="utf-8")
+    atomic_write_text(INDEX_PATH, full)
     return INDEX_PATH
 
 
@@ -383,14 +399,38 @@ def index_summary() -> dict:
     a build. Includes a `stale` flag derived by comparing the page counts
     recorded in index.md frontmatter against the current wiki state, so
     the UI can prompt the user to rebuild after compiles add new pages."""
+    started = perf_counter()
     if not INDEX_PATH.is_file():
-        return {"exists": False, "path": str(INDEX_PATH), "size": 0, "stale": False}
-    stat = INDEX_PATH.stat()
+        return {
+            "exists": False,
+            "healthy": False,
+            "path": str(INDEX_PATH),
+            "size": 0,
+            "estimated_tokens": 0,
+            "token_estimate_method": TOKEN_ESTIMATE_METHOD,
+            "read_latency_ms": int((perf_counter() - started) * 1000),
+            "stale": False,
+        }
+    try:
+        stat = INDEX_PATH.stat()
+        text = INDEX_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return {
+            "exists": True,
+            "healthy": False,
+            "path": str(INDEX_PATH),
+            "size": 0,
+            "estimated_tokens": 0,
+            "token_estimate_method": TOKEN_ESTIMATE_METHOD,
+            "read_latency_ms": int((perf_counter() - started) * 1000),
+            "stale": True,
+            "error": str(exc),
+        }
     indexed_papers: Optional[int] = None
     indexed_concepts: Optional[int] = None
     indexed_at: Optional[str] = None
     indexed_digest: Optional[str] = None
-    meta = _read_frontmatter_from_path(INDEX_PATH) or {}
+    meta, _body = _parse_frontmatter(text)
     raw_p = meta.get("total_papers")
     raw_c = meta.get("total_concepts")
     if isinstance(raw_p, int):
@@ -404,12 +444,20 @@ def index_summary() -> dict:
     if isinstance(raw_digest, str) and raw_digest:
         indexed_digest = raw_digest
 
-    source = _source_snapshot()
-    current_papers = source["paper_count"]
-    current_concepts = source["concept_count"]
-    current_digest = source["digest"]
+    source_error: Optional[str] = None
+    try:
+        source = _source_snapshot()
+        current_papers: Optional[int] = source["paper_count"]
+        current_concepts: Optional[int] = source["concept_count"]
+        current_digest: Optional[str] = source["digest"]
+    except (OSError, UnicodeError) as exc:
+        source_error = str(exc)
+        current_papers = None
+        current_concepts = None
+        current_digest = None
     stale = (
-        (
+        source_error is not None
+        or (
             indexed_papers is not None
             and indexed_concepts is not None
             and (indexed_papers != current_papers or indexed_concepts != current_concepts)
@@ -419,10 +467,17 @@ def index_summary() -> dict:
     )
     return {
         "exists": True,
+        "healthy": True,
+        "source_healthy": source_error is None,
+        "source_error": source_error,
         "path": str(INDEX_PATH),
         "size": stat.st_size,
+        "estimated_tokens": estimate_tokens(text),
+        "token_estimate_method": TOKEN_ESTIMATE_METHOD,
+        "read_latency_ms": int((perf_counter() - started) * 1000),
         "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         "indexed_at": indexed_at,
+        "build_mode": meta.get("build_mode"),
         "indexed_papers": indexed_papers,
         "indexed_concepts": indexed_concepts,
         "indexed_digest": indexed_digest,

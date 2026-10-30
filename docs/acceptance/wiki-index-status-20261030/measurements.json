@@ -1,0 +1,70 @@
+{
+  "fixture": "synthetic Markdown only; no user Wiki/database/provider",
+  "token_estimate": "cjk_chars + non_cjk_chars / 3.6; not a provider tokenizer",
+  "measurements": [
+    {
+      "documents": 100,
+      "directory": {
+        "files": 100,
+        "by_kind": {
+          "paper": 80,
+          "concept": 20
+        },
+        "bytes": 205812,
+        "characters": 133812,
+        "estimated_tokens": 63191,
+        "token_estimate_method": "cjk_chars + non_cjk_chars / 3.6",
+        "unreadable_files": 0,
+        "latest_modified_ns": 1793329619547494697,
+        "measurement_ms": 11
+      },
+      "overview": {
+        "bytes": 10240,
+        "estimated_tokens": 2744,
+        "refresh_ms": 30.1,
+        "status_ms": 0,
+        "full_rebuild_prompt_estimated_tokens": 21372
+      },
+      "full_text": {
+        "db_bytes": 450560,
+        "rebuild_ms": 6,
+        "status_ms": 20,
+        "estimated_tokens": 59920,
+        "search_p50_ms": 0.632,
+        "search_max_ms": 0.785
+      }
+    },
+    {
+      "documents": 500,
+      "directory": {
+        "files": 500,
+        "by_kind": {
+          "paper": 400,
+          "concept": 100
+        },
+        "bytes": 1029592,
+        "characters": 669592,
+        "estimated_tokens": 316091,
+        "token_estimate_method": "cjk_chars + non_cjk_chars / 3.6",
+        "unreadable_files": 0,
+        "latest_modified_ns": 1793329619678716666,
+        "measurement_ms": 59
+      },
+      "overview": {
+        "bytes": 49826,
+        "estimated_tokens": 13313,
+        "refresh_ms": 145.76,
+        "status_ms": 3,
+        "full_rebuild_prompt_estimated_tokens": 106817
+      },
+      "full_text": {
+        "db_bytes": 2125824,
+        "rebuild_ms": 25,
+        "status_ms": 102,
+        "estimated_tokens": 299600,
+        "search_p50_ms": 1.436,
+        "search_max_ms": 1.528
+      }
+    }
+  ]
+}

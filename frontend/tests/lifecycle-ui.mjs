@@ -57,7 +57,9 @@ const sessions = {
     { id: 'fixture-b', title: 'Fixture Beta', question: 'Beta draft', createdAt: '2026-01-01', updatedAt: '2026-01-01', turns: [] },
   ],
 }
-const indexStatus = { exists: true, path: 'fixture/index.md', size: 1024, current_papers: 2, current_concepts: 0, stale: false }
+const indexStatus = { exists: true, healthy: true, path: 'fixture/index.md', size: 1024, estimated_tokens: 240, read_latency_ms: 1, current_papers: 2, current_concepts: 0, stale: false }
+const searchIndexStatus = { exists: true, healthy: true, total: 2, by_kind: { paper: 2, concept: 0 }, db_path: 'fixture/wiki_search.sqlite', db_size: 32768, indexed_characters: 1800, estimated_tokens: 520, stale: false, status_latency_ms: 2,
+  source: { files: 2, by_kind: { paper: 2, concept: 0 }, bytes: 4096, characters: 1800, estimated_tokens: 520, token_estimate_method: 'fixture heuristic', unreadable_files: 0, latest_modified_ns: 0, measurement_ms: 1 } }
 const chat = { messages: [], thread_created_at: null, expires_at: null, days_remaining: null, ttl_days: 30, ready: true }
 const notes = blocks => '<!--notes-v2-->\n' + JSON.stringify(blocks)
 function paper(id, title, category, learningStatus = 'not_started') {
@@ -131,6 +133,7 @@ try {
     let asks = 0
     const page = await newPage('ask', async (route, path) => {
       if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
+      if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
       if (path === '/api/wiki/ask') { asks++; await json(route, { detail: 'Synthetic ask failure' }, 400); return true }
       return false
     })
@@ -169,18 +172,19 @@ try {
           else await json(route, { ...indexStatus, current_papers: 77 })
           return true
         }
+        if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
         if (path === '/api/wiki/outputs/render') { exports++; await exportReply.promise; await json(route, { rel_path: 'fixture-old-export.md' }); return true }
         return false
       })
       await expect.poll(() => indexes).toBe(1)
       await page.getByTitle('关闭', { exact: true }).click()
       await page.getByRole('button', { name: 'Open test drawer' }).click()
-      await expect(page.getByText(/index\.md · 1\.0 KB · 77/)).toBeVisible()
+      await expect(page.getByText(/index\.md.*77 论文/)).toBeVisible()
       const olderResponse = page.waitForResponse(response => response.url().endsWith('/wiki/index/status'))
       oldIndex.release()
       await olderResponse
       await settled(page)
-      await expect(page.getByText(/index\.md · 1\.0 KB · 77/)).toBeVisible()
+      await expect(page.getByText(/index\.md.*77 论文/)).toBeVisible()
       await page.getByRole('button', { name: '报告', exact: true }).last().click()
       await expect.poll(() => exports).toBe(1)
       await page.getByTitle('切换已保存会话').selectOption('fixture-b')
@@ -191,6 +195,66 @@ try {
       await expect(page.getByText(/fixture-old-export/)).toHaveCount(0)
       assert.equal(indexes, 2, 'Close/reopen must issue one refresh per opening')
     } finally { oldIndex.release(); exportReply.release() }
+  })
+  await test('Ask separates index statuses, adopts POST snapshots and retains them on refresh failure', async () => {
+    let refreshes = 0
+    let searchStatusReads = 0
+    const refreshedSearchIndexStatus = {
+      ...searchIndexStatus,
+      total: 3,
+      by_kind: { paper: 2, concept: 1 },
+      db_size: 40960,
+      estimated_tokens: 680,
+      source: {
+        ...searchIndexStatus.source,
+        files: 3,
+        by_kind: { paper: 2, concept: 1 },
+        bytes: 5120,
+        estimated_tokens: 680,
+      },
+    }
+    const page = await newPage('ask', async (route, path, request) => {
+      if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
+      if (path === '/api/wiki/search/stats') { searchStatusReads++; await json(route, searchIndexStatus); return true }
+      if (path === '/api/wiki/reindex' && request.method() === 'POST') {
+        refreshes++
+        if (refreshes === 1) {
+          await json(route, { indexed: 3, paper: 2, concept: 1, db_size: 40960, duration_ms: 4, replaced_previous: true, summary: refreshedSearchIndexStatus })
+          return true
+        }
+        await json(route, { detail: '全文搜索索引刷新失败；旧索引仍可用。 Synthetic fixture failure.' }, 500)
+        return true
+      }
+      return false
+    })
+    const overview = page.getByTestId('wiki-overview-status')
+    const search = page.getByTestId('wiki-search-status')
+    await expect(overview).toContainText('Wiki 总览')
+    await expect(overview).toContainText('index.md · 1.0 KB · ~240 tokens · 1 ms')
+    await expect(search).toContainText('全文搜索')
+    await expect(search).toContainText('FTS5 · 2 篇文档 · 32.0 KB · ~520 tokens · 2 ms')
+    await expect(page.getByTestId('wiki-index-statuses')).toContainText('Wiki 目录 · 2 个文件 · 4.0 KB · ~520 tokens · 1 ms')
+
+    const evidenceDir = process.env.KNOWRA_WIKI_INDEX_EVIDENCE_DIR
+    if (evidenceDir) {
+      await page.getByTestId('wiki-index-statuses').screenshot({
+        path: join(evidenceDir, 'after-index-statuses.png'),
+        animations: 'disabled',
+      })
+    }
+
+    await page.getByRole('button', { name: '刷新全文索引', exact: true }).click()
+    await expect.poll(() => refreshes).toBe(1)
+    await expect(page.getByText('全文搜索索引刷新完成', { exact: true })).toBeVisible()
+    await expect(search).toContainText('FTS5 · 3 篇文档 · 40.0 KB · ~680 tokens')
+    assert.equal(searchStatusReads, 1, 'Successful POST summary must avoid a second status GET')
+
+    await page.getByRole('button', { name: '刷新全文索引', exact: true }).click()
+    await expect.poll(() => refreshes).toBe(2)
+    await expect(page.getByText('全文搜索索引刷新失败', { exact: true })).toBeVisible()
+    await expect(page.getByText(/旧索引仍可用/)).toBeVisible()
+    await expect(search).toContainText('FTS5 · 3 篇文档 · 40.0 KB')
+    assert.equal(refreshes, 2, 'Each click must issue exactly one full-text refresh')
   })
   await test('Review keeps active note draft, merges refreshed notes and resets on paper switch', async () => {
     const papers = new Map([[101, paper(101, 'Fixture Alpha', 'LLM')], [102, paper(102, 'Fixture Beta', 'VLM')]])
@@ -387,5 +451,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 6 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 7 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }
