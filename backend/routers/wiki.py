@@ -273,7 +273,23 @@ def wiki_search_stats():
 def wiki_reindex():
     """Rebuild the FTS index from disk. Auto-runs after each compile, but
     exposed manually for diagnostics."""
-    return wiki_search_service.rebuild_index()
+    previous = wiki_search_service.index_stats()
+    try:
+        result = wiki_search_service.rebuild_index()
+        return {**result, "summary": wiki_search_service.index_stats()}
+    except Exception as exc:
+        current = wiki_search_service.index_stats()
+        preserved = bool(
+            previous.get("exists")
+            and previous.get("healthy")
+            and current.get("healthy")
+        )
+        detail = (
+            "全文搜索索引刷新失败；旧索引仍可用。"
+            if preserved
+            else "全文搜索索引刷新失败，且没有可用的旧索引。"
+        )
+        raise HTTPException(status_code=500, detail=f"{detail} {exc}")
 
 
 @router.post("/backfill_aliases")

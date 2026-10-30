@@ -1,0 +1,9 @@
+{
+  "variant": "before",
+  "statusText": "index.md · 1.0 KB · 2 论文 · 0 概念\n重建索引",
+  "failureRetained": null,
+  "requests": [
+    "GET /api/wiki/index/status"
+  ],
+  "violations": []
+}

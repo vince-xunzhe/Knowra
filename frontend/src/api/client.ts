@@ -827,8 +827,16 @@ export const askWiki = (
 
 export interface WikiIndexStatus {
   exists: boolean
+  healthy?: boolean
+  source_healthy?: boolean
+  source_error?: string | null
   path: string
   size: number
+  estimated_tokens?: number
+  token_estimate_method?: string
+  read_latency_ms?: number
+  build_mode?: string | null
+  error?: string
   modified_at?: string
   indexed_at?: string | null
   indexed_papers?: number | null
@@ -850,11 +858,56 @@ export const getWikiIndex = () =>
 
 export const rebuildWikiIndex = () =>
   api
-    .post<{ path: string; size: number }>(
+    .post<{ path: string; size: number; summary: WikiIndexStatus }>(
       '/wiki/index/rebuild',
       undefined,
       { timeout: 300000 },
     )
+    .then(r => r.data)
+
+export interface WikiDirectoryMetrics {
+  files: number
+  by_kind: Record<string, number>
+  bytes: number
+  characters: number
+  estimated_tokens: number
+  token_estimate_method: string
+  unreadable_files: number
+  latest_modified_ns: number
+  measurement_ms: number
+}
+
+export interface WikiSearchIndexStatus {
+  exists: boolean
+  healthy: boolean
+  total: number
+  by_kind: Record<string, number>
+  db_path: string
+  db_size: number
+  modified_at?: string
+  indexed_characters: number
+  estimated_tokens: number
+  token_estimate_method?: string
+  source: WikiDirectoryMetrics
+  stale: boolean
+  status_latency_ms: number
+  error?: string
+}
+
+export const getWikiSearchIndexStatus = () =>
+  api.get<WikiSearchIndexStatus>('/wiki/search/stats').then(r => r.data)
+
+export const rebuildWikiSearchIndex = () =>
+  api
+    .post<{
+      indexed: number
+      paper: number
+      concept: number
+      db_size: number
+      duration_ms: number
+      replaced_previous: boolean
+      summary: WikiSearchIndexStatus
+    }>('/wiki/reindex', undefined, { timeout: 120000 })
     .then(r => r.data)
 
 export interface SynthesisConceptInput {

@@ -15,13 +15,18 @@ so we don't bother with incremental upserts. The index is rebuilt at app
 startup, after every full wiki recompile, and after each per-paper auto-
 compile in `_process_single`.
 """
+import os
 import re
 import sqlite3
 import sys
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 from typing import Any, List, Optional
 
 from path_utils import DATA_DIR
+from services.wiki_metrics import estimate_tokens, wiki_directory_metrics
 
 
 DB_PATH = DATA_DIR / "wiki_search.sqlite"
@@ -88,9 +93,10 @@ def _ensure_table(conn: sqlite3.Connection) -> str:
     raise RuntimeError(f"Could not create FTS5 table: {last_err}")
 
 
-def _open() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
+def _open(path: Optional[Path] = None) -> sqlite3.Connection:
+    target = path or DB_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(target))
     _ensure_table(conn)
     return conn
 
@@ -122,9 +128,9 @@ def _iter_dir(subdir: str, kind: str):
     for path in base.glob("*.md"):
         try:
             title, body, compiled_at = _parse_md(path)
-        except OSError as e:
-            _log(f"skip {path.name}: {e}")
-            continue
+        except (OSError, UnicodeError) as e:
+            _log(f"cannot index {path.name}: {e}")
+            raise
         yield (
             kind,
             path.name,
@@ -136,11 +142,26 @@ def _iter_dir(subdir: str, kind: str):
 
 
 def rebuild_index() -> dict:
-    """Wipe and rebuild the FTS index from disk. Cheap at this scale (~1s)."""
-    conn = _open()
+    """Build a complete shadow FTS database, then atomically replace the old one.
+
+    Search requests continue to use the prior database while the shadow build
+    runs.  Any parse, SQLite, or replace failure removes only the shadow file,
+    so a previously healthy index remains available.
+    """
+    started = perf_counter()
+    previous_exists = DB_PATH.is_file()
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    handle, raw_temporary_path = tempfile.mkstemp(
+        dir=DB_PATH.parent,
+        prefix=f".{DB_PATH.name}.",
+        suffix=".tmp",
+    )
+    os.close(handle)
+    temporary_path: Optional[Path] = Path(raw_temporary_path)
+    conn: Optional[sqlite3.Connection] = None
     try:
+        conn = _open(temporary_path)
         with conn:
-            conn.execute("DELETE FROM wiki_fts")
             counts = {"paper": 0, "concept": 0}
             for row in _iter_dir("papers", "paper"):
                 conn.execute(
@@ -156,12 +177,34 @@ def rebuild_index() -> dict:
                     row,
                 )
                 counts["concept"] += 1
+        conn.close()
+        conn = None
+        os.replace(temporary_path, DB_PATH)
+        temporary_path = None
         total = counts["paper"] + counts["concept"]
         _clear_entity_cache()
         _log(f"rebuilt: {total} docs ({counts['paper']} papers, {counts['concept']} concepts)")
-        return {"indexed": total, **counts}
+        return {
+            "indexed": total,
+            **counts,
+            "db_size": DB_PATH.stat().st_size,
+            "duration_ms": int((perf_counter() - started) * 1000),
+            "replaced_previous": previous_exists,
+        }
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
+        if temporary_path is not None:
+            for candidate in (
+                temporary_path,
+                Path(str(temporary_path) + "-journal"),
+                Path(str(temporary_path) + "-wal"),
+                Path(str(temporary_path) + "-shm"),
+            ):
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 # --- query ------------------------------------------------------------------
@@ -446,14 +489,77 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
 
 
 def index_stats() -> dict:
-    """For debug / diagnostics endpoint. Returns total + per-kind counts."""
-    conn = _open()
+    """Return read-only health and scale metrics without creating an index."""
+    started = perf_counter()
+    source = wiki_directory_metrics(WIKI_DIR)
+    base = {
+        "exists": DB_PATH.is_file(),
+        "healthy": False,
+        "total": 0,
+        "by_kind": {},
+        "db_path": str(DB_PATH),
+        "db_size": 0,
+        "indexed_characters": 0,
+        "estimated_tokens": 0,
+        "source": source,
+        "stale": source["files"] > 0,
+    }
+    if not DB_PATH.is_file():
+        base["status_latency_ms"] = int((perf_counter() - started) * 1000)
+        return base
+
     try:
-        totals = conn.execute("SELECT kind, COUNT(*) FROM wiki_fts GROUP BY kind").fetchall()
+        stat = DB_PATH.stat()
+        uri = f"{DB_PATH.resolve().as_uri()}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+    except (OSError, sqlite3.Error) as exc:
+        base.update({
+            "error": str(exc),
+            "status_latency_ms": int((perf_counter() - started) * 1000),
+        })
+        return base
+    try:
+        table = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='wiki_fts'"
+        ).fetchone()
+        if not table:
+            raise sqlite3.DatabaseError("wiki_fts table missing")
+        totals = conn.execute(
+            "SELECT kind, COUNT(*) FROM wiki_fts GROUP BY kind"
+        ).fetchall()
+        rows = conn.execute("SELECT title, body FROM wiki_fts").fetchall()
+        by_kind = {str(kind): int(count) for kind, count in totals}
+        total = sum(by_kind.values())
+        indexed_characters = sum(len(title or "") + len(body or "") for title, body in rows)
+        estimated = sum(estimate_tokens(title or "") + estimate_tokens(body or "") for title, body in rows)
+        expected = source["by_kind"]
         return {
-            "total": sum(c for _, c in totals),
-            "by_kind": {k: c for k, c in totals},
-            "db_path": str(DB_PATH),
+            **base,
+            "exists": True,
+            "healthy": True,
+            "total": total,
+            "by_kind": by_kind,
+            "db_size": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "indexed_characters": indexed_characters,
+            "estimated_tokens": estimated,
+            "token_estimate_method": source["token_estimate_method"],
+            "stale": (
+                by_kind.get("paper", 0) != expected.get("paper", 0)
+                or by_kind.get("concept", 0) != expected.get("concept", 0)
+                or source["unreadable_files"] > 0
+                or source["latest_modified_ns"] > stat.st_mtime_ns
+            ),
+            "status_latency_ms": int((perf_counter() - started) * 1000),
+        }
+    except sqlite3.Error as exc:
+        return {
+            **base,
+            "exists": True,
+            "db_size": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+            "error": str(exc),
+            "status_latency_ms": int((perf_counter() - started) * 1000),
         }
     finally:
         conn.close()

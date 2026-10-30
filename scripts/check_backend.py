@@ -27,6 +27,7 @@ TESTS = (
     "tests.test_cloud_freeze",
     "tests.test_sync_local_router",
     "tests.test_wiki_search_fallback",
+    "tests.test_wiki_index_status",
     "tests.test_ask_evidence_gate",
     "tests.test_ask_retrieval_orchestration",
 )

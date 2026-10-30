@@ -1,0 +1,25 @@
+{
+  "baseline": "7780a9df09ff10e2305e6d9ef48ee40a81edca6c",
+  "node": "v24.14.1",
+  "browser": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "before": {
+    "variant": "before",
+    "statusText": "index.md · 1.0 KB · 2 论文 · 0 概念\n重建索引",
+    "failureRetained": null,
+    "requests": [
+      "GET /api/wiki/index/status"
+    ],
+    "violations": []
+  },
+  "after": {
+    "variant": "after",
+    "statusText": "Wiki 总览\nindex.md · 1.0 KB · ~240 tokens · 1 ms · 2 论文 / 0 概念\n刷新总览\n全文搜索\nFTS5 · 2 篇文档 · 32.0 KB · ~520 tokens · 2 ms\n刷新全文索引\nWiki 目录 · 2 个文件 · 4.0 KB · ~520 tokens · 1 ms",
+    "failureRetained": true,
+    "requests": [
+      "GET /api/wiki/index/status",
+      "GET /api/wiki/search/stats",
+      "POST /api/wiki/reindex"
+    ],
+    "violations": []
+  }
+}
