@@ -82,6 +82,8 @@ ASK_SYSTEM_PROMPT = (
     "4. explain_edge 的 provenance/evidence 是关系解释的唯一依据，不得编造边的成因\n"
     "5. 读 2-5 个最相关的 .md 文件并综合回答；结构陈述写出节点或边 ID\n"
     "6. 答案末尾分列 `### 结构路径` 与 `### Wiki 内容来源`；没有某类证据时明确写无\n"
+    "7. index 和 search_wiki 只能用于定位，不能单独支持论文内容结论；内容结论必须来自成功的 read_wiki\n"
+    "8. 只引用本轮工具实际成功读取或返回的来源，不得把未读取的文件或 [[paper:id]] 当成引用\n"
     "\n"
     "重要：基于材料综合，不要编造。如果库里材料不足，明说\"知识库里没有相关材料\"。\n"
     "输出 markdown，从 ## 二级标题开始，可用列表 / 引用块 / 公式块。不要 markdown 代码围栏包裹整个答案。"
@@ -89,7 +91,8 @@ ASK_SYSTEM_PROMPT = (
 LOCAL_ASK_SYSTEM_PROMPT = (
     "你是 Knowra 个人研究知识库的研究助手。系统已经把 index、搜索结果和若干 wiki 页面内容读给你了。"
     "请只基于这些给定材料综合回答，不要假装调用工具，不要编造库里没有的内容。"
-    "输出中文 markdown，并在末尾列出 `## 📚 引用来源`。"
+    "index 和搜索摘要只用于定位，论文内容结论必须来自 `[read_wiki 材料]`。"
+    "输出中文 markdown；引用来源将由系统根据实际读取记录统一附加，不要自行编造来源。"
 )
 
 
@@ -245,6 +248,17 @@ class AskResult:
     model: str = ""
     duration_ms: int = 0
     steps: int = 0
+
+
+@dataclass(frozen=True)
+class EvidenceAssessment:
+    status: str
+    required_content_sources: int
+    content_refs: tuple[str, ...]
+    graph_evidence_count: int
+    search_entity_terms: int
+    index_available: bool
+    reason: str
 
 
 # --- tool dispatchers ---------------------------------------------------
@@ -410,12 +424,50 @@ def _extract_responses_text(response) -> str:
 _PAPER_REF_RE = re.compile(r"\[\[paper:(\d+)\]\]")
 _PAPER_FILE_RE = re.compile(r"^data/wiki/papers/(\d+)-")
 _CONCEPT_FILE_RE = re.compile(r"^data/wiki/concepts/")
+_INDEX_REF = "data/wiki/index.md"
+_SOURCE_SECTION_RE = re.compile(
+    r"(?ims)^\s*#{2,3}\s*(?:📚\s*)?"
+    r"(?:引用来源|wiki\s*内容来源|sources?|references?)\s*$.*\Z"
+)
+_TOOL_FAILURE_PREFIXES = (
+    "[duplicate tool call blocked",
+    "[tool call limit reached",
+    "[unknown tool:",
+)
+_READ_ERROR_PREFIXES = _TOOL_FAILURE_PREFIXES + (
+    "[error:",
+    "[file not found:",
+    "[invalid filename:",
+    "[unknown kind:",
+)
+_STRUCTURAL_EVIDENCE_TOOLS = {
+    "get_neighbors",
+    "shortest_path",
+    "find_shared_neighbors",
+    "find_papers_for_concept",
+    "find_concepts_for_paper",
+    "explain_edge",
+}
+_MULTI_SOURCE_MARKERS = (
+    "比较", "对比", "异同", "跨论文", "多篇",
+    "compare", "comparison", "versus", " vs ", "differences", "across papers",
+)
+_CATALOG_MARKERS = (
+    "知识库里有什么", "知识库有什么", "知识库里有哪些", "知识库包含什么",
+    "列出知识库", "查看知识库索引", "知识库索引", "知识库目录",
+    "what is in the library", "what's in the library", "which papers are in the library",
+    "which papers are in the knowledge base", "list the library", "library index", "knowledge base index",
+    "library catalog", "knowledge base catalog",
+)
 
 
 def _extract_cited_files(answer: str, trace: list[TraceStep]) -> list[str]:
-    """Best-effort: collect every wiki file the agent actually read, plus
-    any paper id mentioned in the final answer (mapped to that paper's
-    `.md`). De-duped, preserving discovery order."""
+    """Return only Wiki files successfully read by a tool in this run.
+
+    The answer text is intentionally ignored: a model-emitted filename or
+    ``[[paper:id]]`` marker is not evidence that the source was opened.
+    """
+    del answer
     files: list[str] = []
     seen: set[str] = set()
 
@@ -426,21 +478,35 @@ def _extract_cited_files(answer: str, trace: list[TraceStep]) -> list[str]:
         files.append(item)
 
     for step in trace:
-        if step.tool == "read_wiki":
-            kind = step.args.get("kind")
-            fn = step.args.get("filename")
-            if kind and fn:
-                _append(f"data/wiki/{kind}/{fn}")
-    # Paper ids mentioned in the answer body — useful even if the agent
-    # cited them without reading the full .md.
-    for match in _PAPER_REF_RE.finditer(answer):
-        _append(f"paper:{match.group(1)}")
+        if step.tool != "read_wiki" or not _successful_wiki_read(step.raw_result):
+            continue
+        kind = str(step.args.get("kind") or "").strip()
+        kind = {"paper": "papers", "concept": "concepts"}.get(kind, kind)
+        filename = str(step.args.get("filename") or "").strip()
+        if kind not in {"papers", "concepts"} or not filename:
+            continue
+        if Path(filename).name != filename:
+            continue
+        _append(f"data/wiki/{kind}/{filename}")
     return files
+
+
+def _successful_wiki_read(result: str) -> bool:
+    text = (result or "").strip()
+    return bool(text) and not text.casefold().startswith(_READ_ERROR_PREFIXES)
 
 
 def _citation_from_ref(ref: str) -> Optional[dict[str, Any]]:
     if not ref:
         return None
+    if ref == _INDEX_REF:
+        return {
+            "kind": "index",
+            "paper_id": None,
+            "path": ref,
+            "filename": "index.md",
+            "ref": ref,
+        }
     if ref.startswith("paper:"):
         try:
             pid = int(ref.split(":", 1)[1])
@@ -507,13 +573,229 @@ def _graph_citations(trace: list[TraceStep]) -> list[dict[str, Any]]:
             payload = json.loads(step.raw_result or "{}")
         except Exception:
             payload = {}
-        for edge in payload.get("edges", []) if isinstance(payload, dict) else []:
+        edges = payload.get("edges", []) if isinstance(payload, dict) else []
+        if isinstance(payload, dict) and isinstance(payload.get("edge"), dict):
+            edges = [*edges, payload["edge"]] if isinstance(edges, list) else [payload["edge"]]
+        for edge in edges if isinstance(edges, list) else []:
             edge_id = str(edge.get("id") or "") if isinstance(edge, dict) else ""
             ref = f"graph-edge:{edge_id}"
             if edge_id and ref not in seen:
                 seen.add(ref)
                 citations.append({"kind": "graph_edge", "ref": ref, "path": None, "filename": None, "paper_id": None})
     return citations
+
+
+def _question_needs_multiple_sources(question: str) -> bool:
+    lower = f" {(question or '').casefold()} "
+    return any(marker in lower for marker in _MULTI_SOURCE_MARKERS)
+
+
+def _search_entity_term_count(trace: list[TraceStep]) -> int:
+    count = 0
+    for step in trace:
+        if step.tool != "search_wiki":
+            continue
+        try:
+            payload = json.loads(step.raw_result or "{}")
+        except Exception:
+            continue
+        terms = payload.get("terms") if isinstance(payload, dict) else None
+        if isinstance(terms, list):
+            count = max(count, len({str(term).casefold() for term in terms if str(term).strip()}))
+    return count
+
+
+def _question_is_catalog_request(question: str) -> bool:
+    lower = (question or "").casefold()
+    return any(marker in lower for marker in _CATALOG_MARKERS)
+
+
+def _successful_index_read(result: str) -> bool:
+    text = (result or "").strip()
+    return (
+        bool(text)
+        and not text.startswith("[index.md 不存在")
+        and not text.casefold().startswith(_TOOL_FAILURE_PREFIXES)
+    )
+
+
+def _structural_evidence_count(trace: list[TraceStep]) -> int:
+    count = 0
+    for step in trace:
+        if step.tool not in _STRUCTURAL_EVIDENCE_TOOLS:
+            continue
+        try:
+            payload = json.loads(step.raw_result or "{}")
+        except Exception:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if step.tool == "shortest_path":
+            usable = payload.get("found") is True
+        elif step.tool == "explain_edge":
+            usable = isinstance(payload.get("edge"), dict)
+        else:
+            raw_count = payload.get("count")
+            usable = isinstance(raw_count, int) and not isinstance(raw_count, bool) and raw_count > 0
+        if usable:
+            count += 1
+    return count
+
+
+def _assess_evidence(question: str, trace: list[TraceStep]) -> EvidenceAssessment:
+    content_refs = tuple(_extract_cited_files("", trace))
+    search_entity_terms = _search_entity_term_count(trace)
+    required = 2 if _question_needs_multiple_sources(question) or search_entity_terms >= 2 else 1
+    graph_count = _structural_evidence_count(trace)
+    index_available = any(
+        step.tool == "list_wiki_index" and _successful_index_read(step.raw_result)
+        for step in trace
+    )
+
+    if len(content_refs) >= required:
+        status = "supported" if len(content_refs) >= 2 else "limited"
+        reason = (
+            f"已成功读取 {len(content_refs)} 份 Wiki 内容材料，"
+            f"达到本问题的 {required} 份来源门槛。"
+        )
+    elif _question_needs_graph(question) and graph_count:
+        status = "structure_only"
+        reason = (
+            f"已取得 {graph_count} 项可验证图结构结果，但只成功读取 "
+            f"{len(content_refs)} 份 Wiki 内容材料；只允许回答结构关系。"
+        )
+    elif index_available and _question_is_catalog_request(question):
+        status = "catalog_only"
+        reason = "已读取 Wiki 索引；只允许回答库内条目概览。"
+    else:
+        status = "insufficient"
+        if content_refs:
+            reason = (
+                f"本问题需要至少 {required} 份 Wiki 内容材料，"
+                f"当前只成功读取 {len(content_refs)} 份。"
+            )
+        else:
+            reason = "没有成功读取到可支持内容结论的 Wiki 文件。"
+
+    return EvidenceAssessment(
+        status=status,
+        required_content_sources=required,
+        content_refs=content_refs,
+        graph_evidence_count=graph_count,
+        search_entity_terms=search_entity_terms,
+        index_available=index_available,
+        reason=reason,
+    )
+
+
+def _citations_for_assessment(
+    assessment: EvidenceAssessment,
+    trace: list[TraceStep],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    if assessment.status == "insufficient":
+        return [], []
+    if assessment.status == "catalog_only":
+        citation = _citation_from_ref(_INDEX_REF)
+        return [_INDEX_REF], [citation] if citation is not None else []
+
+    cited_files = list(assessment.content_refs)
+    citations = _build_citations(cited_files)
+    if assessment.status in {"supported", "limited", "structure_only"}:
+        citations.extend(_graph_citations(trace))
+    return cited_files, citations
+
+
+def _finalize_answer(
+    answer: str,
+    assessment: EvidenceAssessment,
+    citations: list[dict[str, Any]],
+) -> str:
+    if assessment.status == "insufficient":
+        return (
+            "## 证据不足\n\n"
+            f"{assessment.reason}\n\n"
+            "我不会根据搜索摘要、索引标题、图节点名称或模型自行生成的引用推断论文结论。\n\n"
+            "## 📚 引用来源\n\n无"
+        )
+
+    body = _SOURCE_SECTION_RE.sub("", (answer or "").strip()).strip()
+    allowed_paper_ids = {
+        str(citation["paper_id"])
+        for citation in citations
+        if citation.get("paper_id") is not None
+    }
+    body = _PAPER_REF_RE.sub(
+        lambda match: match.group(0) if match.group(1) in allowed_paper_ids else "",
+        body,
+    ).strip()
+
+    boundaries = {
+        "limited": (
+            "> 证据边界：当前只成功读取 1 份 Wiki 内容材料；以下回答只代表该来源，"
+            "不能视为完整的跨论文结论。"
+        ),
+        "structure_only": (
+            "> 证据边界：以下只能回答工具返回的图结构关系；Wiki 内容证据未达到门槛，"
+            "不能据此推断论文方法、结论或演进。"
+        ),
+        "catalog_only": (
+            "> 证据边界：以下仅基于 Wiki 索引回答库内条目概览，"
+            "索引标题不能支持论文内容结论。"
+        ),
+    }
+    boundary = boundaries.get(assessment.status)
+    if boundary:
+        body = f"{body}\n\n{boundary}" if body else boundary
+
+    refs: list[str] = []
+    for citation in citations:
+        ref = str(citation.get("ref") or "").strip()
+        if ref and ref not in refs:
+            refs.append(ref)
+    source_lines = "\n".join(f"- `{ref}`" for ref in refs) or "无"
+    return f"{body}\n\n## 📚 引用来源\n\n{source_lines}".strip()
+
+
+def _finish_result(
+    *,
+    answer: str,
+    question: str,
+    trace: list[TraceStep],
+    model: str,
+    duration_ms: int,
+    assessment: Optional[EvidenceAssessment] = None,
+) -> AskResult:
+    assessment = assessment or _assess_evidence(question, trace)
+    cited_files, citations = _citations_for_assessment(assessment, trace)
+    gate_payload = json.dumps(
+        {
+            "status": assessment.status,
+            "required_content_sources": assessment.required_content_sources,
+            "content_sources": len(assessment.content_refs),
+            "graph_evidence": assessment.graph_evidence_count,
+            "search_entity_terms": assessment.search_entity_terms,
+            "index_available": assessment.index_available,
+            "reason": assessment.reason,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    trace.append(_trace_step(
+        len(trace),
+        "evidence_gate",
+        {"required_content_sources": assessment.required_content_sources},
+        gate_payload,
+        0,
+    ))
+    return AskResult(
+        answer=_finalize_answer(answer, assessment, citations),
+        cited_files=cited_files,
+        citations=citations,
+        trace=trace,
+        model=model,
+        duration_ms=duration_ms,
+        steps=len(trace),
+    )
 
 
 def _trace_step(step: int, tool: str, args: dict[str, Any], result: str, duration_ms: int) -> TraceStep:
@@ -626,27 +908,17 @@ def _run_local_retrieval_agent(
 
     t0 = perf_counter()
     index_text = _tool_list_wiki_index()
-    trace.append(
-        TraceStep(
-            step=len(trace),
-            tool="list_wiki_index",
-            args={},
-            result_summary=_summarize_result(index_text),
-            duration_ms=int((perf_counter() - t0) * 1000),
-        )
-    )
+    trace.append(_trace_step(
+        len(trace), "list_wiki_index", {}, index_text,
+        int((perf_counter() - t0) * 1000),
+    ))
 
     t1 = perf_counter()
     search_result = _tool_search_wiki(question)
-    trace.append(
-        TraceStep(
-            step=len(trace),
-            tool="search_wiki",
-            args={"q": question},
-            result_summary=_summarize_result(search_result),
-            duration_ms=int((perf_counter() - t1) * 1000),
-        )
-    )
+    trace.append(_trace_step(
+        len(trace), "search_wiki", {"q": question}, search_result,
+        int((perf_counter() - t1) * 1000),
+    ))
 
     read_chunks: list[str] = []
     seen_files: set[tuple[str, str]] = set()
@@ -666,16 +938,22 @@ def _run_local_retrieval_agent(
         seen_files.add(key)
         tr = perf_counter()
         content = _tool_read_wiki(filename, kind)
-        trace.append(
-            TraceStep(
-                step=len(trace),
-                tool="read_wiki",
-                args={"filename": filename, "kind": kind},
-                result_summary=_summarize_result(content),
-                duration_ms=int((perf_counter() - tr) * 1000),
-            )
-        )
+        trace.append(_trace_step(
+            len(trace), "read_wiki", {"filename": filename, "kind": kind}, content,
+            int((perf_counter() - tr) * 1000),
+        ))
         read_chunks.append(f"[{kind}/{filename}]\n{content}")
+
+    assessment = _assess_evidence(question, trace)
+    if assessment.status == "insufficient":
+        return _finish_result(
+            answer="",
+            question=question,
+            trace=trace,
+            model=model,
+            duration_ms=int((perf_counter() - started) * 1000),
+            assessment=assessment,
+        )
 
     history_lines: list[str] = []
     for turn in history or []:
@@ -689,7 +967,7 @@ def _run_local_retrieval_agent(
         "请基于下面提供的本地知识库材料回答问题。\n"
         "先综合 index、搜索结果和读到的 wiki 文件，再给出中文 markdown 答案。\n"
         "如果材料不足，请明确说明知识库里暂无足够材料，不要编造。\n"
-        "答案末尾必须包含 `## 📚 引用来源`，只列出你在材料区真正读到的文件名。\n\n",
+        "不要自行生成引用列表；系统会根据本轮成功读取记录附加已核验来源。\n\n",
         cfg.get("prompt_locale", "zh"),
     ) + (
         f"[历史对话]\n{chr(10).join(history_lines) or '[无历史对话]'}\n\n"
@@ -709,15 +987,13 @@ def _run_local_retrieval_agent(
         temperature=0.3,
     ).strip()
     duration_ms = int((perf_counter() - started) * 1000)
-    cited_files = _extract_cited_files(final_answer, trace)
-    return AskResult(
+    return _finish_result(
         answer=final_answer,
-        cited_files=cited_files,
-        citations=[*_build_citations(cited_files), *_graph_citations(trace)],
+        question=question,
         trace=trace,
         model=model,
         duration_ms=duration_ms,
-        steps=len(trace),
+        assessment=assessment,
     )
 
 
@@ -953,13 +1229,10 @@ def _run_ask_agent_inner(
             final_answer = (wrap_up.choices[0].message.content or "").strip()
 
     duration_ms = int((perf_counter() - started) * 1000)
-    cited_files = _extract_cited_files(final_answer, trace)
-    return AskResult(
+    return _finish_result(
         answer=final_answer,
-        cited_files=cited_files,
-        citations=[*_build_citations(cited_files), *_graph_citations(trace)],
+        question=question,
         trace=trace,
         model=model,
         duration_ms=duration_ms,
-        steps=len(trace),
     )

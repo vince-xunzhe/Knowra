@@ -1,10 +1,11 @@
 # 开发记录
 
-记录更新：2026-10-29。以下是核验时的快照，PR 链接是实时状态来源；合并状态在后续正常迭代中核验并刷新，不直接修改 main，也不单独反复创建状态更新 PR。
+记录更新：2026-10-30。以下是核验时的快照，PR 链接是实时状态来源；合并状态在后续正常迭代中核验并刷新，不直接修改 main，也不单独反复创建状态更新 PR。
 
 | 日期／分支 | 问题与变更 | 验证摘要与未验证项 | PR | 状态 |
 | --- | --- | --- | --- | --- |
-| 2026-10-29 · `codex/ask-search-fallback-20261029` | Ask 长自然语言问题的严格 FTS 零命中时，从合成 Wiki 标题／slug／别名提取显式实体，按 AND 优先、OR 补齐并去重；Codex CLI／API trace 返回实际模式与查询，严格有命中行为保持不变。 | 统一检查（29 启动／68 后端／前端单测、类型、构建、0 warning lint／6 UI）及 21 项专项回归通过；仅合成 Markdown/SQLite，无真实数据或模型调用。[DOD](docs/acceptance/ask-search-fallback-20261029/README.md)。不含下一轮证据门槛或同义词语义检索。 | [#38](https://github.com/vince-xunzhe/Knowra/pull/38) | 非 Draft，待用户合并；受测 `f6b8f29`；基于 main `ead1779`；核验 2026-10-29 |
+| 2026-10-30 · `codex/ask-evidence-gate-20261030` | Ask 增加来源级证据门槛：只有成功读取的 Wiki 内容可支持内容回答；跨来源不足时确定性拒答，结构／目录回答显式限定边界，引用由实际工具结果重建。 | 统一检查（29 启动／82 后端／前端单测、类型、构建、0 warning lint／6 UI）及 43 项 Ask/Wiki 专项回归通过；独立审查报告的 singular kind、目录绕过、单数 edge 与宽泛多来源判定均已修复。[DOD](docs/acceptance/ask-evidence-gate-20261030/README.md)。这是来源级而非 claim-level 验证，仅使用合成数据。 | 尚未创建 | 实现与独立审查完成，待 PR |
+| 2026-10-29 · `codex/ask-search-fallback-20261029` | Ask 长自然语言问题的严格 FTS 零命中时，从合成 Wiki 标题／slug／别名提取显式实体，按 AND 优先、OR 补齐并去重；Codex CLI／API trace 返回实际模式与查询，严格有命中行为保持不变。 | 统一检查（29 启动／68 后端／前端单测、类型、构建、0 warning lint／6 UI）及 21 项专项回归通过；仅合成 Markdown/SQLite，无真实数据或模型调用。[DOD](docs/acceptance/ask-search-fallback-20261029/README.md)。不含同义词语义检索。 | [#38](https://github.com/vince-xunzhe/Knowra/pull/38) | 已合并 main：`39acfb5`（2026-10-30）；受测 `f6b8f29`；核验 2026-10-30 |
 | 2026-10-29 · `codex/fix-light-paper-titles-20261029` | 修复白色主题下学习中／学习完成论文标题使用未重映射近白 `50` 色阶而不可见；接入既有双主题 `200` 语义色阶，保留状态与交互。 | 统一检查（29 启动／58 后端／33 单测／6 UI）、明暗主题／三状态／选中／分组／80–125% 缩放回归及像素审查通过；浅色对比度 1.01→6.91、1.00→7.28。[DOD 与截图](docs/acceptance/review-title-contrast-20261029/README.md)。 | [#37](https://github.com/vince-xunzhe/Knowra/pull/37) | 非 Draft，待用户合并；受测 `90e5095`；基于 main `408953b`；核验 2026-10-29 |
 | 2026-10-28 · `codex/suoji-layout-spacing-20261028` | 改善索骥整理后长连线共线及束状拥挤，增加有界层间空间与拥挤感知路由；保留完整关系、锁定和高亮。 | 统一检查（29 启动／58 后端／33 单测／5 UI）、9 组布局对照／20 项质量门槛、10 组高亮／8 组云冻结及独立源码／像素审查通过；共线 −34%、近并行 −69%，保留全部关系。[DOD 与截图](docs/acceptance/suoji-layout-spacing-20261028/README.md)。 | [#36](https://github.com/vince-xunzhe/Knowra/pull/36) | 已合并 main：`408953b`（2026-10-29）；受测 `5a33566`；核验 2026-10-29 |
 | 2026-10-28 · `codex/suoji-edge-highlight` | 索骥点击论文后直接入／出边柔和脉冲后常亮；支持切换／取消、减少动画与 Enter，保留 Space 平移，点击微抖不改布局或保存。 | 最终统一检查（29 启动／58 后端／22 单测／5 UI）、10 组高亮／8 组布局／8 组云冻结通过；独立审查无阻断项，仅合成数据。[DOD 与截图](docs/acceptance/suoji-edge-highlight-20261028/README.md)。 | [#35](https://github.com/vince-xunzhe/Knowra/pull/35) | 已合并 main：`a392c6f`（2026-10-28）；受测 `0a81b46`；核验 2026-10-28 |
