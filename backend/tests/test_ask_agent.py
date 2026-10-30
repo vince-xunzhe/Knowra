@@ -103,11 +103,12 @@ class AskAgentResponsesTests(unittest.TestCase):
         self.assertIn("仅基于 Wiki 索引", result.answer)
         self.assertIn("data/wiki/index.md", result.answer)
         self.assertEqual(result.model, "gpt-5.4")
-        self.assertEqual(result.steps, 2)
-        self.assertEqual(len(result.trace), 2)
+        self.assertEqual(result.steps, 3)
+        self.assertEqual(len(result.trace), 3)
         self.assertEqual(result.trace[0].tool, "list_wiki_index")
         self.assertEqual(result.trace[0].args, {})
-        self.assertEqual(result.trace[1].tool, "evidence_gate")
+        self.assertEqual(result.trace[1].tool, "retrieval_budget")
+        self.assertEqual(result.trace[2].tool, "evidence_gate")
         self.assertEqual(result.citations[0]["kind"], "index")
         mock_dispatch_tool.assert_called_once_with(ANY, "list_wiki_index", {})
 
@@ -164,10 +165,16 @@ class AskAgentResponsesTests(unittest.TestCase):
         self.assertIn("## Answer\n\nLocal Codex.", result.answer)
         self.assertIn("当前只成功读取 1 份 Wiki 内容材料", result.answer)
         self.assertEqual(result.model, "codex-cli/gpt-5.4")
-        self.assertEqual(result.steps, 4)
+        self.assertEqual(result.steps, 5)
         self.assertEqual(
             [step.tool for step in result.trace],
-            ["list_wiki_index", "search_wiki", "read_wiki", "evidence_gate"],
+            [
+                "list_wiki_index",
+                "search_wiki",
+                "read_wiki",
+                "retrieval_budget",
+                "evidence_gate",
+            ],
         )
         self.assertIn("data/wiki/papers/0001-test.md", result.cited_files)
         self.assertEqual(result.citations[0]["kind"], "paper")
@@ -176,7 +183,9 @@ class AskAgentResponsesTests(unittest.TestCase):
         self.assertIn("[index.md]", mock_call_text_model.call_args.kwargs["user"])
         self.assertIn("[图结构检索]", mock_call_text_model.call_args.kwargs["user"])
         self.assertIn("[read_wiki 材料]", mock_call_text_model.call_args.kwargs["user"])
-        mock_read_wiki.assert_called_once_with("0001-test.md", "papers")
+        mock_read_wiki.assert_called_once_with(
+            "0001-test.md", "papers", max_chars=12000,
+        )
 
 
 if __name__ == "__main__":

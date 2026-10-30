@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from openai import OpenAI  # Back-compat target for existing tests/mocks.
 from sqlalchemy.orm import Session
@@ -41,6 +41,17 @@ from model_gateway import create_openai_client_for_model
 from model_gateway import call_text_model, get_model_entry, get_provider_entry
 from model_gateway import task_context, track_call
 from services import graph_query_service, wiki_index, wiki_search
+from services.ask_retrieval_budget import (
+    MAX_GRAPH_CALLS,
+    MAX_INDEX_CHARS,
+    MAX_MODEL_CALLS,
+    MAX_ORCHESTRATION_MS,
+    MAX_READ_CALLS,
+    MAX_READ_CHARS as MAX_RUN_READ_CHARS,
+    MAX_SEARCH_CALLS,
+    MAX_TOOL_CALLS,
+    RetrievalBudget,
+)
 from services.wiki_compiler import (
     WIKI_CONCEPTS_DIR,
     WIKI_DIR,
@@ -51,9 +62,9 @@ from services.vlm_service import model_uses_responses_api
 log = logging.getLogger("ask_agent")
 
 MAX_STEPS = 8
-MAX_TOOL_CALLS = 16
 SEARCH_HIT_LIMIT = 12
 READ_MAX_CHARS = 12000  # truncate huge .md files to keep context affordable
+LOCAL_READ_LIMIT = 4
 SUMMARY_MAX_CHARS = 240   # max chars stored in trace[].result_summary
 
 ASK_SYSTEM_PROMPT = (
@@ -84,6 +95,11 @@ ASK_SYSTEM_PROMPT = (
     "6. 答案末尾分列 `### 结构路径` 与 `### Wiki 内容来源`；没有某类证据时明确写无\n"
     "7. index 和 search_wiki 只能用于定位，不能单独支持论文内容结论；内容结论必须来自成功的 read_wiki\n"
     "8. 只引用本轮工具实际成功读取或返回的来源，不得把未读取的文件或 [[paper:id]] 当成引用\n"
+    f"9. 根据结果调整路径：零命中时换用另一个明确标题/实体查询；有命中后读取候选，证据不足才继续检索。"
+    f"每轮最多 {MAX_SEARCH_CALLS} 次搜索、{MAX_READ_CALLS} 次读取、{MAX_MODEL_CALLS} 次模型调用，"
+    f"总工具调用不超过 {MAX_TOOL_CALLS} 次、图查询不超过 {MAX_GRAPH_CALLS} 次，"
+    f"read_wiki 正文不超过 {MAX_RUN_READ_CHARS} 字符、index 最多 {MAX_INDEX_CHARS} 字符，"
+    f"编排墙钟预算 {MAX_ORCHESTRATION_MS // 1000} 秒；不要重复调用\n"
     "\n"
     "重要：基于材料综合，不要编造。如果库里材料不足，明说\"知识库里没有相关材料\"。\n"
     "输出 markdown，从 ## 二级标题开始，可用列表 / 引用块 / 公式块。不要 markdown 代码围栏包裹整个答案。"
@@ -269,8 +285,16 @@ def _safe_read(path: Path, *, max_chars: int = READ_MAX_CHARS) -> str:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         return f"[error: {exc}]"
+    return _truncate_text(text, max_chars=max_chars, label="文件")
+
+
+def _truncate_text(text: str, *, max_chars: int, label: str) -> str:
+    max_chars = max(0, int(max_chars))
     if len(text) > max_chars:
-        return text[:max_chars] + f"\n\n…（文件已截断，原始长度 {len(text)} 字符）"
+        suffix = f"\n\n…（{label}已截断，原始长度 {len(text)} 字符）"
+        if len(suffix) >= max_chars:
+            return suffix[:max_chars]
+        return text[: max_chars - len(suffix)] + suffix
     return text
 
 
@@ -280,7 +304,7 @@ def _tool_list_wiki_index() -> str:
         return (
             "[index.md 不存在 — 请先调用 POST /api/wiki/index/rebuild 或在前端点重建索引]"
         )
-    return text
+    return _truncate_text(text, max_chars=MAX_INDEX_CHARS, label="索引")
 
 
 def _tool_search_wiki(q: str) -> str:
@@ -318,7 +342,12 @@ def _tool_search_wiki(q: str) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _tool_read_wiki(filename: str, kind: str) -> str:
+def _tool_read_wiki(
+    filename: str,
+    kind: str,
+    *,
+    max_chars: int = READ_MAX_CHARS,
+) -> str:
     kind = {"paper": "papers", "concept": "concepts"}.get(kind, kind)
     if kind not in {"papers", "concepts"}:
         return f"[unknown kind: {kind}; expected 'papers' or 'concepts']"
@@ -330,16 +359,26 @@ def _tool_read_wiki(filename: str, kind: str) -> str:
     path = base / safe
     if not path.is_file():
         return f"[file not found: {kind}/{safe}]"
-    return _safe_read(path)
+    return _safe_read(path, max_chars=max_chars)
 
 
-def _dispatch_tool(db: Session, name: str, args: dict[str, Any]) -> str:
+def _dispatch_tool(
+    db: Session,
+    name: str,
+    args: dict[str, Any],
+    *,
+    read_max_chars: int = READ_MAX_CHARS,
+) -> str:
     if name == "list_wiki_index":
         return _tool_list_wiki_index()
     if name == "search_wiki":
         return _tool_search_wiki(args.get("q", ""))
     if name == "read_wiki":
-        return _tool_read_wiki(args.get("filename", ""), args.get("kind", ""))
+        return _tool_read_wiki(
+            args.get("filename", ""),
+            args.get("kind", ""),
+            max_chars=read_max_chars,
+        )
     graph_calls = {
         "find_nodes": lambda: graph_query_service.find_nodes(db, args.get("query", ""), args.get("node_type"), args.get("limit", 20)),
         "get_graph_node": lambda: graph_query_service.get_node(db, args.get("node_id", "")),
@@ -432,6 +471,7 @@ _SOURCE_SECTION_RE = re.compile(
 _TOOL_FAILURE_PREFIXES = (
     "[duplicate tool call blocked",
     "[tool call limit reached",
+    "[retrieval budget reached:",
     "[unknown tool:",
 )
 _READ_ERROR_PREFIXES = _TOOL_FAILURE_PREFIXES + (
@@ -764,9 +804,24 @@ def _finish_result(
     model: str,
     duration_ms: int,
     assessment: Optional[EvidenceAssessment] = None,
+    budget: Optional[RetrievalBudget] = None,
 ) -> AskResult:
     assessment = assessment or _assess_evidence(question, trace)
     cited_files, citations = _citations_for_assessment(assessment, trace)
+    if budget is not None:
+        budget_payload = json.dumps(
+            budget.snapshot(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        trace.append(TraceStep(
+            step=len(trace),
+            tool="retrieval_budget",
+            args={},
+            result_summary=budget.summary_text(),
+            duration_ms=0,
+            raw_result=budget_payload,
+        ))
     gate_payload = json.dumps(
         {
             "status": assessment.status,
@@ -810,21 +865,132 @@ def _trace_step(step: int, tool: str, args: dict[str, Any], result: str, duratio
     )
 
 
+_TOOL_FINGERPRINT_FIELDS = {
+    "list_wiki_index": (),
+    "search_wiki": ("q",),
+    "read_wiki": ("filename", "kind"),
+    "find_nodes": ("query", "node_type", "limit"),
+    "get_graph_node": ("node_id",),
+    "get_neighbors": ("node_id", "relation_type", "depth", "limit"),
+    "shortest_path": ("source_id", "target_id", "max_depth"),
+    "find_shared_neighbors": ("node_ids", "relation_type", "limit"),
+    "find_papers_for_concept": ("concept_id", "limit"),
+    "find_concepts_for_paper": ("paper_id", "limit"),
+    "explain_edge": ("edge_id",),
+}
+_INTEGER_TOOL_ARGS = {"limit", "depth", "max_depth"}
+_TOOL_ARG_DEFAULTS = {
+    "find_nodes": {"node_type": None, "limit": 20},
+    "get_neighbors": {"relation_type": None, "depth": 1, "limit": 20},
+    "shortest_path": {"max_depth": 4},
+    "find_shared_neighbors": {"relation_type": None, "limit": 20},
+    "find_papers_for_concept": {"limit": 20},
+    "find_concepts_for_paper": {"limit": 20},
+}
+
+
+def _normalize_tool_arg(name: str, key: str, value: Any) -> Any:
+    if key == "kind":
+        normalized = str(value or "").strip().casefold()
+        return {"paper": "papers", "concept": "concepts"}.get(normalized, normalized)
+    if key == "node_ids" and isinstance(value, list):
+        return sorted(str(item).strip() for item in value if str(item).strip())
+    if key in _INTEGER_TOOL_ARGS:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return value
+    if isinstance(value, str):
+        normalized = " ".join(value.split())
+        if key in {"q", "query", "node_type", "relation_type"}:
+            return normalized.casefold()
+        return normalized
+    return value
+
+
+def _tool_call_fingerprint(name: str, args: dict[str, Any]) -> str:
+    fields = _TOOL_FINGERPRINT_FIELDS.get(name)
+    if fields is None:
+        normalized = args
+    else:
+        normalized = {
+            key: _normalize_tool_arg(
+                name,
+                key,
+                (
+                    args[key]
+                    if key in args
+                    else _TOOL_ARG_DEFAULTS.get(name, {}).get(key)
+                ),
+            )
+            for key in fields
+        }
+    return f"{name}:{json.dumps(normalized, ensure_ascii=False, sort_keys=True, default=str)}"
+
+
 def _execute_tool_once(
     db: Session,
     name: str,
     args: dict[str, Any],
     seen_calls: set[str],
-    call_count: int,
+    budget: RetrievalBudget,
 ) -> tuple[str, int]:
-    fingerprint = f"{name}:{json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)}"
+    fingerprint = _tool_call_fingerprint(name, args)
     if fingerprint in seen_calls:
+        budget.record_block("duplicate_tool_call")
         return "[duplicate tool call blocked; use the existing result]", 0
-    if call_count >= MAX_TOOL_CALLS:
-        return f"[tool call limit reached: {MAX_TOOL_CALLS}]", 0
+    is_graph = name in {tool_name for tool_name, *_ in _GRAPH_TOOL_DEFS}
+    reason = budget.tool_block_reason(name, is_graph=is_graph)
+    if reason:
+        budget.record_block(reason)
+        return f"[retrieval budget reached: {reason}]", 0
     seen_calls.add(fingerprint)
     started = perf_counter()
-    return _dispatch_tool(db, name, args), int((perf_counter() - started) * 1000)
+    read_limit = min(READ_MAX_CHARS, budget.remaining_read_chars())
+    if name == "read_wiki":
+        result = _dispatch_tool(db, name, args, read_max_chars=read_limit)
+    else:
+        result = _dispatch_tool(db, name, args)
+    duration_ms = int((perf_counter() - started) * 1000)
+    budget.record_tool_call(
+        name,
+        duration_ms,
+        is_graph=is_graph,
+        read_chars=(
+            len(result)
+            if name == "read_wiki" and _successful_wiki_read(result)
+            else 0
+        ),
+        index_chars=(
+            len(result)
+            if name == "list_wiki_index" and _successful_index_read(result)
+            else 0
+        ),
+    )
+    return result, duration_ms
+
+
+def _run_budgeted_model_call(
+    budget: RetrievalBudget,
+    call: Callable[[], Any],
+) -> tuple[Any, Optional[str]]:
+    reason = budget.model_block_reason()
+    if reason:
+        budget.record_block(reason)
+        return None, reason
+    started = perf_counter()
+    try:
+        return call(), None
+    finally:
+        budget.record_model_call(int((perf_counter() - started) * 1000))
+
+
+def _budget_exhausted_answer(reason: str) -> str:
+    return (
+        "## 检索预算已用尽\n\n"
+        f"已停止继续调用检索或模型（{reason}）。"
+        "下面只保留本轮已经取得并通过来源门槛的材料边界。"
+    )
 
 
 def _provider_type_for_model(cfg: dict[str, Any], model: str) -> str:
@@ -853,14 +1019,78 @@ def _parse_search_hits(search_result: str) -> list[dict[str, Any]]:
     return hits
 
 
-def _local_graph_context(db: Session, question: str, trace: list[TraceStep]) -> str:
+def _parse_search_terms(search_result: str) -> list[str]:
+    try:
+        parsed = json.loads(search_result)
+    except Exception:
+        return []
+    terms = parsed.get("terms") if isinstance(parsed, dict) else None
+    if not isinstance(terms, list):
+        return []
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in terms:
+        term = str(raw or "").strip()
+        normalized = term.casefold()
+        if len(term) < 2 or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(term)
+    return result
+
+
+def _balanced_search_hits(
+    search_results: list[tuple[str, str]],
+    *,
+    limit: int = LOCAL_READ_LIMIT,
+) -> list[dict[str, Any]]:
+    """Round-robin primary/entity routes so one route cannot consume all reads."""
+    routes = [(route, _parse_search_hits(result)) for route, result in search_results]
+    selected: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    max_hits = max((len(hits) for _route, hits in routes), default=0)
+    for index in range(max_hits):
+        for route, hits in routes:
+            if index >= len(hits):
+                continue
+            hit = dict(hits[index])
+            key = (
+                str(hit.get("kind") or ""),
+                str(hit.get("filename") or ""),
+            )
+            if not key[1] or key in seen:
+                continue
+            seen.add(key)
+            hit["retrieval_route"] = route
+            selected.append(hit)
+            if len(selected) >= limit:
+                return selected
+    return selected
+
+
+def _local_graph_context(
+    db: Session,
+    question: str,
+    trace: list[TraceStep],
+    seen_calls: set[str],
+    budget: RetrievalBudget,
+) -> str:
     """Deterministic graph pre-routing for providers without tool calling."""
     chunks: list[str] = []
-    started = perf_counter()
-    found = graph_query_service.find_nodes(db, question, limit=8)
-    raw = json.dumps(found, ensure_ascii=False, separators=(",", ":"))
-    trace.append(_trace_step(len(trace), "find_nodes", {"query": question, "limit": 8}, raw, int((perf_counter() - started) * 1000)))
+    find_args = {"query": question, "limit": 8}
+    raw, duration_ms = _execute_tool_once(
+        db, "find_nodes", find_args, seen_calls, budget,
+    )
+    trace.append(_trace_step(
+        len(trace), "find_nodes", find_args, raw, duration_ms,
+    ))
     chunks.append(f"[find_nodes]\n{raw}")
+    try:
+        found = json.loads(raw)
+    except Exception:
+        found = {}
+    if not isinstance(found, dict):
+        found = {}
     nodes = found.get("nodes", [])
     paper_ids = [item["id"] for item in nodes if item.get("node_type") == "paper"]
     lower = question.casefold()
@@ -873,9 +1103,12 @@ def _local_graph_context(db: Session, question: str, trace: list[TraceStep]) -> 
         else:
             tool = "shortest_path"
             args = {"source_id": paper_ids[0], "target_id": paper_ids[1], "max_depth": 4}
-        t0 = perf_counter()
-        result = _dispatch_tool(db, tool, args)
-        trace.append(_trace_step(len(trace), tool, args, result, int((perf_counter() - t0) * 1000)))
+        result, duration_ms = _execute_tool_once(
+            db, tool, args, seen_calls, budget,
+        )
+        trace.append(_trace_step(
+            len(trace), tool, args, result, duration_ms,
+        ))
         chunks.append(f"[{tool}]\n{result}")
     return "\n\n".join(chunks)
 
@@ -899,31 +1132,53 @@ def _run_local_retrieval_agent(
 ) -> AskResult:
     started = perf_counter()
     trace: list[TraceStep] = []
+    budget = RetrievalBudget()
+    seen_tool_calls: set[str] = set()
 
     graph_context = (
-        _local_graph_context(db, question, trace)
+        _local_graph_context(
+            db, question, trace, seen_tool_calls, budget,
+        )
         if _question_needs_graph(question)
         else "[内容型问题：未调用图工具]"
     )
 
-    t0 = perf_counter()
-    index_text = _tool_list_wiki_index()
+    index_text, duration_ms = _execute_tool_once(
+        db, "list_wiki_index", {}, seen_tool_calls, budget,
+    )
     trace.append(_trace_step(
         len(trace), "list_wiki_index", {}, index_text,
-        int((perf_counter() - t0) * 1000),
+        duration_ms,
     ))
 
-    t1 = perf_counter()
-    search_result = _tool_search_wiki(question)
+    primary_args = {"q": question, "route": "primary"}
+    search_result, duration_ms = _execute_tool_once(
+        db, "search_wiki", primary_args, seen_tool_calls, budget,
+    )
     trace.append(_trace_step(
-        len(trace), "search_wiki", {"q": question}, search_result,
-        int((perf_counter() - t1) * 1000),
+        len(trace), "search_wiki", primary_args, search_result, duration_ms,
     ))
+
+    search_results: list[tuple[str, str]] = [("primary", search_result)]
+    for term in _parse_search_terms(search_result):
+        route_block = budget.tool_block_reason("search_wiki")
+        if route_block:
+            budget.record_block(route_block)
+            break
+        route = f"entity:{term}"
+        args = {"q": term, "route": route}
+        result, duration_ms = _execute_tool_once(
+            db, "search_wiki", args, seen_tool_calls, budget,
+        )
+        trace.append(_trace_step(
+            len(trace), "search_wiki", args, result, duration_ms,
+        ))
+        search_results.append((route, result))
 
     read_chunks: list[str] = []
     seen_files: set[tuple[str, str]] = set()
-    for index, hit in enumerate(_parse_search_hits(search_result)):
-        if len(read_chunks) >= 4:
+    for hit in _balanced_search_hits(search_results, limit=MAX_READ_CALLS):
+        if len(read_chunks) >= LOCAL_READ_LIMIT:
             break
         filename = str(hit.get("filename") or "").strip()
         kind = {"paper": "papers", "concept": "concepts"}.get(
@@ -936,13 +1191,19 @@ def _run_local_retrieval_agent(
         if key in seen_files:
             continue
         seen_files.add(key)
-        tr = perf_counter()
-        content = _tool_read_wiki(filename, kind)
+        read_args = {
+            "filename": filename,
+            "kind": kind,
+            "route": hit.get("retrieval_route") or "primary",
+        }
+        content, duration_ms = _execute_tool_once(
+            db, "read_wiki", read_args, seen_tool_calls, budget,
+        )
         trace.append(_trace_step(
-            len(trace), "read_wiki", {"filename": filename, "kind": kind}, content,
-            int((perf_counter() - tr) * 1000),
+            len(trace), "read_wiki", read_args, content, duration_ms,
         ))
-        read_chunks.append(f"[{kind}/{filename}]\n{content}")
+        if _successful_wiki_read(content):
+            read_chunks.append(f"[{kind}/{filename}]\n{content}")
 
     assessment = _assess_evidence(question, trace)
     if assessment.status == "insufficient":
@@ -953,6 +1214,7 @@ def _run_local_retrieval_agent(
             model=model,
             duration_ms=int((perf_counter() - started) * 1000),
             assessment=assessment,
+            budget=budget,
         )
 
     history_lines: list[str] = []
@@ -974,18 +1236,30 @@ def _run_local_retrieval_agent(
         f"[当前问题]\n{question}\n\n"
         f"[图结构检索]\n{graph_context}\n\n"
         f"[index.md]\n{index_text}\n\n"
-        f"[search_wiki 结果]\n{search_result}\n\n"
-        f"[read_wiki 材料]\n{chr(10).join(read_chunks) or '[没有读取到具体 wiki 文件]'}"
+        "[search_wiki 多路结果]\n"
+        + "\n\n".join(
+            f"[{route}]\n{result}" for route, result in search_results
+        )
+        + "\n\n"
+        + f"[read_wiki 材料]\n{chr(10).join(read_chunks) or '[没有读取到具体 wiki 文件]'}"
     )
-    final_answer = call_text_model(
-        cfg,
-        model_id=model,
-        system=response_instructions(LOCAL_ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
-        user=user_prompt,
-        reasoning_effort=reasoning_effort,
-        max_tokens=2600,
-        temperature=0.3,
-    ).strip()
+    final_answer, budget_reason = _run_budgeted_model_call(
+        budget,
+        lambda: call_text_model(
+            cfg,
+            model_id=model,
+            system=response_instructions(LOCAL_ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
+            user=user_prompt,
+            reasoning_effort=reasoning_effort,
+            max_tokens=2600,
+            temperature=0.3,
+            timeout_s=budget.remaining_timeout_s(),
+        ),
+    )
+    if budget_reason:
+        final_answer = _budget_exhausted_answer(budget_reason)
+    else:
+        final_answer = str(final_answer or "").strip()
     duration_ms = int((perf_counter() - started) * 1000)
     return _finish_result(
         answer=final_answer,
@@ -994,6 +1268,7 @@ def _run_local_retrieval_agent(
         model=model,
         duration_ms=duration_ms,
         assessment=assessment,
+        budget=budget,
     )
 
 
@@ -1051,10 +1326,13 @@ def _run_ask_agent_inner(
         )
     except Exception as exc:
         raise AskAgentUnavailable(str(exc))
+    if isinstance(client, OpenAI):
+        client = client.with_options(max_retries=0)
     provider_id = str(provider_blob.get("id") or "openai")
     trace: list[TraceStep] = []
     final_answer: Optional[str] = None
     seen_tool_calls: set[str] = set()
+    budget = RetrievalBudget()
 
     if model_uses_responses_api(model):
         next_input: list[dict[str, Any]] = [
@@ -1064,29 +1342,36 @@ def _run_ask_agent_inner(
         previous_response_id: Optional[str] = None
 
         for step in range(MAX_STEPS):
-            response = track_call(
-                lambda: client.responses.create(
+            response, budget_reason = _run_budgeted_model_call(
+                budget,
+                lambda: track_call(
+                    lambda: client.responses.create(
+                        model=model,
+                        instructions=response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
+                        input=next_input,
+                        tools=RESPONSES_TOOLS,
+                        tool_choice="auto",
+                        temperature=0.3,
+                        timeout=budget.remaining_timeout_s(),
+                        **(
+                            {"reasoning": {"effort": reasoning_effort}}
+                            if reasoning_effort in {"low", "medium", "high"}
+                            else {}
+                        ),
+                        **(
+                            {"previous_response_id": previous_response_id}
+                            if previous_response_id
+                            else {}
+                        ),
+                    ),
+                    provider=provider_id,
                     model=model,
-                    instructions=response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh")),
-                    input=next_input,
-                    tools=RESPONSES_TOOLS,
-                    tool_choice="auto",
-                    temperature=0.3,
-                    **(
-                        {"reasoning": {"effort": reasoning_effort}}
-                        if reasoning_effort in {"low", "medium", "high"}
-                        else {}
-                    ),
-                    **(
-                        {"previous_response_id": previous_response_id}
-                        if previous_response_id
-                        else {}
-                    ),
+                    surface="responses",
                 ),
-                provider=provider_id,
-                model=model,
-                surface="responses",
             )
+            if budget_reason:
+                final_answer = _budget_exhausted_answer(budget_reason)
+                break
             tool_calls = [
                 item
                 for item in (getattr(response, "output", []) or [])
@@ -1101,7 +1386,9 @@ def _run_ask_agent_inner(
                         args = json.loads(tool_call.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    result, dt = _execute_tool_once(db, fn_name, args, seen_tool_calls, len(trace))
+                    result, dt = _execute_tool_once(
+                        db, fn_name, args, seen_tool_calls, budget,
+                    )
                     trace.append(_trace_step(step, fn_name, args, result, dt))
                     next_input.append(
                         {
@@ -1127,6 +1414,7 @@ def _run_ask_agent_inner(
                     }
                 ],
                 "temperature": 0.3,
+                "timeout": budget.remaining_timeout_s(),
             }
             if reasoning_effort in {"low", "medium", "high"}:
                 wrap_kwargs["reasoning"] = {"effort": reasoning_effort}
@@ -1141,31 +1429,45 @@ def _run_ask_agent_inner(
                         "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
                     },
                 ]
-            wrap_up = track_call(
-                lambda: client.responses.create(**wrap_kwargs),
-                provider=provider_id,
-                model=model,
-                surface="responses",
+            wrap_up, budget_reason = _run_budgeted_model_call(
+                budget,
+                lambda: track_call(
+                    lambda: client.responses.create(**wrap_kwargs),
+                    provider=provider_id,
+                    model=model,
+                    surface="responses",
+                ),
             )
-            final_answer = _extract_responses_text(wrap_up)
+            final_answer = (
+                _budget_exhausted_answer(budget_reason)
+                if budget_reason
+                else _extract_responses_text(wrap_up)
+            )
     else:
         messages: list[dict[str, Any]] = [{"role": "system", "content": response_instructions(ASK_SYSTEM_PROMPT, cfg.get("prompt_locale", "zh"))}]
         messages.extend(_history_messages(history))
         messages.append({"role": "user", "content": question})
 
         for step in range(MAX_STEPS):
-            resp = track_call(
-                lambda: client.chat.completions.create(
+            resp, budget_reason = _run_budgeted_model_call(
+                budget,
+                lambda: track_call(
+                    lambda: client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        tools=TOOLS,
+                        tool_choice="auto",
+                        temperature=0.3,
+                        timeout=budget.remaining_timeout_s(),
+                    ),
+                    provider=provider_id,
                     model=model,
-                    messages=messages,
-                    tools=TOOLS,
-                    tool_choice="auto",
-                    temperature=0.3,
+                    surface="chat",
                 ),
-                provider=provider_id,
-                model=model,
-                surface="chat",
             )
+            if budget_reason:
+                final_answer = _budget_exhausted_answer(budget_reason)
+                break
             msg = resp.choices[0].message
 
             if msg.tool_calls:
@@ -1193,7 +1495,9 @@ def _run_ask_agent_inner(
                         args = json.loads(tc.function.arguments or "{}")
                     except json.JSONDecodeError:
                         args = {}
-                    result, dt = _execute_tool_once(db, fn_name, args, seen_tool_calls, len(trace))
+                    result, dt = _execute_tool_once(
+                        db, fn_name, args, seen_tool_calls, budget,
+                    )
                     trace.append(_trace_step(step, fn_name, args, result, dt))
                     messages.append({
                         "role": "tool",
@@ -1210,23 +1514,31 @@ def _run_ask_agent_inner(
             # Hit MAX_STEPS without terminating. Ask the model to wrap up
             # with what it has — a softer failure than silently truncating.
             log.warning("ask_agent reached MAX_STEPS=%s without answer", MAX_STEPS)
-            wrap_up = track_call(
-                lambda: client.chat.completions.create(
+            wrap_up, budget_reason = _run_budgeted_model_call(
+                budget,
+                lambda: track_call(
+                    lambda: client.chat.completions.create(
+                        model=model,
+                        messages=messages
+                        + [
+                            {
+                                "role": "user",
+                                "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
+                            }
+                        ],
+                        temperature=0.3,
+                        timeout=budget.remaining_timeout_s(),
+                    ),
+                    provider=provider_id,
                     model=model,
-                    messages=messages
-                    + [
-                        {
-                            "role": "user",
-                            "content": "工具步数已达上限，请基于上面已经读到的内容直接给出 markdown 答案，不要再调用工具。",
-                        }
-                    ],
-                    temperature=0.3,
+                    surface="chat",
                 ),
-                provider=provider_id,
-                model=model,
-                surface="chat",
             )
-            final_answer = (wrap_up.choices[0].message.content or "").strip()
+            final_answer = (
+                _budget_exhausted_answer(budget_reason)
+                if budget_reason
+                else (wrap_up.choices[0].message.content or "").strip()
+            )
 
     duration_ms = int((perf_counter() - started) * 1000)
     return _finish_result(
@@ -1235,4 +1547,5 @@ def _run_ask_agent_inner(
         trace=trace,
         model=model,
         duration_ms=duration_ms,
+        budget=budget,
     )

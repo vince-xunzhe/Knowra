@@ -28,6 +28,7 @@ TESTS = (
     "tests.test_sync_local_router",
     "tests.test_wiki_search_fallback",
     "tests.test_ask_evidence_gate",
+    "tests.test_ask_retrieval_orchestration",
 )
 
 
