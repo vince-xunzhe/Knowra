@@ -1,6 +1,6 @@
 # Ask 检索与证据质量优化计划
 
-> 状态：评测基础已合并；原文证据层已形成未发布的本地依赖提交；编译保真／claim 归因层在新的隔离 worktree 实现中。真实研究数据、运行服务和现有 Wiki 未改动。
+> 状态：评测基础已合并；原文证据层与编译保真／claim 归因层已形成未发布的本地依赖提交；混合 claim/source 检索正在新的隔离 worktree 完成 shadow 验收。真实研究数据、运行服务、现有 Wiki／FTS 和 Ask 回答均未改动。
 > 原则：先定位损失层，再修改该层；不以单个问题的字符串规则冒充系统能力。
 
 ## 1. 问题定义
@@ -131,6 +131,8 @@ DoD：合成和公开小语料的 claim 保留率达到约定阈值，过期检�
 不预设大型向量数据库；当前规模先验证 SQLite 本地索引或轻量本地向量表是否足够。embedding 的本地/云端选择必须保持 local-first 隐私边界。
 
 DoD：在公开合成集和本地私有标注集上，相对词法基线提高 Recall@k 和必要 claim 覆盖，同时无答案准确率不显著退化；报告 p95 延迟和存储成本。
+
+当前 shadow 进展（未激活）：签名 claim ledger、validated evidence chunk、独立 SQLite FTS、可插拔预计算向量、RRF、最终 top-N coverage、一次 gap、CLI/API 共用执行器及硬预算已由合成回归覆盖。长中文演进问法的固定 fixture 从词法 Recall@4=0.00 提升到 hybrid=1.00；这不代表真实语料成功。真实 dense 模型、私有标注集、p95 和 no-answer 阈值尚未测量，因此生产 Ask 保持原状，所有候选仍报告 `answerable=false`。
 
 ### 第 4 轮：claim 级回答与引用
 

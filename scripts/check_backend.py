@@ -33,6 +33,7 @@ TESTS = (
     "tests.test_ask_quality_eval",
     "tests.test_paper_evidence_service",
     "tests.test_wiki_claims",
+    "tests.test_hybrid_claim_retrieval",
 )
 
 

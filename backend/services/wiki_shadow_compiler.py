@@ -136,6 +136,38 @@ def _claim_sources(catalog: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _retrieval_claims(
+    catalog: Mapping[str, Any],
+    *,
+    paper_title: str,
+    included_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Return a signed, bounded claim ledger for downstream shadow indexes.
+
+    The lineage sidecar intentionally contains only paragraph text and source
+    metadata.  Search must therefore consume this ledger from a validated
+    compile plan instead of reconstructing claim text from rendered Markdown.
+    """
+    validate_claim_catalog(catalog)
+    return [
+        {
+            "id": claim["id"],
+            "paper_id": claim["paper_id"],
+            "paper_title": paper_title,
+            "field_path": claim["field_path"],
+            "root_field": claim["root_field"],
+            "text": claim["text"],
+            "retained_text_hash": claim["retained_text_hash"],
+            "source_text_hash": claim["source_text_hash"],
+            "support_level": claim["support_level"],
+            "evidence_status": claim["evidence_status"],
+            "candidate_evidence_ids": claim["candidate_evidence_ids"],
+        }
+        for claim in catalog["claims"]
+        if included_ids is None or claim["id"] in included_ids
+    ]
+
+
 def _concept_claim_rank(claim: Mapping[str, Any]) -> tuple[int, str]:
     path = str(claim["field_path"])
     return (_CONCEPT_PATH_RANK.get(path, len(_CONCEPT_PATH_RANK)), path)
@@ -268,6 +300,8 @@ def build_paper_compile_plan(
     locale: str,
     source_file_hash: str,
     generation_config: Mapping[str, Any] | None = None,
+    evidence_links: Mapping[str, list[str]] | None = None,
+    evidence_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(title, str) or not title.strip():
         raise ShadowCompileError("title must be non-empty")
@@ -277,7 +311,18 @@ def build_paper_compile_plan(
         raise ShadowCompileError("locale must be non-empty")
     if not re.fullmatch(r"[0-9a-f]{64}", source_file_hash):
         raise ShadowCompileError("source_file_hash must be a SHA-256")
-    catalog = build_claim_catalog(paper_id=paper_id, extraction=extraction)
+    if evidence_manifest is not None and (
+        not isinstance(evidence_manifest, Mapping)
+        or (evidence_manifest.get("source") or {}).get("file_hash_sha256")
+        != source_file_hash
+    ):
+        raise ShadowCompileError("evidence manifest source hash does not match the paper")
+    catalog = build_claim_catalog(
+        paper_id=paper_id,
+        extraction=extraction,
+        evidence_links=evidence_links,
+        evidence_manifest=evidence_manifest,
+    )
     claim_text, included, omitted = render_claim_blocks(catalog)
     retained_note, note_report = _bounded_note(notes)
     sources = _claim_sources(catalog)
@@ -290,6 +335,9 @@ def build_paper_compile_plan(
         "paper_id": str(paper_id),
         "title": title.strip(),
         "claims": catalog["claims"],
+        "retrieval_claims": _retrieval_claims(
+            catalog, paper_title=title.strip()
+        ),
         "notes": retained_note,
     }
     user_prompt = (
@@ -356,6 +404,7 @@ def build_concept_compile_plan(
     quota = min(CONCEPT_MAX_PER_PAPER, CONCEPT_TOTAL_CHARACTERS // paper_count)
     catalogs: list[dict[str, Any]] = []
     capsules: list[dict[str, Any]] = []
+    retrieval_claims: list[dict[str, Any]] = []
     all_sources: list[dict[str, Any]] = []
     seen_papers: set[str] = set()
     for source in source_papers:
@@ -369,12 +418,22 @@ def build_concept_compile_plan(
         if not paper_title or not isinstance(extraction, Mapping):
             raise ShadowCompileError("source paper title/extraction is invalid")
         seen_papers.add(paper_id)
-        catalog = build_claim_catalog(paper_id=paper_id, extraction=extraction)
+        catalog = build_claim_catalog(
+            paper_id=paper_id,
+            extraction=extraction,
+            evidence_links=source.get("evidence_links"),
+            evidence_manifest=source.get("evidence_manifest"),
+        )
         rendered, included, omitted, included_roots = _render_concept_capsule(
             catalog, max_characters=quota
         )
         catalogs.append(catalog)
         included_set = set(included)
+        retrieval_claims.extend(_retrieval_claims(
+            catalog,
+            paper_title=paper_title,
+            included_ids=included_set,
+        ))
         all_sources.extend(
             source for source in _claim_sources(catalog)
             if source["source_id"] in included_set
@@ -394,6 +453,7 @@ def build_concept_compile_plan(
         "title": title.strip(),
         "description": description.strip()[:2_000],
         "source_capsules": capsules,
+        "retrieval_claims": retrieval_claims,
     }
     capsule_text = "\n\n".join(
         f"PAPER {capsule['paper_id']} — {capsule['title']}\n"
