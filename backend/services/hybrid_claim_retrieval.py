@@ -847,6 +847,42 @@ class HybridClaimRetriever:
         finally:
             conn.close()
 
+    def paper_years(self, paper_ids: Sequence[str]) -> dict[str, int]:
+        """Return bounded structured-extraction years for candidate papers."""
+        normalized = sorted(set(str(item).strip() for item in paper_ids if str(item).strip()))
+        if len(normalized) > MAX_FILTER_PAPERS:
+            raise HybridRetrievalError("paper year lookup exceeds the filter budget")
+        if not normalized:
+            return {}
+        current_path = _safe_shadow_read_path(
+            self.index_path,
+            shadow_root=self.shadow_root,
+            production_wiki_root=self.production_wiki_root,
+        )
+        conn = _read_connection(current_path)
+        try:
+            metadata = dict(conn.execute("SELECT key,value FROM metadata"))
+            if (
+                metadata.get("source_digest") != self.source_digest
+                or metadata.get("dense_index_digest") != self.dense_index_digest
+                or metadata.get("dense_model_id") != self.dense_model_id
+                or int(metadata.get("vector_dimension", "-1")) != self.vector_dimension
+            ):
+                raise HybridRetrievalError("shadow index changed after retriever initialization")
+            rows = conn.execute(
+                "SELECT paper_id,text FROM records WHERE kind='claim' AND field_path='year' "
+                f"AND paper_id IN ({','.join('?' for _ in normalized)}) ORDER BY paper_id,id",
+                normalized,
+            ).fetchall()
+        finally:
+            conn.close()
+        years: dict[str, int] = {}
+        for paper_id, text in rows:
+            match = re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", str(text))
+            if match and paper_id not in years:
+                years[paper_id] = int(match.group())
+        return years
+
 
 def _normalize_route(route: Mapping[str, Any], *, field: str) -> dict[str, Any]:
     if not isinstance(route, Mapping):
