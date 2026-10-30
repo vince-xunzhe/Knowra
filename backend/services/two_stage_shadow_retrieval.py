@@ -17,6 +17,13 @@ MAX_PAPERS = 8
 MAX_TEMPORAL_REPAIR_CALLS = 2
 _REFERENCE_HEADING = re.compile(r"^(?:references|bibliography|参考文献)\b", re.IGNORECASE)
 _TEMPORAL_MARKERS = ("演进", "变化", "经历", "发展", "evolution", "over time", "history")
+_LATIN_TERM = re.compile(r"[a-z][a-z0-9-]{2,}", re.IGNORECASE)
+_CJK_TERM = re.compile(r"[\u3400-\u9fff]{2,}")
+_GENERIC_ANCHOR_TERMS = {
+    "approach", "approaches", "architecture", "architectures", "change", "changes",
+    "evolution", "learned", "learning", "mechanism", "mechanisms", "method", "methods",
+    "model", "models",
+}
 
 
 class TwoStageRetrievalError(ValueError):
@@ -35,12 +42,66 @@ def _quality_evidence(item: dict[str, Any]) -> bool:
     )
 
 
+def _normalized_latin_term(term: str) -> str:
+    normalized = term.casefold()
+    if normalized.endswith("ies") and len(normalized) > 5:
+        normalized = normalized[:-3] + "y"
+    elif normalized.endswith(("ches", "shes", "xes", "zes", "oes")):
+        normalized = normalized[:-2]
+    elif (
+        normalized.endswith("s")
+        and not normalized.endswith(("ss", "us", "is"))
+        and len(normalized) > 4
+    ):
+        normalized = normalized[:-1]
+    return normalized
+
+
+def _primary_anchor_groups(query: str) -> tuple[list[str], list[str]]:
+    latin = list(dict.fromkeys(
+        normalized
+        for term in _LATIN_TERM.findall(query)
+        if (normalized := _normalized_latin_term(term)) not in _GENERIC_ANCHOR_TERMS
+    ))
+    cjk = list(dict.fromkeys(
+        term for term in _CJK_TERM.findall(query) if term not in {"演进", "变化"}
+    ))
+    return latin, cjk
+
+
+def _evidence_anchor_query(queries: Sequence[str]) -> str:
+    primary = queries[0]
+    latin, _ = _primary_anchor_groups(primary)
+    if latin:
+        return primary
+    translated = next(
+        (query for query in queries[1:] if _primary_anchor_groups(query)[0]), ""
+    )
+    return f"{primary} {translated}".strip()
+
+
+def _matches_primary_anchors(query: str, item: dict[str, Any]) -> bool:
+    latin, cjk = _primary_anchor_groups(query)
+    if not latin and not cjk:
+        return True
+    text = f"{item.get('title') or ''} {item.get('text') or ''}".casefold()
+    text_latin = {_normalized_latin_term(term) for term in _LATIN_TERM.findall(text)}
+    latin_matches = sum(term in text_latin for term in latin)
+    cjk_matches = sum(term in text for term in cjk)
+    return (
+        bool(latin) and latin_matches >= min(2, len(latin))
+    ) or (
+        bool(cjk) and cjk_matches >= min(2, len(cjk))
+    )
+
+
 def _ranked_routes(
     retriever: HybridClaimRetriever,
     queries: Sequence[str],
     *,
     kinds: list[str],
     paper_ids: list[str] | None = None,
+    anchor_query: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     aggregate: dict[str, dict[str, Any]] = {}
     calls = 0
@@ -50,7 +111,10 @@ def _ranked_routes(
         )
         calls += 1
         for rank, item in enumerate(result["results"], 1):
-            if item["kind"] == "evidence" and not _quality_evidence(item):
+            if item["kind"] == "evidence" and (
+                not _quality_evidence(item)
+                or (anchor_query is not None and not _matches_primary_anchors(anchor_query, item))
+            ):
                 continue
             entry = aggregate.setdefault(
                 item["id"], {**item, "route_indexes": [], "route_score": 0.0}
@@ -153,7 +217,11 @@ def _temporal_evidence_supplements(
             queries[route_index], kinds=["evidence"], paper_ids=[paper_id], limit=10
         )
         calls += 1
-        match = next((item for item in result["results"] if _quality_evidence(item)), None)
+        match = next((
+            item for item in result["results"]
+            if _quality_evidence(item)
+            and _matches_primary_anchors(_evidence_anchor_query(queries), item)
+        ), None)
         if match is not None:
             supplements.append(
                 {
@@ -187,8 +255,13 @@ def execute_two_stage_shadow_retrieval(
     )
     evidence_ranked, evidence_calls = ([], 0)
     if papers:
+        anchor_query = _evidence_anchor_query(normalized)
         evidence_ranked, evidence_calls = _ranked_routes(
-            retriever, normalized, kinds=["evidence"], paper_ids=papers
+            retriever,
+            normalized,
+            kinds=["evidence"],
+            paper_ids=papers,
+            anchor_query=anchor_query,
         )
     supplements: list[dict[str, Any]] = []
     repair_calls = 0
@@ -202,9 +275,12 @@ def execute_two_stage_shadow_retrieval(
         MAX_EVIDENCE,
     )
     evidence_papers = {item["paper_id"] for item in evidence}
+    evidence_years = {years[item["paper_id"]] for item in evidence if item["paper_id"] in years}
+    temporal_years_sufficient = not temporal or len(evidence_years) >= 2
     answerable = (
         len(evidence) >= required_evidence
         and len(evidence_papers) >= required_papers
+        and temporal_years_sufficient
     )
     return {
         "question": question.strip(),
@@ -219,8 +295,9 @@ def execute_two_stage_shadow_retrieval(
             "required_papers": required_papers,
             "required_evidence": required_evidence,
             "temporal_intent": temporal,
+            "temporal_years_sufficient": temporal_years_sufficient,
             "candidate_years": sorted({years[paper] for paper in papers if paper in years}),
-            "evidence_years": sorted({years[item["paper_id"]] for item in evidence if item["paper_id"] in years}),
+            "evidence_years": sorted(evidence_years),
         },
         "budget": {
             "search_calls": claim_calls + evidence_calls + repair_calls,

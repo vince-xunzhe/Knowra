@@ -93,12 +93,14 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
                 if paper_ids == ["paper-old"]:
                     rows = ([{
                         "id": "evidence-old", "paper_id": "paper-old", "kind": "evidence",
-                        "field_path": "pages/1/body", "title": "Methods", "text": "old " * 80,
+                        "field_path": "pages/1/body", "title": "Methods",
+                        "text": "world action dynamics " * 40,
                     }] if self.old_evidence else [])
                     return {"results": rows}
                 return {"results": [{
                     "id": "evidence-new", "paper_id": "paper-new", "kind": "evidence",
-                    "field_path": "pages/1/body", "title": "Results", "text": "new " * 80,
+                    "field_path": "pages/1/body", "title": "Results",
+                    "text": "world action transition " * 40,
                 }]}
 
         supported = EndpointRetriever(old_evidence=True)
@@ -120,6 +122,76 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
         self.assertFalse(result["answerable"])
         self.assertEqual(result["coverage"]["evidence_years"], [2024])
         self.assertEqual(result["budget"]["search_calls"], 5)
+
+    def test_primary_topic_anchors_reject_cross_domain_route_overlap(self):
+        class CrossDomainRetriever:
+            def paper_years(self, paper_ids):
+                return {"paper-a": 2020, "paper-b": 2024}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [
+                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim"},
+                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim"},
+                    ]}
+                return {"results": [
+                    {
+                        "id": "irrelevant-a", "paper_id": "paper-a", "kind": "evidence",
+                        "field_path": "pages/1/body", "title": "Language distillation",
+                        "text": "student model sampling and teacher policy " * 30,
+                    },
+                    {
+                        "id": "irrelevant-b", "paper_id": "paper-b", "kind": "evidence",
+                        "field_path": "pages/1/body", "title": "Depth estimation",
+                        "text": "single-step deterministic depth model " * 30,
+                    },
+                ]}
+
+        result = execute_two_stage_shadow_retrieval(
+            CrossDomainRetriever(),
+            question="扩散模型的采样算法经历了哪些变化？",
+            queries=[
+                "扩散模型 采样算法 演进 diffusion model sampling",
+                "扩散模型 少步采样 蒸馏 few-step sampling distillation",
+            ],
+        )
+        self.assertFalse(result["answerable"])
+        self.assertEqual(result["coverage"]["evidence_records"], 0)
+
+    def test_temporal_question_requires_distinct_evidence_years_not_just_papers(self):
+        class SameYearRetriever:
+            def paper_years(self, paper_ids):
+                return {"paper-a": 2020, "paper-b": 2020, "paper-c": 2024}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [
+                        {"id": "claim-a", "paper_id": "paper-a", "kind": "claim"},
+                        {"id": "claim-b", "paper_id": "paper-b", "kind": "claim"},
+                        {"id": "claim-c", "paper_id": "paper-c", "kind": "claim"},
+                    ]}
+                return {"results": [
+                    {
+                        "id": "evidence-a", "paper_id": "paper-a", "kind": "evidence",
+                        "field_path": "pages/1/body", "title": "Diffusion sampling",
+                        "text": "diffusion sampling process " * 30,
+                    },
+                    {
+                        "id": "evidence-b", "paper_id": "paper-b", "kind": "evidence",
+                        "field_path": "pages/1/body", "title": "Diffusion sampling",
+                        "text": "diffusion sampling objective " * 30,
+                    },
+                ]}
+
+        result = execute_two_stage_shadow_retrieval(
+            SameYearRetriever(),
+            question="扩散模型的采样算法经历了哪些变化？",
+            queries=["扩散模型 采样算法 diffusion model sampling"],
+        )
+        self.assertFalse(result["answerable"])
+        self.assertEqual(result["coverage"]["evidence_papers"], 2)
+        self.assertEqual(result["coverage"]["evidence_years"], [2020])
+        self.assertFalse(result["coverage"]["temporal_years_sufficient"])
 
 
 if __name__ == "__main__":
