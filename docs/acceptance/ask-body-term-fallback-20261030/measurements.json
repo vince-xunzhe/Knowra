@@ -1,0 +1,82 @@
+{
+  "fixture": "disposable synthetic Markdown and SQLite only",
+  "documents": 1075,
+  "iterations": 25,
+  "rebuild_ms": 67,
+  "strict_full_question_hits": {
+    "two_term_question": 0,
+    "single_term_question": 0
+  },
+  "cold_two_term_ms": 409.796,
+  "two_term": {
+    "mode": "body_and_or",
+    "terms": [
+      "世界模型",
+      "动作模型"
+    ],
+    "attempt_modes": [
+      "strict",
+      "body_probe",
+      "body_and",
+      "body_or"
+    ],
+    "hit_count": 12,
+    "probe_count": 2,
+    "probe_limit": 64,
+    "common_rejected": 0,
+    "strict_only_p50_ms": 0.109,
+    "pre_body_fallback_p50_ms": 346.222,
+    "body_probe_only_p50_ms": 0.247,
+    "warm_p50_ms": 351.347,
+    "warm_max_ms": 398.456
+  },
+  "single_term": {
+    "mode": "body",
+    "terms": [
+      "世界模型"
+    ],
+    "attempt_modes": [
+      "strict",
+      "body_probe",
+      "body"
+    ],
+    "hit_count": 12,
+    "probe_count": 1,
+    "probe_limit": 64,
+    "common_rejected": 0,
+    "strict_only_p50_ms": 0.106,
+    "pre_body_fallback_p50_ms": 347.483,
+    "body_probe_only_p50_ms": 0.231,
+    "warm_p50_ms": 347.767,
+    "warm_max_ms": 476.603
+  },
+  "unknown": {
+    "mode": "strict_no_match",
+    "terms": [],
+    "attempt_modes": [
+      "strict"
+    ],
+    "hit_count": 0,
+    "probe_count": 0,
+    "probe_limit": 64,
+    "common_rejected": 0,
+    "strict_only_p50_ms": 0.104,
+    "pre_body_fallback_p50_ms": 343.959,
+    "body_probe_only_p50_ms": 0.001,
+    "warm_p50_ms": 341.19,
+    "warm_max_ms": 356.696
+  },
+  "strict_title": {
+    "mode": "strict",
+    "terms": [],
+    "attempt_modes": [
+      "strict"
+    ],
+    "hit_count": 1,
+    "probe_count": 0,
+    "probe_limit": 64,
+    "common_rejected": 0,
+    "warm_p50_ms": 0.464,
+    "warm_max_ms": 1.983
+  }
+}

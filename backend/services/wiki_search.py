@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
+from math import ceil
 from pathlib import Path
 from time import perf_counter
 from typing import Any, List, Optional
@@ -34,6 +35,12 @@ WIKI_DIR = DATA_DIR / "wiki"
 
 MAX_FALLBACK_TERMS = 6
 MAX_FRONTMATTER_CHARS = 64_000
+MAX_BODY_FALLBACK_TERMS = 4
+MAX_BODY_FALLBACK_PROBES = 64
+MIN_BODY_TERM_CHARS = 3
+MAX_BODY_TERM_CHARS = 8
+BODY_COMMON_MIN_DOCS = 8
+BODY_COMMON_DOC_RATIO = 0.15
 _EntitySignature = tuple[str, int, int, str]
 _ENTITY_CACHE: Optional[
     tuple[_EntitySignature, tuple[tuple[str, str], ...]]
@@ -213,6 +220,24 @@ def rebuild_index() -> dict:
 # Anything else becomes a separator. This protects FTS5 from special chars
 # (- + : ( ) * ^ ") without losing common alphanumeric or CJK input.
 _TERM_SPLIT = re.compile(r"[^\w一-鿿぀-ヿ]+", re.UNICODE)
+_CJK_RUN = re.compile(r"[\u3400-\u9fff]+")
+_BODY_CONNECTOR = re.compile(r"以及|并且|或者|还是|与|和|及|或")
+_BODY_QUERY_FRAMING = {
+    "哪些变化",
+    "有什么变化",
+    "发生了什么",
+    "经历了哪些变化",
+    "如何实现",
+    "怎么实现",
+    "为什么",
+    "是什么",
+    "有哪些",
+}
+_BODY_TECHNICAL_SUFFIXES = (
+    "模型", "方法", "算法", "系统", "数据集", "任务", "框架", "架构",
+    "策略", "表示", "表征", "网络", "基准", "指标", "机制", "模块",
+    "代理", "智能体",
+)
 
 
 def _sanitize(query: str) -> str:
@@ -394,6 +419,143 @@ def _extract_known_terms(query: str) -> list[str]:
     return terms
 
 
+def _body_fragments(query: str) -> list[tuple[int, str]]:
+    fragments: list[tuple[int, str]] = []
+    for run_match in _CJK_RUN.finditer(query):
+        run = run_match.group(0)
+        cursor = 0
+        for connector in _BODY_CONNECTOR.finditer(run):
+            left_length = connector.start() - cursor
+            right_length = len(run) - connector.end()
+            if left_length >= MIN_BODY_TERM_CHARS and right_length >= MIN_BODY_TERM_CHARS:
+                fragments.append((run_match.start() + cursor, run[cursor:connector.start()]))
+                cursor = connector.end()
+        if cursor < len(run):
+            fragments.append((run_match.start() + cursor, run[cursor:]))
+    return fragments
+
+
+def _valid_body_candidate(phrase: str) -> bool:
+    return not (
+        phrase in _BODY_QUERY_FRAMING
+        or phrase[0] in "的了在是有把被请问从对"
+        or phrase[-1] in "的了吗呢么在上中"
+    )
+
+
+def _body_candidate_spans(query: str) -> list[tuple[int, int, str]]:
+    """Generate bounded technical CJK phrases from a question.
+
+    Only the longest valid window ending in a known technical suffix is kept.
+    This deliberately avoids arbitrary n-grams and suffix-internal fragments,
+    which can turn rare question wording into unrelated evidence.
+    """
+    fragments = _body_fragments(query)
+    candidates: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for fragment_start, fragment in fragments:
+        for suffix in _BODY_TECHNICAL_SUFFIXES:
+            search_start = 0
+            while True:
+                suffix_start = fragment.find(suffix, search_start)
+                if suffix_start < 0:
+                    break
+                phrase_end = suffix_start + len(suffix)
+                for size in range(
+                    min(MAX_BODY_TERM_CHARS, phrase_end),
+                    MIN_BODY_TERM_CHARS - 1,
+                    -1,
+                ):
+                    local_start = phrase_end - size
+                    phrase = fragment[local_start:phrase_end]
+                    if phrase in seen or not _valid_body_candidate(phrase):
+                        continue
+                    seen.add(phrase)
+                    start = fragment_start + local_start
+                    candidates.append((start, start + size, phrase))
+                    if len(candidates) >= MAX_BODY_FALLBACK_PROBES:
+                        return candidates
+                    # Keep the longest valid phrase ending at this technical
+                    # suffix. Shorter suffix windows (for example 界模型 from
+                    # 世界模型) can match unrelated compounds such as 边界模型.
+                    break
+                search_start = suffix_start + 1
+
+    return candidates
+
+
+def _extract_body_terms(query: str) -> tuple[list[str], dict[str, Any]]:
+    """Recover exact question phrases that occur in indexed titles or bodies.
+
+    This path runs only after strict and title/alias recovery both fail. It uses
+    at most ``MAX_BODY_FALLBACK_PROBES`` FTS counts on one connection, rejects
+    phrases present in at least 15% of a non-trivial corpus, then keeps
+    the longest non-overlapping technical-looking spans. It is lexical recall,
+    not synonym or semantic retrieval.
+    """
+    candidates = _body_candidate_spans(query)
+    diagnostics: dict[str, Any] = {
+        "mode": "body_probe",
+        "candidate_count": len(candidates),
+        "probe_count": 0,
+        "probe_limit": MAX_BODY_FALLBACK_PROBES,
+        "matched_count": 0,
+        "common_rejected": 0,
+        "selected_count": 0,
+    }
+    if not candidates:
+        return [], diagnostics
+
+    conn = _open()
+    matched: list[tuple[int, int, str, int]] = []
+    try:
+        total_docs = int(conn.execute("SELECT COUNT(*) FROM wiki_fts").fetchone()[0])
+        common_cutoff = max(
+            BODY_COMMON_MIN_DOCS,
+            ceil(total_docs * BODY_COMMON_DOC_RATIO),
+        )
+        for start, end, phrase in candidates:
+            match_query = _sanitize(phrase)
+            diagnostics["probe_count"] += 1
+            try:
+                count = int(conn.execute(
+                    "SELECT COUNT(*) FROM wiki_fts WHERE wiki_fts MATCH ?",
+                    (match_query,),
+                ).fetchone()[0])
+            except sqlite3.OperationalError as exc:
+                _log(f"body fallback probe failed for {match_query!r}: {exc}")
+                continue
+            if count <= 0:
+                continue
+            diagnostics["matched_count"] += 1
+            if count >= common_cutoff:
+                diagnostics["common_rejected"] += 1
+            else:
+                matched.append((start, end, phrase, count))
+    finally:
+        conn.close()
+
+    ranked = sorted(
+        matched,
+        key=lambda item: (
+            -int(item[2].endswith(_BODY_TECHNICAL_SUFFIXES)),
+            -(item[1] - item[0]),
+            item[3],
+            item[0],
+        ),
+    )
+    selected: list[tuple[int, int, str]] = []
+    for start, end, phrase, _count in ranked:
+        if any(start < used_end and end > used_start for used_start, used_end, _ in selected):
+            continue
+        selected.append((start, end, phrase))
+        if len(selected) >= MAX_BODY_FALLBACK_TERMS:
+            break
+    terms = [phrase for _start, _end, phrase in sorted(selected)]
+    diagnostics["selected_count"] = len(terms)
+    return terms, diagnostics
+
+
 def _combine_terms(terms: list[str], operator: str) -> str:
     groups = [_sanitize(term) for term in terms]
     groups = [group for group in groups if group]
@@ -408,8 +570,9 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
     """Search for Ask with a strict-first deterministic entity fallback.
 
     Existing strict hits and their ordering are returned unchanged. Only a
-    zero-hit query consults known Wiki titles/aliases. AND matches are ranked
-    first; OR matches fill the remaining slots without duplicates.
+    zero-hit query consults known Wiki titles/aliases, then bounded exact
+    phrases that are verified against the indexed corpus. AND matches are
+    ranked first; OR matches fill the remaining slots without duplicates.
     """
     strict_query = _sanitize(query)
     strict_hits = _search_match(strict_query, limit)
@@ -428,6 +591,12 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
         }
 
     terms = _extract_known_terms(query)
+    source = "entity"
+    if not terms:
+        terms, body_diagnostics = _extract_body_terms(query)
+        if body_diagnostics["probe_count"]:
+            attempts.append(body_diagnostics)
+        source = "body"
     if not terms:
         return {
             "mode": "strict_no_match",
@@ -441,12 +610,12 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
         entity_query = _combine_terms(terms, "AND")
         entity_hits = _search_match(entity_query, limit)
         attempts.append({
-            "mode": "entity",
+            "mode": source,
             "query": entity_query,
             "hit_count": len(entity_hits),
         })
         return {
-            "mode": "entity",
+            "mode": source,
             "query": query,
             "terms": terms,
             "attempts": attempts,
@@ -456,7 +625,7 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
     and_query = _combine_terms(terms, "AND")
     and_hits = _search_match(and_query, limit)
     attempts.append({
-        "mode": "entity_and",
+        "mode": f"{source}_and",
         "query": and_query,
         "hit_count": len(and_hits),
     })
@@ -464,7 +633,7 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
     or_query = _combine_terms(terms, "OR")
     or_hits = _search_match(or_query, limit)
     attempts.append({
-        "mode": "entity_or",
+        "mode": f"{source}_or",
         "query": or_query,
         "hit_count": len(or_hits),
     })
@@ -480,7 +649,7 @@ def search_with_fallback(query: str, limit: int = 20) -> dict[str, Any]:
         if len(merged) >= limit:
             break
     return {
-        "mode": "entity_and_or",
+        "mode": f"{source}_and_or",
         "query": query,
         "terms": terms,
         "attempts": attempts,
