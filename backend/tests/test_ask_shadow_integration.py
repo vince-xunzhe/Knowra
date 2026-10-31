@@ -261,6 +261,37 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertNotIn("actions became explicit inputs", payload)
         self.assertNotIn("answer_evidence", payload)
 
+    def test_answer_evidence_prefers_primary_sections_and_deduplicates_chunks(self):
+        def item(
+            evidence_id: str,
+            *,
+            paper_id: str,
+            page: int,
+            section: str,
+            routes: list[int],
+        ) -> dict:
+            return {
+                "id": evidence_id,
+                "paper_id": paper_id,
+                "locator": {"page_number": page, "section_kind": section},
+                "route_indexes": routes,
+                "route_score": 1 / 61,
+            }
+
+        selected = ask_agent.ask_shadow_integration._select_answer_evidence([
+            item("related", paper_id="paper-a", page=8, section="related_work", routes=[0, 1, 2]),
+            item("background", paper_id="paper-b", page=4, section="background", routes=[0, 1]),
+            item("abstract", paper_id="paper-c", page=2, section="abstract", routes=[1]),
+            item("weak-related", paper_id="paper-d", page=7, section="related_work", routes=[0]),
+            item("core", paper_id="paper-a", page=6, section="introduction", routes=[0, 2]),
+            item("core-overlap", paper_id="paper-a", page=6, section="introduction", routes=[0, 2]),
+        ])
+
+        self.assertEqual(
+            [result["id"] for result in selected],
+            ["core", "background", "abstract", "weak-related"],
+        )
+
     def test_two_stage_routes_fail_closed_on_invalid_shape_or_detached_vector(self):
         invalid = observe_question(
             "question",

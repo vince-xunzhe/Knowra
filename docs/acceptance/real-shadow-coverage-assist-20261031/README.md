@@ -19,12 +19,36 @@
 - 生产桥回放：使用真实只读 shadow 与上述实际模型回答，5／5 经 CLI 生产 `_finish_result` 路径形成 3／4／4／4／4 条页码＋字符定位引用；trace 不含证据正文；`off` 回滚保持原拒答且无 shadow trace；shadow 文件不变。
 - 统一检查：`NODE_BIN=/Users/vince/.local/bin/node ./scripts/check.sh` 通过，包含 29 项启动、199 项后端、前端 unit／类型／构建、零 warning lint 和 8 项隔离浏览器回归。首次未提权运行因执行沙箱禁止 loopback／fixture worker 失败；按检查本身要求在隔离权限下重跑通过。
 
+以上两项模型／生产桥结果记录的是终审前所选证据，不能单凭引用白名单与
+`coverage_met` 推断语义质量。终审逐条比对原文后，第 1／2／4／5 问的实际回答受到
+所引片段支持并保留了不确定性；第 3 问虽格式通过，却漏掉同篇论文中直接报告采样
+步数／速度改进的核心正文，反而给较泛的背景片段保留了上下文槽位。因此最终状态
+不是 5／5 语义通过。
+
+证据择优现已做系统性修复：当某论文在四个槽位内只有 background／related-work，
+而候选中存在该论文的直接正文时，用直接正文替换该论文的次级材料；其余检索排名
+不变，同页同章节重叠块只占一个槽位。真实只读复验中，第 3 问 9 次检索选中了核心
+正文，399 个 shadow 文件前后不变；第 1／2／4／5 问的已批准证据集合保持不变。
+修订后的第 3 问尚未再次调用外部模型，旧输出因引用了已退出白名单的片段会被生产
+校验正确拒绝。终审后回放的第 1／2／4／5 问仍分别形成 3／4／4／4 条精确引用，
+第 3 问为 0 条并保留旧拒答；故当前没有可声称通过的新 5／5 生产桥结果。
+
+终审修复后的统一检查再次通过：29 项启动、200 项后端、前端 unit／类型／构建、
+零 warning lint 与 8 项隔离浏览器回归。
+
 ## 数据与运行边界
 
 - 未写入或重新编译原始论文、Wiki、SQLite、配置；未启动 API、Web 或两个生产 worker。
 - 使用已验证的本机普通备份、独立恢复副本和 shadow；配置／密钥不在备份或提交中。
 - 现有旧 shadow index 创建于 locator 增补前，因此真实回放具备 evidence ID、manifest、页码和字符范围，但 `source_file_hash` 为空；新代码生成的 index 会同时保存 source hash。此项不影响旧 generation 的只读兼容。
 - 未部署、未 push、未创建 PR；用户仍决定后续统一 review、合并和启用 `assist`。
+- 未启动真实 API/Web，也未以真实用户会话经过路由、会话持久化和 UI 操作；生产桥
+  验收是 `_finish_result` 的本地回放，其中模型传输被替换为此前真实返回的文本。
+- 没有新建采用最新 locator schema 的真实 generation；缺少 generation、root 无效或
+  `off` 时均保留旧拒答，不读取或生成 shadow 数据。
+- 当前 builder 与 loader 只接受 `production_eligible: false` 的 shadow artifact；
+  `assist` 的环境变量是唯一启用门槛，尚无经过审核、可原子回滚的 generation promote
+  记录。因此这里只能称为显式 opt-in 的生产代码桥，不能称为已完成生产切换。
 
 ## 复现命令
 

@@ -41,6 +41,7 @@ MAX_OBSERVATION_CANDIDATES = 6
 MAX_OBSERVATION_CHARACTERS = 24_000
 MAX_ANSWER_EVIDENCE = 4
 MAX_ANSWER_EVIDENCE_CHARACTERS = 1_600
+_SECONDARY_ANSWER_SECTIONS = frozenset({"background", "related_work", "references"})
 _GENERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MULTI_SOURCE_MARKERS = (
@@ -276,6 +277,59 @@ def _answer_excerpt(
     }
 
 
+def _answer_section_kind(result: Mapping[str, Any]) -> str:
+    locator = result.get("locator") or {}
+    located = str(locator.get("section_kind") or "").strip().casefold()
+    if located:
+        return located
+    field_path = str(result.get("field_path") or "")
+    return field_path.rsplit("/", 1)[-1].strip().casefold()
+
+
+def _select_answer_evidence(
+    results: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Repair a secondary-only paper slot without disturbing retrieval rank.
+
+    A related-work or background passage must not be the only selected context
+    from a paper when that paper also has a direct abstract/method/result hit.
+    Existing ranked slots otherwise stay unchanged.  Overlapping chunks from
+    the same page and section count as one slot; the first-ranked chunk wins.
+    """
+    deduplicated: list[Mapping[str, Any]] = []
+    seen_locations: set[tuple[str, int | None, str]] = set()
+    for result in results:
+        locator = result.get("locator") or {}
+        page_number = locator.get("page_number")
+        location = (
+            str(result.get("paper_id") or ""),
+            int(page_number) if page_number is not None else None,
+            _answer_section_kind(result),
+        )
+        if location in seen_locations:
+            continue
+        seen_locations.add(location)
+        deduplicated.append(result)
+
+    selected = deduplicated[:MAX_ANSWER_EVIDENCE]
+    for candidate in deduplicated[MAX_ANSWER_EVIDENCE:]:
+        if _answer_section_kind(candidate) in _SECONDARY_ANSWER_SECTIONS:
+            continue
+        same_paper = [
+            (index, result)
+            for index, result in enumerate(selected)
+            if result.get("paper_id") == candidate.get("paper_id")
+        ]
+        if not same_paper or any(
+            _answer_section_kind(result) not in _SECONDARY_ANSWER_SECTIONS
+            for _, result in same_paper
+        ):
+            continue
+        replace_index, _ = same_paper[0]
+        selected[replace_index] = candidate
+    return selected
+
+
 def _compact_observation(
     manifest: Mapping[str, Any],
     response: Mapping[str, Any],
@@ -334,7 +388,7 @@ def _compact_observation(
         ]
         observation["answer_evidence"] = [
             _answer_excerpt(item, query_routes)
-            for item in anchored[:MAX_ANSWER_EVIDENCE]
+            for item in _select_answer_evidence(anchored)
         ]
     if len(_stable_json(observation)) > MAX_OBSERVATION_CHARACTERS:
         raise AskShadowIntegrationError("shadow observation exceeds its output budget")
