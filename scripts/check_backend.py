@@ -31,6 +31,7 @@ TESTS = (
     "tests.test_ask_evidence_gate",
     "tests.test_ask_retrieval_orchestration",
     "tests.test_ask_quality_eval",
+    "tests.test_paper_evidence_service",
 )
 
 
