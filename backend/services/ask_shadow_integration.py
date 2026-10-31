@@ -1,10 +1,11 @@
-"""Default-off production bridge for a validated Ask shadow generation.
+"""Production bridge for a reviewed Ask evidence generation.
 
 The bridge never builds or writes a generation and accepts only an immutable
-root outside the live data tree. ``observe`` remains telemetry-only.  The
-explicit ``assist`` mode may return a small set of located source-text excerpts
-to the Ask orchestrator; retrieval still does not assert entailment and the
-trace serializer never exposes source text.
+root outside the live data tree.  A normal installation automatically uses a
+reviewed generation promoted into the checkout-local control directory; no
+environment switch is required.  Explicit ``off`` and ``observe`` modes remain
+available for rollback and diagnostics.  Retrieval still does not assert
+entailment and the trace serializer never exposes source text.
 """
 
 from __future__ import annotations
@@ -67,7 +68,19 @@ def _stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _disabled() -> dict[str, Any]:
+def default_generation_control_root(
+    *, live_data_root: Path = LIVE_DATA_ROOT,
+) -> Path:
+    """Return the stable per-library control path used by normal startup.
+
+    Keeping control beside, rather than inside, ``data`` preserves the hard
+    non-overlap boundary while making a reviewed activation survive ordinary
+    pulls and restarts of the same local-first workspace.
+    """
+    return live_data_root.parent / ".knowra" / "ask-generation-control"
+
+
+def _disabled(reason: str = "shadow_mode_off") -> dict[str, Any]:
     return {
         "schema_version": GENERATION_SCHEMA_VERSION,
         "status": "disabled",
@@ -78,7 +91,7 @@ def _disabled() -> dict[str, Any]:
         "candidate_locators": [],
         "coverage": None,
         "budget": None,
-        "reason": "shadow_mode_off",
+        "reason": reason,
     }
 
 
@@ -238,11 +251,13 @@ def answer_mode_enabled(
     live_data_root: Path = LIVE_DATA_ROOT,
 ) -> bool:
     values = os.environ if env is None else env
-    if str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold() != "assist":
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if mode != "assist":
         return False
-    control_root = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
-    if not control_root:
-        return False
+    control_root = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip() or str(
+        default_generation_control_root(live_data_root=live_data_root)
+    )
     try:
         resolve_active_generation(
             control_root=control_root,
@@ -251,6 +266,73 @@ def answer_mode_enabled(
     except GenerationControlError:
         return False
     return True
+
+
+def runtime_status(
+    env: Mapping[str, str] | None = None,
+    *,
+    live_data_root: Path = LIVE_DATA_ROOT,
+) -> dict[str, Any]:
+    """Return a privacy-safe status for the Ask UI and release diagnostics."""
+    values = os.environ if env is None else env
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if mode == "off":
+        return {
+            "status": "disabled",
+            "mode": "off",
+            "ready": False,
+            "generation_id": None,
+            "reason": "explicitly_disabled",
+        }
+    if mode == "observe":
+        return {
+            "status": "diagnostic",
+            "mode": "observe",
+            "ready": False,
+            "generation_id": None,
+            "reason": "observe_only",
+        }
+    if mode != "assist":
+        return {
+            "status": "unavailable",
+            "mode": mode,
+            "ready": False,
+            "generation_id": None,
+            "reason": "shadow_mode_invalid",
+        }
+    explicit_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
+    control_root = Path(explicit_control) if explicit_control else default_generation_control_root(
+        live_data_root=live_data_root
+    )
+    if not control_root.exists():
+        return {
+            "status": "not_initialized",
+            "mode": "assist",
+            "ready": False,
+            "generation_id": None,
+            "reason": "reviewed_generation_missing",
+        }
+    try:
+        activation = resolve_active_generation(
+            control_root=control_root,
+            live_data_root=live_data_root,
+        )
+    except GenerationControlError:
+        return {
+            "status": "unavailable",
+            "mode": "assist",
+            "ready": False,
+            "generation_id": None,
+            "reason": "reviewed_generation_invalid",
+        }
+    return {
+        "status": "ready",
+        "mode": "assist",
+        "ready": True,
+        "generation_id": activation["generation_id"],
+        "reason": "reviewed_generation_active",
+    }
 
 
 def _answer_excerpt(
@@ -456,7 +538,12 @@ def observe_question(
     shadow observer cannot break the existing production answer path.
     """
     values = os.environ if env is None else env
-    mode = str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold()
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if raw_mode is None and not default_generation_control_root(
+        live_data_root=live_data_root
+    ).exists():
+        return _disabled("reviewed_generation_missing")
     if mode == "off":
         return _disabled()
     if mode not in {"observe", "assist"}:
@@ -465,8 +552,10 @@ def observe_question(
         return _unavailable("shadow_adapter_invalid", mode=mode)
     production_eligible = False
     if mode == "assist":
-        raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
-        if not raw_control:
+        raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip() or str(
+            default_generation_control_root(live_data_root=live_data_root)
+        )
+        if not Path(raw_control).exists():
             return _unavailable("generation_control_missing", mode=mode)
         try:
             activation = resolve_active_generation(
