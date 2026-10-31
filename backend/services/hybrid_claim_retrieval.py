@@ -511,9 +511,19 @@ def build_shadow_index(
                     raise HybridRetrievalError("shadow index integrity check failed")
         finally:
             conn.close()
+        descriptor = os.open(temporary, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
         if path.exists() and path.is_symlink():
             raise HybridRetrievalError("shadow index target became a symlink")
         os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     finally:
         try:
             temporary.unlink()

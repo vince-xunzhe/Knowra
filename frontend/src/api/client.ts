@@ -843,11 +843,13 @@ export const askWiki = (
     .then(r => r.data)
 
 export interface AskEvidenceStatus {
-  status: 'ready' | 'not_initialized' | 'unavailable' | 'disabled' | 'diagnostic'
+  status: 'ready' | 'stale' | 'not_initialized' | 'unavailable' | 'disabled' | 'diagnostic'
   mode: string
   ready: boolean
   generation_id: string | null
   reason: string
+  freshness?: 'fresh' | 'stale' | 'unknown' | 'unavailable'
+  paper_count?: number | null
 }
 
 export const getAskEvidenceStatus = () =>

@@ -519,6 +519,51 @@ class HybridClaimRetrievalTests(unittest.TestCase):
         with self.assertRaisesRegex(HybridRetrievalError, "changed after"):
             self.retriever.search("transition")
 
+    def test_index_fsync_and_replace_failures_preserve_previous_file(self):
+        before = self.index.read_bytes()
+        with mock.patch(
+            "services.hybrid_claim_retrieval.os.fsync",
+            side_effect=OSError("synthetic fsync failure"),
+        ), self.assertRaisesRegex(OSError, "fsync failure"):
+            build_shadow_index(
+                index_path=self.index,
+                shadow_root=self.shadow,
+                production_wiki_root=self.production,
+                compile_plans=[self.action],
+            )
+        self.assertEqual(self.index.read_bytes(), before)
+
+        with mock.patch(
+            "services.hybrid_claim_retrieval.os.replace",
+            side_effect=OSError("synthetic replace failure"),
+        ), self.assertRaisesRegex(OSError, "replace failure"):
+            build_shadow_index(
+                index_path=self.index,
+                shadow_root=self.shadow,
+                production_wiki_root=self.production,
+                compile_plans=[self.action],
+            )
+        self.assertEqual(self.index.read_bytes(), before)
+
+        with mock.patch(
+            "services.hybrid_claim_retrieval.os.fsync",
+            side_effect=[None, OSError("synthetic directory fsync failure")],
+        ), self.assertRaisesRegex(OSError, "directory fsync failure"):
+            build_shadow_index(
+                index_path=self.index,
+                shadow_root=self.shadow,
+                production_wiki_root=self.production,
+                compile_plans=[self.action],
+            )
+        # Replace completed before the directory durability failure. The file
+        # must still be a complete index; its containing generation is rejected.
+        reopened = HybridClaimRetriever(
+            self.index,
+            shadow_root=self.shadow,
+            production_wiki_root=self.production,
+        )
+        self.assertTrue(reopened.search("transition")["results"])
+
     def test_corpus_and_record_character_caps_are_enforced(self):
         with mock.patch("services.hybrid_claim_retrieval.MAX_INDEX_RECORDS", 1):
             with self.assertRaisesRegex(HybridRetrievalError, "record budget"):

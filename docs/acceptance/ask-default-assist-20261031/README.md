@@ -42,7 +42,7 @@ Ask 抽屉现在分开显示三种状态：Wiki 总览、全文 FTS 与原文证
 
 ## 限制
 
-- 本 PR 不自动创建 generation；它只自动发现经过审核的本地 promotion。首次构建/审核仍属于知识库维护流程，不能在无备份、无审核时静默执行。
+- 原 #55 层本身只负责自动发现经过审核的本地 promotion；本统一 PR 的后续生命周期层已补上首次及资料变更后的 durable refresh、零失败审核、原子 promotion 与失败回退，详见 [Ask generation 生命周期验收](../ask-generation-lifecycle-20261031/README.md)。它仍不会绕过来源哈希、locator、页面解析和 revision 稳定性门槛，把未审核候选静默当成可用证据。
 - 日常验证发生在本 PR 合并前，因此现有 main 进程使用了同一 reviewed control 的过渡性环境注入；合并本 PR 后，普通启动才无需该注入。
 - 自动 claim entailment 仍未实现；回答模型受 evidence ID 白名单、页级引用和证据不足边界约束，但语义质量仍需评测。
-- generation 表示构建时快照；新增或重新编译论文后需要生成、审核并原子 promote 新 generation。
+- generation 仍是不可变快照；新增、重新处理、抽取修正、notes 更新及去重删除会请求新 generation，成功后原子 promote，失败则保留旧 active 或对已修改／删除证据 fail closed。产品目前没有用户可操作的论文删除入口，因此只验证了底层删除生命周期及删除后的真实 UI 状态，未冒充“从 UI 发起删除”。

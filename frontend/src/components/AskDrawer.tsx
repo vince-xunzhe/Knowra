@@ -790,11 +790,17 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                 <span className="w-[4.5rem] shrink-0 font-medium text-slate-300">{tr("原文证据")}</span>
                 {evidenceStatus === null ? (
                   <span className="text-rose-300">{tr("状态读取失败")}</span>
+                ) : evidenceStatus.status === 'stale' ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                    <span className="truncate text-amber-200">{tr("资料已变化，原文证据待更新")}</span>
+                  </>
                 ) : evidenceStatus.ready ? (
                   <>
                     <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
                     <span className="truncate">
-                      {tr("已启用 ·")}{' '}{evidenceStatus.generation_id}</span>
+                      {tr("已启用 ·")}{' '}{evidenceStatus.generation_id}
+                      {evidenceStatus.freshness === 'unknown' ? ` · ${tr("待首次同步校验")}` : ''}</span>
                   </>
                 ) : evidenceStatus.status === 'not_initialized' ? (
                   <>
