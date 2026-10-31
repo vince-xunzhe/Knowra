@@ -25,8 +25,9 @@ _LATIN_TERM = re.compile(r"[a-z][a-z0-9-]{2,}", re.IGNORECASE)
 _CJK_TERM = re.compile(r"[\u3400-\u9fff]{2,}")
 _GENERIC_ANCHOR_TERMS = {
     "approach", "approaches", "architecture", "architectures", "change", "changes",
-    "evolution", "learned", "learning", "mechanism", "mechanisms", "method", "methods",
-    "model", "models",
+    "chain", "chains", "early", "evolution", "improvement", "improvements",
+    "learned", "learning", "major", "markov", "mechanism", "mechanisms", "method", "methods",
+    "model", "models", "overview", "review", "reverse",
 }
 _GENERIC_CJK_ANCHORS = {
     "在建模", "建模上", "模上经", "上经历", "经历了",

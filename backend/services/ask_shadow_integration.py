@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import re
 import sqlite3
@@ -55,6 +56,7 @@ _MULTI_SOURCE_MARKERS = (
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LIVE_DATA_ROOT = PROJECT_ROOT / "data"
 LIVE_WIKI_ROOT = LIVE_DATA_ROOT / "wiki"
+log = logging.getLogger("ask_shadow_integration")
 
 
 class AskShadowIntegrationError(ValueError):
@@ -481,9 +483,12 @@ def observe_question(
             return _unavailable("shadow_root_missing", mode=mode)
     started = perf_counter()
     deadline = started + MAX_OBSERVATION_MS / 1_000
+    stage = "generation_root"
     try:
         root = _safe_generation_root(raw_root, live_data_root=live_data_root)
+        stage = "generation_manifest"
         manifest, index_path = _load_manifest(root)
+        stage = "index_integrity_before"
         hash_started = perf_counter()
         identity_before = _index_identity(index_path, deadline=deadline)
         first_hash_seconds = perf_counter() - hash_started
@@ -498,6 +503,7 @@ def observe_question(
             raise AskShadowIntegrationError(
                 "generation integrity and retrieval exceed the observation budget"
             )
+        stage = "retriever_open"
         retriever = HybridClaimRetriever(
             index_path,
             shadow_root=root,
@@ -510,6 +516,7 @@ def observe_question(
             != manifest["dense_model_id"]
         ):
             raise AskShadowIntegrationError("generation manifest does not match the index")
+        stage = "retrieval"
         required = 2 if _requires_multiple_sources(question) else 1
         if query_routes is not None:
             if (
@@ -553,9 +560,11 @@ def observe_question(
                     if item.get("kind") == "evidence"
                 ],
             }
+        stage = "index_integrity_after"
         identity_after = _index_identity(index_path, deadline=deadline)
         if identity_after != identity_before:
             raise AskShadowIntegrationError("generation index changed during observation")
+        stage = "observation_compaction"
         return _compact_observation(
             manifest,
             response,
@@ -576,7 +585,12 @@ def observe_question(
         TypeError,
         ValueError,
         GenerationControlError,
-    ):
+    ) as error:
+        log.warning(
+            "shadow generation validation failed at %s (%s)",
+            stage,
+            type(error).__name__,
+        )
         return _unavailable("shadow_generation_invalid", mode=mode)
 
 

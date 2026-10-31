@@ -738,11 +738,23 @@ class HybridClaimRetriever:
                     [safe, *parameters, MAX_CHANNEL_RESULTS],
                 ).fetchall()
                 lexical = [row[0] for row in rows]
-            rows = conn.execute(
-                "SELECT id,paper_id,kind,support_status,title,text,field_path,source_signatures,locations,locator,vector "
-                "FROM records r" + ((" WHERE " + " AND ".join(conditions)) if conditions else ""),
-                parameters,
-            ).fetchall()
+            if dense_query is None:
+                # Lexical-only search must not deserialize the entire (potentially
+                # hundreds-of-megabytes) corpus on every route.  FTS has already
+                # applied the requested record filters, so hydrate only its
+                # bounded candidate IDs.  The generation hash and metadata
+                # identity checks still protect the immutable index as a whole.
+                rows = [] if not lexical else conn.execute(
+                    "SELECT id,paper_id,kind,support_status,title,text,field_path,source_signatures,locations,locator,vector "
+                    f"FROM records r WHERE r.id IN ({','.join('?' for _ in lexical)})",
+                    lexical,
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id,paper_id,kind,support_status,title,text,field_path,source_signatures,locations,locator,vector "
+                    "FROM records r" + ((" WHERE " + " AND ".join(conditions)) if conditions else ""),
+                    parameters,
+                ).fetchall()
             payloads: dict[str, dict[str, Any]] = {}
             dense_scores: list[tuple[str, float]] = []
             for row in rows:

@@ -116,6 +116,12 @@ LOCAL_ASK_SYSTEM_PROMPT = (
 SHADOW_ROUTE_SYSTEM_PROMPT = (
     "你是检索路由规划器。只根据用户问题生成 2 到 4 条互补、简短的检索查询。"
     "保留核心实体和机制；中英文术语可能并存时至少给出一条英文术语查询。"
+    "如果问题询问演进、变化或历史，路由必须覆盖不同阶段而不是围绕同一个方法改写："
+    "第一条必须是只含主题和演进意图的中英双语宽主题锚点，不塞入某个阶段的具体方法；"
+    "其余路由依次考虑早期定义或基线、中间机制或效率改进、后续替代或推广；"
+    "每条仍保留同一个主题锚点，材料不足时不要编造具体方法名。"
+    "路由的范围必须与原问题一致：宽主题问题不得缩成某个下游任务、特定应用或孤立适配。"
+    "非演进问题则按定义、机制、对比或应用等互补角度拆分。"
     "只输出 JSON 字符串数组，不要回答问题，不要加入解释。"
 )
 SHADOW_ANSWER_SYSTEM_PROMPT = (
@@ -917,6 +923,7 @@ def _finish_result(
             {
                 "mode": shadow_observation.get("mode"),
                 "generation_id": shadow_observation.get("generation_id"),
+                "query_routes": shadow_routes[:4],
             },
             shadow_payload,
             shadow_duration_ms,

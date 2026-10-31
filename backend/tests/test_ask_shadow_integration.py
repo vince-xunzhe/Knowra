@@ -632,6 +632,21 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertNotIn("relationship", result.citations[0])
         shadow_trace = next(item for item in result.trace if item.tool == "shadow_retrieval")
         self.assertNotIn("Actions enter", shadow_trace.raw_result)
+        self.assertEqual(
+            shadow_trace.args["query_routes"],
+            ["action latent transition", "actions dynamics"],
+        )
+
+    def test_evolution_route_prompt_requires_stage_diversity_without_domain_hardcoding(self):
+        prompt = ask_agent.SHADOW_ROUTE_SYSTEM_PROMPT
+        self.assertIn("中英双语宽主题锚点", prompt)
+        self.assertIn("早期定义或基线", prompt)
+        self.assertIn("中间机制或效率改进", prompt)
+        self.assertIn("后续替代或推广", prompt)
+        self.assertIn("不要编造具体方法名", prompt)
+        self.assertIn("宽主题问题不得缩成某个下游任务", prompt)
+        self.assertNotIn("DDIM", prompt)
+        self.assertNotIn("扩散模型", prompt)
 
     def test_assist_mode_unknown_model_citation_fails_closed_to_legacy_refusal(self):
         assessment = ask_agent.EvidenceAssessment(
