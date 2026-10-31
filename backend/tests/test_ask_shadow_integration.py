@@ -22,6 +22,7 @@ from services.ask_shadow_integration import (
 )
 from services.hybrid_claim_retrieval import build_shadow_index
 from services.paper_evidence_service import build_evidence_manifest
+from services.ask_retrieval_budget import RetrievalBudget
 from services.wiki_shadow_compiler import build_paper_compile_plan
 
 
@@ -231,6 +232,35 @@ class AskShadowIntegrationTests(unittest.TestCase):
             cli["budget"]["search_calls"], cli["budget"]["max_search_calls"]
         )
 
+    def test_assist_mode_returns_bounded_exact_source_spans_but_trace_hides_them(self):
+        env = {**self.env, "KNOWRA_ASK_SHADOW_MODE": "assist"}
+        result = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="cli",
+            env=env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["action latent transition", "actions dynamics"],
+            include_answer_evidence=True,
+        )
+
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["mode"], "assist")
+        self.assertEqual(result["reason"], "coverage_met")
+        self.assertTrue(result["answer_evidence"])
+        excerpt = result["answer_evidence"][0]
+        self.assertIn("actions became explicit inputs", excerpt["quote"])
+        self.assertEqual(
+            excerpt["source_file_hash"], self.manifest["source"]["file_hash_sha256"]
+        )
+        self.assertLessEqual(
+            len(excerpt["quote"]),
+            ask_agent.ask_shadow_integration.MAX_ANSWER_EVIDENCE_CHARACTERS,
+        )
+        payload = observation_trace_payload(result)
+        self.assertNotIn("actions became explicit inputs", payload)
+        self.assertNotIn("answer_evidence", payload)
+
     def test_two_stage_routes_fail_closed_on_invalid_shape_or_detached_vector(self):
         invalid = observe_question(
             "question",
@@ -430,6 +460,190 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertEqual(
             observe.call_args.kwargs["query_routes"],
             ["世界模型", "world model"],
+        )
+
+    def test_assist_mode_plans_cli_routes_and_replaces_refusal_with_cited_source_answer(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic",
+        )
+        evidence_id = self.manifest["chunks"][0]["id"]
+        env = {**self.env, "KNOWRA_ASK_SHADOW_MODE": "assist"}
+        real_observe = ask_agent.ask_shadow_integration.observe_question
+
+        def observe(question, *, adapter, query_routes=None, include_answer_evidence=False):
+            return real_observe(
+                question,
+                adapter=adapter,
+                env=env,
+                live_data_root=self.live_data,
+                production_wiki_root=self.live_wiki,
+                query_routes=query_routes,
+                include_answer_evidence=include_answer_evidence,
+            )
+
+        with (
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                side_effect=observe,
+            ),
+            mock.patch.object(
+                ask_agent,
+                "call_text_model",
+                side_effect=[
+                    '["action latent transition", "actions dynamics"]',
+                    f"## Answer\n\nActions enter the transition. [{evidence_id}]",
+                ],
+            ) as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="How do actions enter latent transition dynamics?",
+                trace=[
+                    ask_agent.TraceStep(0, "search_wiki", {"q": "动作模型"}, "", 0),
+                    ask_agent.TraceStep(1, "search_wiki", {"q": "潜在动力学"}, "", 0),
+                ],
+                model="codex-cli/synthetic",
+                duration_ms=3,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+
+        self.assertEqual(model_call.call_count, 2)
+        self.assertIn("Actions enter the transition", result.answer)
+        self.assertIn("检索命中不等于自动完成蕴含判断", result.answer)
+        self.assertEqual(result.citations[0]["evidence_id"], evidence_id)
+        self.assertEqual(
+            result.citations[0]["provenance_status"], "retrieved_source_text"
+        )
+        self.assertNotIn("relationship", result.citations[0])
+        shadow_trace = next(item for item in result.trace if item.tool == "shadow_retrieval")
+        self.assertNotIn("Actions enter", shadow_trace.raw_result)
+
+    def test_assist_mode_unknown_model_citation_fails_closed_to_legacy_refusal(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic refusal",
+        )
+        evidence_id = self.manifest["chunks"][0]["id"]
+        observation = {
+            "status": "ready",
+            "mode": "assist",
+            "reason": "coverage_met",
+            "generation_id": "fixture",
+            "coverage": {"met": True},
+            "budget": {},
+            "candidates": [],
+            "candidate_locators": [],
+            "answer_evidence": [{
+                "evidence_id": evidence_id,
+                "paper_id": "paper-1",
+                "quote": "Actions enter the transition.",
+            }],
+        }
+        unknown = "evidence:" + "f" * 64
+        with (
+            mock.patch.dict(
+                os.environ, {"KNOWRA_ASK_SHADOW_MODE": "assist"}, clear=False
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                ask_agent,
+                "call_text_model",
+                return_value=f"Unsupported claim [{unknown}]",
+            ),
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="question",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "route one"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
+        self.assertFalse(any(item.tool == "shadow_answer" for item in result.trace))
+
+    def test_assist_mode_incomplete_retrieval_never_calls_answer_model(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic incomplete retrieval",
+        )
+        observation = {
+            "status": "ready",
+            "mode": "assist",
+            "reason": "retrieval_coverage_incomplete",
+            "generation_id": "fixture",
+            "coverage": {"met": False},
+            "budget": {},
+            "candidates": [],
+            "candidate_locators": [],
+            "answer_evidence": [],
+        }
+        with (
+            mock.patch.dict(
+                os.environ, {"KNOWRA_ASK_SHADOW_MODE": "assist"}, clear=False
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(ask_agent, "call_text_model") as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="question",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "route one"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+
+        model_call.assert_not_called()
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
+
+    def test_assist_answer_requires_each_substantive_list_item_to_be_cited(self):
+        evidence_id = self.manifest["chunks"][0]["id"]
+        answer = (
+            f"- First substantive claim has a valid source citation. [{evidence_id}]\n"
+            "- Second substantive claim is deliberately left without a source citation."
+        )
+        self.assertFalse(
+            ask_agent._shadow_answer_paragraphs_are_cited(answer, {evidence_id})
         )
 
 

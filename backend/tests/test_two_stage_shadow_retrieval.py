@@ -123,7 +123,7 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
         )
         self.assertFalse(result["answerable"])
         self.assertEqual(result["coverage"]["evidence_years"], [2024])
-        self.assertEqual(result["budget"]["search_calls"], 5)
+        self.assertEqual(result["budget"]["search_calls"], 7)
 
     def test_primary_topic_anchors_reject_cross_domain_route_overlap(self):
         class CrossDomainRetriever:
@@ -232,7 +232,7 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
         self.assertEqual(result["coverage"]["evidence_records"], 0)
         self.assertEqual(result["coverage"]["evidence_years"], [])
 
-    def test_source_drilldown_does_not_suppress_anchored_endpoint_repair(self):
+    def test_anchored_endpoint_repair_precedes_candidate_only_drilldown(self):
         class DrilldownAndRepairRetriever:
             def paper_years(self, paper_ids):
                 return {"paper-old": 2018, "paper-new": 2024}
@@ -266,10 +266,115 @@ class TwoStageShadowRetrievalTests(unittest.TestCase):
             queries=["world model action dynamics"],
         )
         self.assertTrue(result["answerable"])
-        self.assertTrue(result["coverage"]["source_drilldown_used"])
-        self.assertEqual(result["coverage"]["candidate_source_records"], 4)
+        self.assertFalse(result["coverage"]["source_drilldown_used"])
+        self.assertEqual(result["coverage"]["candidate_source_records"], 2)
         self.assertEqual(result["coverage"]["evidence_records"], 2)
         self.assertEqual(result["coverage"]["evidence_years"], [2018, 2024])
+
+    def test_temporal_candidate_budget_keeps_relevant_middle_year(self):
+        class MiddleYearRetriever:
+            def paper_years(self, paper_ids):
+                years = {
+                    "paper-old": 2020,
+                    "paper-new": 2026,
+                    "paper-noise-a": 2026,
+                    "paper-noise-b": 2026,
+                    "paper-noise-c": 2025,
+                    "paper-middle": 2021,
+                }
+                return {paper: years[paper] for paper in paper_ids}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [
+                        {
+                            "id": f"claim-{paper}", "paper_id": paper, "kind": "claim",
+                            "title": "Diffusion sampling", "text": "diffusion sampling process",
+                        }
+                        for paper in (
+                            "paper-old", "paper-new", "paper-noise-a", "paper-noise-b",
+                            "paper-noise-c", "paper-middle",
+                        )
+                    ]}
+                if paper_ids and "paper-middle" in paper_ids:
+                    return {"results": [
+                        {
+                            "id": "evidence-old", "paper_id": "paper-old",
+                            "kind": "evidence", "field_path": "pages/1/body",
+                            "title": "Diffusion sampling",
+                            "text": "diffusion sampling baseline process " * 20,
+                        },
+                        {
+                            "id": "evidence-middle", "paper_id": "paper-middle",
+                            "kind": "evidence", "field_path": "pages/2/body",
+                            "title": "Diffusion sampling",
+                            "text": "diffusion sampling variance acceleration " * 20,
+                        },
+                    ]}
+                return {"results": []}
+
+        result = execute_two_stage_shadow_retrieval(
+            MiddleYearRetriever(),
+            question="扩散采样经历了哪些变化？",
+            queries=["diffusion sampling changes"],
+            required_papers=1,
+            required_evidence=1,
+        )
+        self.assertTrue(result["answerable"])
+        self.assertIn(2021, result["coverage"]["evidence_years"])
+
+    def test_global_source_rescue_requires_corroboration_and_stays_bounded(self):
+        class GlobalRescueRetriever:
+            def paper_years(self, paper_ids):
+                years = {"paper-claim": 2018, "paper-memory": 2022, "paper-noise": 2024}
+                return {paper: years[paper] for paper in paper_ids}
+
+            def search(self, query, *, kinds, paper_ids=None, limit=10):
+                if kinds == ["claim"]:
+                    return {"results": [{
+                        "id": "claim", "paper_id": "paper-claim", "kind": "claim",
+                        "title": "Representation memory", "text": "representation memory learning",
+                    }]}
+                if paper_ids:
+                    return {"results": [{
+                        "id": "claim-source", "paper_id": "paper-claim",
+                        "kind": "evidence", "field_path": "pages/1/body",
+                        "title": "Representation memory",
+                        "text": "representation memory recurrent baseline " * 20,
+                    }]}
+                if query == "representation memory evolution":
+                    return {"results": [
+                        {
+                            "id": "memory-a", "paper_id": "paper-memory", "kind": "evidence",
+                            "field_path": "pages/1/body", "title": "Representation memory",
+                            "text": "representation memory bank learning " * 20,
+                        },
+                        {
+                            "id": "noise", "paper_id": "paper-noise", "kind": "evidence",
+                            "field_path": "pages/1/body", "title": "Representation memory",
+                            "text": "representation memory allocation learning " * 20,
+                        },
+                    ]}
+                return {"results": [{
+                    "id": "memory-b", "paper_id": "paper-memory", "kind": "evidence",
+                    "field_path": "pages/2/body", "title": "External memory",
+                    "text": "representation external memory learning " * 20,
+                }]}
+
+        result = execute_two_stage_shadow_retrieval(
+            GlobalRescueRetriever(),
+            question="How did representation memory evolve over time?",
+            queries=["representation memory evolution", "external memory learning"],
+            required_papers=2,
+            required_evidence=2,
+        )
+        self.assertTrue(result["answerable"])
+        self.assertTrue(result["coverage"]["global_evidence_rescue_used"])
+        self.assertTrue(any(item["paper_id"] == "paper-memory" for item in result["evidence"]))
+        self.assertFalse(any(item["paper_id"] == "paper-noise" for item in result["evidence"]))
+        self.assertLessEqual(
+            result["budget"]["search_calls"], result["budget"]["max_search_calls"]
+        )
 
 
 if __name__ == "__main__":

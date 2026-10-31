@@ -24,6 +24,7 @@ from presentation_preferences import response_instructions
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
@@ -112,6 +113,19 @@ LOCAL_ASK_SYSTEM_PROMPT = (
     "index 和搜索摘要只用于定位，论文内容结论必须来自 `[read_wiki 材料]`。"
     "输出中文 markdown；引用来源将由系统根据实际读取记录统一附加，不要自行编造来源。"
 )
+SHADOW_ROUTE_SYSTEM_PROMPT = (
+    "你是检索路由规划器。只根据用户问题生成 2 到 4 条互补、简短的检索查询。"
+    "保留核心实体和机制；中英文术语可能并存时至少给出一条英文术语查询。"
+    "只输出 JSON 字符串数组，不要回答问题，不要加入解释。"
+)
+SHADOW_ANSWER_SYSTEM_PROMPT = (
+    "你是严格的证据综合器。只能使用系统提供的原文片段回答，不得使用外部知识。"
+    "每个实质性结论后必须写一个或多个原样的 [evidence:<64位十六进制>] 引用。"
+    "检索命中不等于证据支持；若片段不能支持问题，就明确回答证据不足。"
+    "不要把年份覆盖数量当作演进结论，也不要补写片段没有陈述的因果或关系。"
+    "输出中文 markdown，不要另建引用列表。"
+)
+_SHADOW_EVIDENCE_REF_RE = re.compile(r"\[(evidence:[0-9a-f]{64})\]")
 
 
 # --- tool schema ---------------------------------------------------------
@@ -807,9 +821,58 @@ def _finish_result(
     duration_ms: int,
     assessment: Optional[EvidenceAssessment] = None,
     budget: Optional[RetrievalBudget] = None,
+    cfg: Optional[dict[str, Any]] = None,
+    reasoning_effort: Optional[str] = None,
+    answer_model_id: Optional[str] = None,
 ) -> AskResult:
+    finish_started = perf_counter()
     assessment = assessment or _assess_evidence(question, trace)
     cited_files, citations = _citations_for_assessment(assessment, trace)
+    final_answer = answer
+    shadow_routes = _shadow_routes(trace, question)
+    adapter = "cli" if model.startswith("codex-cli/") else "api"
+    assist = (
+        assessment.status == "insufficient"
+        and ask_shadow_integration.answer_mode_enabled()
+        and budget is not None
+        and cfg is not None
+    )
+    if assist and adapter == "cli":
+        planned = _plan_shadow_routes(
+            cfg,
+            model=answer_model_id or model,
+            question=question,
+            budget=budget,
+            reasoning_effort=reasoning_effort,
+        )
+        if planned:
+            shadow_routes = planned
+    shadow_started = perf_counter()
+    shadow_kwargs: dict[str, Any] = {
+        "adapter": adapter,
+        "query_routes": shadow_routes,
+    }
+    if assist:
+        shadow_kwargs["include_answer_evidence"] = True
+    shadow_observation = ask_shadow_integration.observe_question(
+        question,
+        **shadow_kwargs,
+    )
+    shadow_duration_ms = max(
+        0, int(round((perf_counter() - shadow_started) * 1_000))
+    )
+    if assist:
+        assisted = _answer_from_shadow_evidence(
+            cfg,
+            model=answer_model_id or model,
+            question=question,
+            observation=shadow_observation,
+            budget=budget,
+            reasoning_effort=reasoning_effort,
+        )
+        if assisted is not None:
+            final_answer, citations = assisted
+            cited_files = [str(item["ref"]) for item in citations]
     if budget is not None:
         budget_payload = json.dumps(
             budget.snapshot(),
@@ -844,27 +907,7 @@ def _finish_result(
         gate_payload,
         0,
     ))
-    shadow_routes = []
-    for step in trace:
-        if step.tool != "search_wiki":
-            continue
-        route = str(step.args.get("q") or "").strip()
-        if route and route not in shadow_routes:
-            shadow_routes.append(route)
-        if len(shadow_routes) == 4:
-            break
-    if not shadow_routes:
-        shadow_routes = [question]
-    shadow_started = perf_counter()
-    shadow_observation = ask_shadow_integration.observe_question(
-        question,
-        adapter="cli" if model.startswith("codex-cli/") else "api",
-        query_routes=shadow_routes,
-    )
     if shadow_observation["status"] != "disabled":
-        shadow_duration_ms = max(
-            0, int(round((perf_counter() - shadow_started) * 1_000))
-        )
         shadow_payload = ask_shadow_integration.observation_trace_payload(
             shadow_observation
         )
@@ -872,15 +915,37 @@ def _finish_result(
             len(trace),
             "shadow_retrieval",
             {
-                "mode": "observe",
+                "mode": shadow_observation.get("mode"),
                 "generation_id": shadow_observation.get("generation_id"),
             },
             shadow_payload,
             shadow_duration_ms,
         ))
-        duration_ms += shadow_duration_ms
+    if citations and any(
+        item.get("provenance_status") == "retrieved_source_text"
+        for item in citations
+    ):
+        trace.append(_trace_step(
+            len(trace),
+            "shadow_answer",
+            {"mode": "assist", "evidence_count": len(citations)},
+            json.dumps({
+                "status": "answered",
+                "citation_count": len(citations),
+                "generation_id": shadow_observation.get("generation_id"),
+            }, separators=(",", ":")),
+            0,
+        ))
+    duration_ms += max(0, int(round((perf_counter() - finish_started) * 1_000)))
     return AskResult(
-        answer=_finalize_answer(answer, assessment, citations),
+        answer=(
+            _finalize_shadow_answer(final_answer, citations)
+            if citations and any(
+                item.get("provenance_status") == "retrieved_source_text"
+                for item in citations
+            )
+            else _finalize_answer(final_answer, assessment, citations)
+        ),
         cited_files=cited_files,
         citations=citations,
         trace=trace,
@@ -888,6 +953,185 @@ def _finish_result(
         duration_ms=duration_ms,
         steps=len(trace),
     )
+
+
+def _shadow_routes(trace: list[TraceStep], question: str) -> list[str]:
+    routes: list[str] = []
+    for step in trace:
+        if step.tool != "search_wiki":
+            continue
+        route = str(step.args.get("q") or "").strip()
+        if route and route not in routes:
+            routes.append(route)
+        if len(routes) == 4:
+            break
+    return routes or [question]
+
+
+def _parse_shadow_routes(raw: str) -> list[str]:
+    text = (raw or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1]).strip()
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    routes: list[str] = []
+    for item in payload:
+        route = " ".join(str(item or "").split())
+        if 2 <= len(route) <= 160 and route not in routes:
+            routes.append(route)
+        if len(routes) == 4:
+            break
+    return routes if len(routes) >= 2 else []
+
+
+def _plan_shadow_routes(
+    cfg: dict[str, Any],
+    *,
+    model: str,
+    question: str,
+    budget: RetrievalBudget,
+    reasoning_effort: Optional[str],
+) -> list[str]:
+    try:
+        raw, blocked = _run_budgeted_model_call(
+            budget,
+            lambda: call_text_model(
+                cfg,
+                model_id=model,
+                system=SHADOW_ROUTE_SYSTEM_PROMPT,
+                user=question,
+                reasoning_effort=(
+                    "low" if reasoning_effort in {"low", "medium", "high"} else None
+                ),
+                max_tokens=240,
+                temperature=0.1,
+                timeout_s=budget.remaining_timeout_s(),
+            ),
+        )
+    except Exception as error:
+        log.warning("shadow route planning failed: %s", error)
+        return []
+    return [] if blocked else _parse_shadow_routes(str(raw or ""))
+
+
+def _answer_from_shadow_evidence(
+    cfg: dict[str, Any],
+    *,
+    model: str,
+    question: str,
+    observation: Mapping[str, Any],
+    budget: RetrievalBudget,
+    reasoning_effort: Optional[str],
+) -> Optional[tuple[str, list[dict[str, Any]]]]:
+    if observation.get("status") != "ready" or observation.get("reason") != "coverage_met":
+        return None
+    evidence = [
+        item for item in observation.get("answer_evidence", [])
+        if isinstance(item, Mapping)
+        and isinstance(item.get("evidence_id"), str)
+        and isinstance(item.get("quote"), str)
+        and item.get("quote")
+    ]
+    if not evidence:
+        return None
+    allowed = {str(item["evidence_id"]): item for item in evidence}
+    evidence_text = "\n\n".join(
+        f"[{item['evidence_id']}] paper={item['paper_id']} "
+        f"page={item.get('page_number')}\n{item['quote']}"
+        for item in evidence
+    )
+    try:
+        raw, blocked = _run_budgeted_model_call(
+            budget,
+            lambda: call_text_model(
+                cfg,
+                model_id=model,
+                system=SHADOW_ANSWER_SYSTEM_PROMPT,
+                user=f"[问题]\n{question}\n\n[原文证据]\n{evidence_text}",
+                reasoning_effort=reasoning_effort,
+                max_tokens=2600,
+                temperature=0.2,
+                timeout_s=budget.remaining_timeout_s(),
+            ),
+        )
+    except Exception as error:
+        log.warning("shadow answer synthesis failed: %s", error)
+        return None
+    answer = str(raw or "").strip()
+    cited_ids = list(dict.fromkeys(_SHADOW_EVIDENCE_REF_RE.findall(answer)))
+    if (
+        blocked
+        or not answer
+        or not cited_ids
+        or any(item not in allowed for item in cited_ids)
+        or not _shadow_answer_paragraphs_are_cited(answer, set(cited_ids))
+    ):
+        return None
+    citations = []
+    for evidence_id in cited_ids:
+        item = allowed[evidence_id]
+        page = item.get("page_number")
+        ref = f"paper:{item['paper_id']}" + (f"#p{page}" if page else "")
+        citations.append({
+            "kind": "paper",
+            "ref": ref,
+            "paper_id": item["paper_id"],
+            "page_number": page,
+            "section_kind": item.get("section_kind"),
+            "section_heading": item.get("section_heading"),
+            "quote": item.get("quote"),
+            "char_start": item.get("char_start"),
+            "char_end": item.get("char_end"),
+            "chunk_char_start": item.get("chunk_char_start"),
+            "chunk_char_end": item.get("chunk_char_end"),
+            "evidence_id": evidence_id,
+            "manifest_id": item.get("manifest_id"),
+            "source_file_hash": item.get("source_file_hash"),
+            "provenance_status": "retrieved_source_text",
+        })
+    return answer, citations
+
+
+def _shadow_answer_paragraphs_are_cited(answer: str, cited_ids: set[str]) -> bool:
+    """Require every substantive answer paragraph to carry an allowed source id."""
+    for paragraph in re.split(r"\n\s*\n", answer):
+        text = paragraph.strip()
+        if not text or all(line.lstrip().startswith("#") for line in text.splitlines()):
+            continue
+        substantive = re.sub(r"[#>*_`|\-\s]", "", text)
+        if len(substantive) < 20:
+            continue
+        refs = set(_SHADOW_EVIDENCE_REF_RE.findall(text))
+        if not refs or not refs.issubset(cited_ids):
+            return False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not re.match(r"(?:[-*+] |\d+[.)] )", stripped):
+                continue
+            line_body = re.sub(r"^(?:[-*+] |\d+[.)] )", "", stripped)
+            if len(re.sub(r"[#>*_`|\-\s]", "", line_body)) >= 20 and not set(
+                _SHADOW_EVIDENCE_REF_RE.findall(line_body)
+            ):
+                return False
+    return True
+
+
+def _finalize_shadow_answer(answer: str, citations: list[dict[str, Any]]) -> str:
+    body = _SOURCE_SECTION_RE.sub("", (answer or "").strip()).strip()
+    boundary = (
+        "> 证据边界：引用定位到本地论文原文片段；检索命中不等于自动完成蕴含判断。"
+        "回答只陈述所列片段能够支持的内容，材料不足处应保留为不足。"
+    )
+    refs = list(dict.fromkeys(
+        str(item.get("ref") or "").strip() for item in citations if item.get("ref")
+    ))
+    source_lines = "\n".join(f"- `{ref}`" for ref in refs) or "无"
+    return f"{body}\n\n{boundary}\n\n## 📚 引用来源\n\n{source_lines}".strip()
 
 
 def _trace_step(step: int, tool: str, args: dict[str, Any], result: str, duration_ms: int) -> TraceStep:
@@ -1252,6 +1496,8 @@ def _run_local_retrieval_agent(
             duration_ms=int((perf_counter() - started) * 1000),
             assessment=assessment,
             budget=budget,
+            cfg=cfg,
+            reasoning_effort=reasoning_effort,
         )
 
     history_lines: list[str] = []
@@ -1306,6 +1552,8 @@ def _run_local_retrieval_agent(
         duration_ms=duration_ms,
         assessment=assessment,
         budget=budget,
+        cfg=cfg,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -1355,6 +1603,7 @@ def _run_ask_agent_inner(
             model=model,
             reasoning_effort=reasoning_effort,
         )
+    configured_model_id = model
     try:
         client, model, provider_blob, _ = create_openai_client_for_model(
             cfg,
@@ -1585,4 +1834,7 @@ def _run_ask_agent_inner(
         model=model,
         duration_ms=duration_ms,
         budget=budget,
+        cfg=cfg,
+        reasoning_effort=reasoning_effort,
+        answer_model_id=configured_model_id,
     )

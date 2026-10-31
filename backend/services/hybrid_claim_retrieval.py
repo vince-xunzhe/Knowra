@@ -314,7 +314,11 @@ def _validated_evidence_records(manifests: Sequence[Mapping[str, Any]]) -> list[
                     "page_number": chunk["page_number"],
                     "page_char_start": chunk["page_char_start"],
                     "page_char_end": chunk["page_char_end"],
+                    "section_kind": chunk["section_kind"],
+                    "section_heading": chunk["section_heading"],
                     "text_hash": chunk["text_hash"],
+                    "manifest_id": manifest["manifest_id"],
+                    "source_file_hash": manifest["source"]["file_hash_sha256"],
                 },
             })
     return records

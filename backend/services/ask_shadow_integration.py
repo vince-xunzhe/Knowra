@@ -1,10 +1,10 @@
 """Default-off production bridge for a validated Ask shadow generation.
 
-The bridge is observation-only: it never builds an index, writes a generation,
-calls a model/provider, or changes the user-visible answer/citations.  A caller
-must explicitly select ``observe`` and an absolute generation root outside the
-live data tree.  Candidate records remain retrieval candidates, never evidence
-of entailment or production eligibility.
+The bridge never builds or writes a generation and accepts only an immutable
+root outside the live data tree. ``observe`` remains telemetry-only.  The
+explicit ``assist`` mode may return a small set of located source-text excerpts
+to the Ask orchestrator; retrieval still does not assert entailment and the
+trace serializer never exposes source text.
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ MAX_SHADOW_INDEX_BYTES = 1_073_741_824
 MAX_OBSERVATION_MS = 5_000
 MAX_OBSERVATION_CANDIDATES = 6
 MAX_OBSERVATION_CHARACTERS = 24_000
+MAX_ANSWER_EVIDENCE = 4
+MAX_ANSWER_EVIDENCE_CHARACTERS = 1_600
 _GENERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MULTI_SOURCE_MARKERS = (
@@ -73,11 +75,11 @@ def _disabled() -> dict[str, Any]:
     }
 
 
-def _unavailable(reason: str) -> dict[str, Any]:
+def _unavailable(reason: str, *, mode: str = "observe") -> dict[str, Any]:
     return {
         "schema_version": GENERATION_SCHEMA_VERSION,
         "status": "unavailable",
-        "mode": "observe",
+        "mode": mode,
         "production_eligible": False,
         "generation_id": None,
         "candidates": [],
@@ -223,12 +225,66 @@ def _requires_multiple_sources(question: str) -> bool:
     return any(marker in lower for marker in _MULTI_SOURCE_MARKERS)
 
 
+def answer_mode_enabled(env: Mapping[str, str] | None = None) -> bool:
+    values = os.environ if env is None else env
+    return str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold() == "assist"
+
+
+def _answer_excerpt(
+    result: Mapping[str, Any], query_routes: Sequence[str]
+) -> dict[str, Any]:
+    """Return one exact bounded span from a validated source-text record."""
+    text = str(result.get("text") or "")
+    lowered = text.casefold()
+    terms: list[str] = []
+    for route in query_routes:
+        for term in re.findall(r"[a-z][a-z0-9-]{2,}|[\u3400-\u9fff]{2,}", route.casefold()):
+            if term not in terms:
+                terms.append(term)
+    match = next(
+        (
+            lowered.find(term)
+            for term in sorted(terms, key=len, reverse=True)
+            if lowered.find(term) >= 0
+        ),
+        0,
+    )
+    start = max(0, match - 320)
+    end = min(len(text), start + MAX_ANSWER_EVIDENCE_CHARACTERS)
+    start = max(0, end - MAX_ANSWER_EVIDENCE_CHARACTERS)
+    locator = result.get("locator") or {}
+    page_start = int(locator.get("page_char_start") or 0)
+    signatures = [
+        str(item) for item in (result.get("source_signatures") or []) if str(item)
+    ]
+    field_path = str(result.get("field_path") or "")
+    section_kind = field_path.rsplit("/", 1)[-1] if "/" in field_path else None
+    return {
+        "evidence_id": result["id"],
+        "paper_id": result["paper_id"],
+        "quote": text[start:end],
+        "page_number": locator.get("page_number"),
+        "section_kind": locator.get("section_kind") or section_kind,
+        "section_heading": locator.get("section_heading") or result.get("title"),
+        "char_start": page_start + start,
+        "char_end": page_start + end,
+        "chunk_char_start": start,
+        "chunk_char_end": end,
+        "manifest_id": locator.get("manifest_id") or (signatures[0] if signatures else None),
+        "source_file_hash": locator.get("source_file_hash"),
+        "provenance_status": "retrieved_source_text",
+    }
+
+
 def _compact_observation(
     manifest: Mapping[str, Any],
     response: Mapping[str, Any],
     *,
     observation_elapsed_ms: float,
     index_bytes: int,
+    mode: str,
+    include_answer_evidence: bool,
+    query_routes: Sequence[str],
 ) -> dict[str, Any]:
     candidates = []
     candidate_locators = []
@@ -254,7 +310,7 @@ def _compact_observation(
     observation = {
         "schema_version": GENERATION_SCHEMA_VERSION,
         "status": "ready",
-        "mode": "observe",
+        "mode": mode,
         "production_eligible": False,
         "generation_id": manifest["generation_id"],
         "candidates": candidates,
@@ -269,6 +325,17 @@ def _compact_observation(
         },
         "reason": response["answerability_reason"],
     }
+    if include_answer_evidence and mode == "assist" and response.get("answerable"):
+        anchored = [
+            item for item in response.get("answer_evidence", [])
+            if item.get("kind") == "evidence"
+            and item.get("support_status") == "source_text"
+            and item.get("selection_mode") != "source_drilldown"
+        ]
+        observation["answer_evidence"] = [
+            _answer_excerpt(item, query_routes)
+            for item in anchored[:MAX_ANSWER_EVIDENCE]
+        ]
     if len(_stable_json(observation)) > MAX_OBSERVATION_CHARACTERS:
         raise AskShadowIntegrationError("shadow observation exceeds its output budget")
     return observation
@@ -289,6 +356,8 @@ def _two_stage_response(response: Mapping[str, Any]) -> dict[str, Any]:
             "coverage_met" if response.get("answerable")
             else "retrieval_coverage_incomplete"
         ),
+        "answerable": bool(response.get("answerable")),
+        "answer_evidence": evidence,
     }
 
 
@@ -302,6 +371,7 @@ def observe_question(
     query_vector: Sequence[float] | None = None,
     dense_model_id: str | None = None,
     query_routes: Sequence[str] | None = None,
+    include_answer_evidence: bool = False,
 ) -> dict[str, Any]:
     """Read one immutable generation and return candidate-only telemetry.
 
@@ -312,13 +382,13 @@ def observe_question(
     mode = str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold()
     if mode == "off":
         return _disabled()
-    if mode != "observe":
-        return _unavailable("shadow_mode_invalid")
+    if mode not in {"observe", "assist"}:
+        return _unavailable("shadow_mode_invalid", mode=mode)
     if adapter not in {"cli", "api"}:
-        return _unavailable("shadow_adapter_invalid")
+        return _unavailable("shadow_adapter_invalid", mode=mode)
     raw_root = str(values.get("KNOWRA_ASK_SHADOW_ROOT", "")).strip()
     if not raw_root:
-        return _unavailable("shadow_root_missing")
+        return _unavailable("shadow_root_missing", mode=mode)
     started = perf_counter()
     deadline = started + MAX_OBSERVATION_MS / 1_000
     try:
@@ -385,6 +455,14 @@ def observe_question(
                 execute_cli_plan if adapter == "cli" else execute_api_plan
             )
             response = execute(retriever, plan)
+            response = {
+                **response,
+                "answerable": response.get("answerability") == "answerable",
+                "answer_evidence": [
+                    item for item in response.get("results", [])
+                    if item.get("kind") == "evidence"
+                ],
+            }
         identity_after = _index_identity(index_path, deadline=deadline)
         if identity_after != identity_before:
             raise AskShadowIntegrationError("generation index changed during observation")
@@ -393,6 +471,9 @@ def observe_question(
             response,
             observation_elapsed_ms=(perf_counter() - started) * 1_000,
             index_bytes=identity_before["bytes"],
+            mode=mode,
+            include_answer_evidence=include_answer_evidence,
+            query_routes=list(query_routes or [question]),
         )
     except (
         AskShadowIntegrationError,
@@ -404,7 +485,7 @@ def observe_question(
         TypeError,
         ValueError,
     ):
-        return _unavailable("shadow_generation_invalid")
+        return _unavailable("shadow_generation_invalid", mode=mode)
 
 
 def observation_trace_payload(observation: Mapping[str, Any]) -> str:
