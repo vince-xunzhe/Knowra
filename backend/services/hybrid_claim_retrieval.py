@@ -550,9 +550,10 @@ def _normalized_set(value: Any, *, allowed: set[str], field: str) -> list[str]:
 
 
 def _read_connection(path: Path) -> sqlite3.Connection:
-    uri = f"file:{quote(str(path.resolve()))}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
+    uri = f"file:{quote(str(path.resolve()))}?mode=ro&immutable=1"
+    conn = sqlite3.connect(uri, uri=True, timeout=0)
     try:
+        conn.execute("PRAGMA query_only=ON")
         metadata = dict(conn.execute("SELECT key,value FROM metadata"))
     except sqlite3.DatabaseError as error:
         conn.close()
@@ -719,20 +720,51 @@ class HybridClaimRetriever:
             for row in rows:
                 if perf_counter() >= deadline:
                     raise HybridRetrievalError("search exceeded the latency budget")
-                full_text = row[5]
+                try:
+                    record = _validate_record({
+                        "id": row[0], "paper_id": row[1], "kind": row[2],
+                        "support_status": row[3], "title": row[4], "text": row[5],
+                        "field_path": row[6],
+                        "source_signatures": json.loads(row[7]),
+                        "locations": json.loads(row[8]),
+                        "locator": json.loads(row[9]),
+                    })
+                except (json.JSONDecodeError, TypeError) as error:
+                    raise HybridRetrievalError(
+                        "shadow index record is malformed"
+                    ) from error
+                full_text = record["text"]
                 payloads[row[0]] = {
-                    "id": row[0], "paper_id": row[1], "kind": row[2], "support_status": row[3],
-                    "title": row[4],
+                    "id": record["id"], "paper_id": record["paper_id"],
+                    "kind": record["kind"], "support_status": record["support_status"],
+                    "title": record["title"],
                     "text": full_text[:MAX_RESULT_TEXT_CHARACTERS],
                     "text_hash": _sha256(full_text),
                     "text_characters": len(full_text),
                     "text_truncated": len(full_text) > MAX_RESULT_TEXT_CHARACTERS,
-                    "field_path": row[6], "source_signatures": json.loads(row[7]),
-                    "locations": json.loads(row[8]),
-                    "locator": json.loads(row[9]),
+                    "field_path": record["field_path"],
+                    "source_signatures": record["source_signatures"],
+                    "locations": record["locations"],
+                    "locator": record["locator"],
                 }
-                if dense_query is not None and row[10] is not None:
-                    score = _cosine(dense_query, json.loads(row[10]))
+                stored_vector = None
+                if row[10] is not None:
+                    try:
+                        stored_vector = _vector(
+                            json.loads(row[10]), field="stored vector"
+                        )
+                    except (json.JSONDecodeError, TypeError) as error:
+                        raise HybridRetrievalError(
+                            "shadow index vector is malformed"
+                        ) from error
+                    if stored_vector is None:
+                        raise HybridRetrievalError("shadow index vector is missing")
+                    if len(stored_vector) != self.vector_dimension:
+                        raise HybridRetrievalError(
+                            "stored vector dimension does not match the index"
+                        )
+                if dense_query is not None and stored_vector is not None:
+                    score = _cosine(dense_query, stored_vector)
                     if score >= MIN_DENSE_SIMILARITY:
                         dense_scores.append((row[0], score))
             dense_scores.sort(key=lambda item: (-item[1], item[0]))

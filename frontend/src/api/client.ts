@@ -797,7 +797,24 @@ export interface AskCitation {
   ref: string
   path?: string | null
   filename?: string | null
-  paper_id?: number | null
+  paper_id?: number | string | null
+  page_number?: number | null
+  section_kind?: string | null
+  section_heading?: string | null
+  quote?: string | null
+  char_start?: number | null
+  char_end?: number | null
+  evidence_id?: string | null
+  support_record_id?: string | null
+  manifest_id?: string | null
+  number?: number | null
+  claim_id?: string | null
+  assessor_version?: string | null
+  source_file_hash?: string | null
+  chunk_char_start?: number | null
+  chunk_char_end?: number | null
+  relationship?: 'supports' | 'contradicts' | 'insufficient' | null
+  provenance_status?: string | null
 }
 
 export interface AskResponse {
