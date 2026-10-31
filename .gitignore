@@ -84,6 +84,9 @@ pnpm-debug.log*
 # session: local-only artifacts
 data/*.bak
 data/backups/
+
+# Per-checkout reviewed Ask generation control (machine-local, never committed)
+.knowra/
 supabase/.temp/
 
 # Frontend browser test artifacts

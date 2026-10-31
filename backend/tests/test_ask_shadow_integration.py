@@ -17,8 +17,10 @@ from services import ask_agent
 from services.ask_shadow_integration import (
     AskShadowIntegrationError,
     _index_identity,
+    default_generation_control_root,
     observe_question,
     observation_trace_payload,
+    runtime_status,
 )
 from services.ask_generation_control import promote_generation
 from services.hybrid_claim_retrieval import build_shadow_index
@@ -167,6 +169,63 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "disabled")
         self.assertFalse(result["production_eligible"])
         self.assertEqual(result["candidates"], [])
+
+    def test_normal_start_auto_discovers_reviewed_default_control(self):
+        default_control = default_generation_control_root(
+            live_data_root=self.live_data
+        )
+        default_control.parent.mkdir()
+        promote_generation(
+            generation_root=self.shadow,
+            control_root=default_control,
+            live_data_root=self.live_data,
+            promotion_id="fixture-default-review-v1",
+            reviewer="synthetic-release-test",
+            reviewed_at="2026-10-31T00:00:00Z",
+            acceptance_sha256=_hash(b"synthetic-release-acceptance"),
+            accepted_failed_pages=0,
+            expected_active_sha256=None,
+        )
+
+        self.assertTrue(
+            ask_agent.ask_shadow_integration.answer_mode_enabled(
+                {}, live_data_root=self.live_data
+            )
+        )
+        status = runtime_status({}, live_data_root=self.live_data)
+        self.assertEqual(status, {
+            "status": "ready",
+            "mode": "assist",
+            "ready": True,
+            "generation_id": "fixture-generation-v1",
+            "reason": "reviewed_generation_active",
+        })
+        result = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="cli",
+            env={},
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["action latent transition", "actions dynamics"],
+            include_answer_evidence=True,
+        )
+        self.assertEqual(result["mode"], "assist")
+        self.assertEqual(result["reason"], "coverage_met")
+        self.assertTrue(result["answer_evidence"])
+
+    def test_normal_start_without_reviewed_generation_stays_legacy_safe(self):
+        status = runtime_status({}, live_data_root=self.live_data)
+        self.assertEqual(status["status"], "not_initialized")
+        self.assertFalse(status["ready"])
+        result = observe_question(
+            "question",
+            adapter="api",
+            env={},
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+        )
+        self.assertEqual(result["status"], "disabled")
+        self.assertEqual(result["reason"], "reviewed_generation_missing")
 
     def test_cli_and_api_share_candidates_provenance_and_hard_budgets(self):
         before = {
