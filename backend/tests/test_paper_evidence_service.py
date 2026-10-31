@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from io import BytesIO
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+from pypdf import PdfWriter
+from pypdf.generic import (
+    ArrayObject,
+    DecodedStreamObject,
+    DictionaryObject,
+    FloatObject,
+    NameObject,
+    NumberObject,
+)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -23,6 +34,54 @@ from services.paper_evidence_service import (
 
 
 SOURCE_HASH = hashlib.sha256(b"synthetic-pdf").hexdigest()
+
+
+def _type1_unknown_glyph_pdf() -> bytes:
+    """Build a one-page PDF that triggers pypdf 5.1.0's Type1 cmap bug."""
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font_file = DecodedStreamObject()
+    font_file.set_data(
+        b"%!PS-AdobeFont-1.0\n/Encoding 256 array\n"
+        b"dup 65 /KnowraUnknownGlyph put\n"
+        b"eexec\n"
+    )
+    font_file[NameObject("/Length1")] = NumberObject(len(font_file.get_data()))
+    font_file_ref = writer._add_object(font_file)
+    descriptor = DictionaryObject({
+        NameObject("/Type"): NameObject("/FontDescriptor"),
+        NameObject("/FontName"): NameObject("/Helvetica"),
+        NameObject("/Flags"): NumberObject(32),
+        NameObject("/FontBBox"): ArrayObject([
+            NumberObject(0), NumberObject(-200), NumberObject(1000), NumberObject(900)
+        ]),
+        NameObject("/ItalicAngle"): NumberObject(0),
+        NameObject("/Ascent"): NumberObject(800),
+        NameObject("/Descent"): NumberObject(-200),
+        NameObject("/CapHeight"): NumberObject(700),
+        NameObject("/StemV"): NumberObject(80),
+        NameObject("/FontFile"): font_file_ref,
+    })
+    descriptor_ref = writer._add_object(descriptor)
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+        NameObject("/FirstChar"): NumberObject(32),
+        NameObject("/LastChar"): NumberObject(126),
+        NameObject("/Widths"): ArrayObject([FloatObject(600)] * 95),
+        NameObject("/FontDescriptor"): descriptor_ref,
+    })
+    font_ref = writer._add_object(font)
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})
+    })
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 72 720 Td (A) Tj ET")
+    page[NameObject("/Contents")] = writer._add_object(content)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
 
 
 def _pages() -> list[dict]:
@@ -62,6 +121,61 @@ def _manifest(**overrides):
 
 
 class PaperEvidenceServiceTests(unittest.TestCase):
+    def test_type1_cmap_bug_uses_versioned_page_fallback_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pdf = Path(temporary) / "type1-unknown-glyph.pdf"
+            pdf.write_bytes(_type1_unknown_glyph_pdf())
+            manifest = build_pdf_evidence(pdf, paper_id="paper:type1-fallback")
+
+        self.assertEqual(manifest["coverage"]["failed_pages"], 0)
+        self.assertTrue(manifest["coverage"]["page_iteration_complete"])
+        page = manifest["pages"][0]
+        self.assertEqual(page["status"], "ok")
+        self.assertEqual(page["primary_error_type"], "UnboundLocalError")
+        self.assertTrue(page["parser_used"].startswith("pypdfium2-"))
+        self.assertIsNone(page["fallback_error_type"])
+        self.assertTrue(any(chunk["text"] == "A" for chunk in manifest["chunks"]))
+
+    def test_primary_success_never_opens_the_fallback_parser(self):
+        page = type("PrimaryPage", (), {"extract_text": lambda self: "primary text"})()
+        reader = type("PrimaryReader", (), {"pages": [page]})()
+        with tempfile.TemporaryDirectory() as temporary:
+            pdf = Path(temporary) / "primary.pdf"
+            pdf.write_bytes(b"synthetic-pdf")
+            with (
+                patch(
+                    "services.paper_evidence_service.pypdf.PdfReader",
+                    return_value=reader,
+                ),
+                patch(
+                    "services.paper_evidence_service._open_pdfium_document",
+                    side_effect=AssertionError("fallback must stay lazy"),
+                ),
+            ):
+                manifest = build_pdf_evidence(pdf, paper_id="paper:primary")
+
+        self.assertEqual(manifest["coverage"]["failed_pages"], 0)
+        self.assertTrue(manifest["pages"][0]["parser_used"].startswith("pypdf-"))
+        self.assertIsNone(manifest["pages"][0]["primary_error_type"])
+
+    def test_document_open_failure_can_recover_with_pdfium_and_remains_visible(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            pdf = Path(temporary) / "document-fallback.pdf"
+            pdf.write_bytes(_type1_unknown_glyph_pdf())
+            with patch(
+                "services.paper_evidence_service.pypdf.PdfReader",
+                side_effect=ValueError("private primary detail"),
+            ):
+                manifest = build_pdf_evidence(pdf, paper_id="paper:document-fallback")
+
+        self.assertIsNone(manifest["parser"]["document_error_type"])
+        self.assertEqual(
+            manifest["parser"]["document_primary_error_type"], "ValueError"
+        )
+        self.assertEqual(manifest["coverage"]["failed_pages"], 0)
+        self.assertTrue(manifest["pages"][0]["parser_used"].startswith("pypdfium2-"))
+        self.assertNotIn("private primary detail", json.dumps(manifest))
+
     def test_manifest_preserves_page_coverage_sections_and_failures(self):
         manifest = _manifest()
 
@@ -156,6 +270,10 @@ class PaperEvidenceServiceTests(unittest.TestCase):
         self.assertEqual(manifest["coverage"]["empty_pages"], 1)
         self.assertEqual(manifest["coverage"]["failed_pages"], 1)
         self.assertEqual(manifest["pages"][1]["error_type"], "RuntimeError")
+        self.assertEqual(
+            manifest["pages"][1]["primary_error_type"], "RuntimeError"
+        )
+        self.assertIsNotNone(manifest["pages"][1]["fallback_error_type"])
         self.assertNotIn("private detail", json.dumps(manifest))
         self.assertTrue(any(
             "Last-page evidence" in chunk["text"] for chunk in manifest["chunks"]
@@ -207,6 +325,12 @@ class PaperEvidenceServiceTests(unittest.TestCase):
                 manifest = build_pdf_evidence(pdf, paper_id="paper:broken")
 
         self.assertEqual(manifest["parser"]["document_error_type"], "ValueError")
+        self.assertEqual(
+            manifest["parser"]["document_primary_error_type"], "ValueError"
+        )
+        self.assertIsNotNone(
+            manifest["parser"]["document_fallback_error_type"]
+        )
         self.assertEqual(manifest["coverage"]["attempted_pages"], 0)
         self.assertIsNone(manifest["coverage"]["source_pages"])
         self.assertFalse(manifest["coverage"]["page_iteration_complete"])
@@ -291,6 +415,25 @@ class PaperEvidenceServiceTests(unittest.TestCase):
         tampered["parser"]["text_normalization"] = "unversioned"
         with self.assertRaisesRegex(EvidenceValidationError, "parser identity"):
             validate_evidence_manifest(tampered)
+
+        with self.assertRaisesRegex(
+            EvidenceValidationError, "successful-page provenance"
+        ):
+            build_evidence_manifest(
+                paper_id="paper:provenance",
+                source_file_hash=SOURCE_HASH,
+                source_size_bytes=128,
+                total_pages=1,
+                pages=[{
+                    "page_number": 1,
+                    "status": "ok",
+                    "text": "fallback text",
+                    "parser_used": "pypdf-5.1.0",
+                    "primary_error_type": "UnboundLocalError",
+                    "fallback_error_type": None,
+                }],
+                parser_version="synthetic-provenance",
+            )
 
     def test_invalid_or_missing_page_evidence_fails_closed(self):
         with self.assertRaisesRegex(EvidenceValidationError, "every source page"):
