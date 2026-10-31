@@ -20,6 +20,10 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
+from services.ask_generation_control import (
+    GenerationControlError,
+    resolve_active_generation,
+)
 from services.hybrid_claim_retrieval import (
     HybridClaimRetriever,
     HybridRetrievalError,
@@ -226,9 +230,25 @@ def _requires_multiple_sources(question: str) -> bool:
     return any(marker in lower for marker in _MULTI_SOURCE_MARKERS)
 
 
-def answer_mode_enabled(env: Mapping[str, str] | None = None) -> bool:
+def answer_mode_enabled(
+    env: Mapping[str, str] | None = None,
+    *,
+    live_data_root: Path = LIVE_DATA_ROOT,
+) -> bool:
     values = os.environ if env is None else env
-    return str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold() == "assist"
+    if str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold() != "assist":
+        return False
+    control_root = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
+    if not control_root:
+        return False
+    try:
+        resolve_active_generation(
+            control_root=control_root,
+            live_data_root=live_data_root,
+        )
+    except GenerationControlError:
+        return False
+    return True
 
 
 def _answer_excerpt(
@@ -339,6 +359,7 @@ def _compact_observation(
     mode: str,
     include_answer_evidence: bool,
     query_routes: Sequence[str],
+    production_eligible: bool,
 ) -> dict[str, Any]:
     candidates = []
     candidate_locators = []
@@ -365,7 +386,7 @@ def _compact_observation(
         "schema_version": GENERATION_SCHEMA_VERSION,
         "status": "ready",
         "mode": mode,
-        "production_eligible": False,
+        "production_eligible": production_eligible,
         "generation_id": manifest["generation_id"],
         "candidates": candidates,
         "candidate_locators": candidate_locators,
@@ -440,9 +461,24 @@ def observe_question(
         return _unavailable("shadow_mode_invalid", mode=mode)
     if adapter not in {"cli", "api"}:
         return _unavailable("shadow_adapter_invalid", mode=mode)
-    raw_root = str(values.get("KNOWRA_ASK_SHADOW_ROOT", "")).strip()
-    if not raw_root:
-        return _unavailable("shadow_root_missing", mode=mode)
+    production_eligible = False
+    if mode == "assist":
+        raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
+        if not raw_control:
+            return _unavailable("generation_control_missing", mode=mode)
+        try:
+            activation = resolve_active_generation(
+                control_root=raw_control,
+                live_data_root=live_data_root,
+            )
+        except GenerationControlError:
+            return _unavailable("generation_control_invalid", mode=mode)
+        raw_root = str(activation["generation_root"])
+        production_eligible = True
+    else:
+        raw_root = str(values.get("KNOWRA_ASK_SHADOW_ROOT", "")).strip()
+        if not raw_root:
+            return _unavailable("shadow_root_missing", mode=mode)
     started = perf_counter()
     deadline = started + MAX_OBSERVATION_MS / 1_000
     try:
@@ -528,6 +564,7 @@ def observe_question(
             mode=mode,
             include_answer_evidence=include_answer_evidence,
             query_routes=list(query_routes or [question]),
+            production_eligible=production_eligible,
         )
     except (
         AskShadowIntegrationError,
@@ -538,6 +575,7 @@ def observe_question(
         KeyError,
         TypeError,
         ValueError,
+        GenerationControlError,
     ):
         return _unavailable("shadow_generation_invalid", mode=mode)
 
@@ -548,7 +586,7 @@ def observation_trace_payload(observation: Mapping[str, Any]) -> str:
         "schema_version": observation.get("schema_version"),
         "status": observation.get("status"),
         "mode": observation.get("mode"),
-        "production_eligible": False,
+        "production_eligible": bool(observation.get("production_eligible")),
         "generation_id": observation.get("generation_id"),
         "candidate_count": len(observation.get("candidates") or []),
         "source_locator_count": len(observation.get("candidate_locators") or []),

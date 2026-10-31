@@ -20,6 +20,7 @@ from services.ask_shadow_integration import (
     observe_question,
     observation_trace_payload,
 )
+from services.ask_generation_control import promote_generation
 from services.hybrid_claim_retrieval import build_shadow_index
 from services.paper_evidence_service import build_evidence_manifest
 from services.ask_retrieval_budget import RetrievalBudget
@@ -107,9 +108,24 @@ class AskShadowIntegrationTests(unittest.TestCase):
             json.dumps(self.generation, sort_keys=True),
             encoding="utf-8",
         )
+        self.control = self.root / "ask-generation-control"
+        promote_generation(
+            generation_root=self.shadow,
+            control_root=self.control,
+            live_data_root=self.live_data,
+            promotion_id="fixture-review-v1",
+            reviewer="synthetic-test",
+            reviewed_at="2026-10-31T00:00:00Z",
+            acceptance_sha256=_hash(b"synthetic-acceptance"),
+            expected_active_sha256=None,
+        )
         self.env = {
             "KNOWRA_ASK_SHADOW_MODE": "observe",
             "KNOWRA_ASK_SHADOW_ROOT": str(self.shadow),
+        }
+        self.assist_env = {
+            "KNOWRA_ASK_SHADOW_MODE": "assist",
+            "KNOWRA_ASK_GENERATION_CONTROL": str(self.control),
         }
 
     def tearDown(self):
@@ -233,7 +249,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
         )
 
     def test_assist_mode_returns_bounded_exact_source_spans_but_trace_hides_them(self):
-        env = {**self.env, "KNOWRA_ASK_SHADOW_MODE": "assist"}
+        env = self.assist_env
         result = observe_question(
             "How do actions enter latent transition dynamics?",
             adapter="cli",
@@ -246,6 +262,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ready")
         self.assertEqual(result["mode"], "assist")
+        self.assertTrue(result["production_eligible"])
         self.assertEqual(result["reason"], "coverage_met")
         self.assertTrue(result["answer_evidence"])
         excerpt = result["answer_evidence"][0]
@@ -258,8 +275,57 @@ class AskShadowIntegrationTests(unittest.TestCase):
             ask_agent.ask_shadow_integration.MAX_ANSWER_EVIDENCE_CHARACTERS,
         )
         payload = observation_trace_payload(result)
+        self.assertTrue(json.loads(payload)["production_eligible"])
         self.assertNotIn("actions became explicit inputs", payload)
         self.assertNotIn("answer_evidence", payload)
+
+    def test_unpromoted_direct_root_cannot_enable_assist(self):
+        env = {
+            "KNOWRA_ASK_SHADOW_MODE": "assist",
+            "KNOWRA_ASK_SHADOW_ROOT": str(self.shadow),
+        }
+        result = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="cli",
+            env=env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            include_answer_evidence=True,
+        )
+
+        self.assertFalse(
+            ask_agent.ask_shadow_integration.answer_mode_enabled(
+                env, live_data_root=self.live_data
+            )
+        )
+        self.assertEqual(result["status"], "unavailable")
+        self.assertEqual(result["reason"], "generation_control_missing")
+        self.assertFalse(result["production_eligible"])
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic unpromoted generation",
+        )
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(ask_agent, "call_text_model") as model_call,
+        ):
+            finished = ask_agent._finish_result(
+                answer="",
+                question="How do actions enter latent transition dynamics?",
+                trace=[],
+                model="codex-cli/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+        model_call.assert_not_called()
+        self.assertIn("## 证据不足", finished.answer)
 
     def test_answer_evidence_prefers_primary_sections_and_deduplicates_chunks(self):
         def item(
@@ -504,7 +570,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
             reason="synthetic",
         )
         evidence_id = self.manifest["chunks"][0]["id"]
-        env = {**self.env, "KNOWRA_ASK_SHADOW_MODE": "assist"}
+        env = self.assist_env
         real_observe = ask_agent.ask_shadow_integration.observe_question
 
         def observe(question, *, adapter, query_routes=None, include_answer_evidence=False):
@@ -587,9 +653,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
         }
         unknown = "evidence:" + "f" * 64
         with (
-            mock.patch.dict(
-                os.environ, {"KNOWRA_ASK_SHADOW_MODE": "assist"}, clear=False
-            ),
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
             mock.patch.object(
                 ask_agent.ask_shadow_integration,
                 "observe_question",
@@ -640,9 +704,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
             "answer_evidence": [],
         }
         with (
-            mock.patch.dict(
-                os.environ, {"KNOWRA_ASK_SHADOW_MODE": "assist"}, clear=False
-            ),
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
             mock.patch.object(
                 ask_agent.ask_shadow_integration,
                 "observe_question",
