@@ -184,10 +184,8 @@ try {
             char_start: 120,
             char_end: 165,
             evidence_id: 'evidence:fixture',
-            support_record_id: 'support:fixture',
             manifest_id: 'manifest:fixture',
-            relationship: 'supports',
-            provenance_status: 'adjudicated_support',
+            provenance_status: 'retrieved_source_text',
           }],
           trace: [{ step: 0, tool: 'shadow_retrieval', args: { mode: 'observe' }, result_summary: 'candidate-only', duration_ms: 2, hit_node_ids: [] }],
           model: 'fixture-model',
@@ -204,6 +202,7 @@ try {
     await input.fill('How did action enter the model?')
     await page.getByRole('button', { name: '发送', exact: true }).click()
     await expect(page.getByText('Actions enter the latent transition directly.', { exact: true })).toBeVisible()
+    await expect(page.getByText(/论文原文 · data\/wiki\/papers\/0001-fixture\.md/)).toBeVisible()
     await expect(page.getByText(/p\.7 · 3\. Method · chars 120-165/)).toBeVisible()
     await expect(page.getByText('candidate-only', { exact: false })).toHaveCount(0)
     assert.equal(asks, 1)

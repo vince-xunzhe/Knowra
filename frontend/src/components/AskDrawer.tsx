@@ -1186,11 +1186,13 @@ function summarizeArgs(args: Record<string, unknown>): string {
 }
 
 function formatCitation(citation: AskCitation): string {
-  const prefix = citation.kind === 'graph_node'
-    ? `${tr("结构节点")} · `
-    : citation.kind === 'graph_edge'
-      ? `${tr("结构关系")} · `
-      : `${tr("Wiki 内容")} · `
+  const prefix = citation.provenance_status === 'retrieved_source_text'
+    ? `${tr("论文原文")} · `
+    : citation.kind === 'graph_node'
+      ? `${tr("结构节点")} · `
+      : citation.kind === 'graph_edge'
+        ? `${tr("结构关系")} · `
+        : `${tr("Wiki 内容")} · `
   const source = citation.path?.trim()
     || citation.ref?.trim()
     || citation.filename?.trim()

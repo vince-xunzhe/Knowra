@@ -83,6 +83,6 @@ UV_CACHE_DIR="$PWD/.cache/uv" uv --no-config pip compile backend/requirements-de
 
 ## Ask shadow 接线（默认关闭）
 
-实验性 claim/source 检索只能通过一个已经验证、不可变且位于 live `data/` 之外的 generation 观察。默认 `KNOWRA_ASK_SHADOW_MODE=off`；此时 Ask 不解析 generation 路径，也不增加 trace。只有显式设置 `observe` 和绝对 `KNOWRA_ASK_SHADOW_ROOT` 才进行只读候选检索。观察结果不得改变用户答案、引用或现有 evidence gate，也不能把 retrieval candidate 解释为 entailment。
+实验性 claim/source 检索只能通过一个已经验证、不可变且位于 live `data/` 之外的 generation 使用。默认 `KNOWRA_ASK_SHADOW_MODE=off`；此时 Ask 不解析 generation 路径，也不增加 trace。显式设置 `observe` 和绝对 `KNOWRA_ASK_SHADOW_ROOT` 只进行只读候选检索，结果不得改变用户答案、引用或现有 evidence gate。显式设置 `assist` 时，仅在旧 Wiki evidence gate 不足、两阶段检索达到来源覆盖门槛、且回答模型对每个实质段落使用允许的 evidence ID 时，才用最多 4 条有页码/字符定位的原文片段生成回答；未知或缺失引用、模型/预算失败、来源覆盖不足都回退到原有拒答。`assist` 的引用表示“定位到原文”，不能解释为已经自动完成 entailment adjudication；切回 `off` 即为即时回滚。
 
-generation root 不能是 live data 的子目录或祖先，任一父路径、manifest 与 index 都不能走 symlink/`..`。manifest 必须同时绑定 index 文件的 SHA-256/字节数、corpus/dense digest 和模型版本，并保持 `production_eligible=false`。SQLite 以 `immutable`、`query_only`、零锁等待打开；本地物理文件逐块 hash、检索及复核共享 5 秒总观察上限，超时或任何损坏都只产生不含正文的 `unavailable` trace，不回退到 live Wiki 或自动重建。该上限可在块间中止，不声称能抢占一次阻塞的底层文件读取。文件 hash 只证明当前 generation 内部内容一致，并不是外部签名或可信发布凭据。真实 generation 的创建、备份、恢复、私有语料评测和任何 `enforce`/cutover 均是另行审批事项。
+generation root 不能是 live data 的子目录或祖先，任一父路径、manifest 与 index 都不能走 symlink/`..`。manifest 必须同时绑定 index 文件的 SHA-256/字节数、corpus/dense digest 和模型版本，并保持 `production_eligible=false`。SQLite 以 `immutable`、`query_only`、零锁等待打开；本地物理文件逐块 hash、检索及复核共享 5 秒总观察上限，超时或任何损坏都只产生不含正文的 `unavailable` trace，不回退到 live Wiki 或自动重建。trace 序列化会剥离候选正文和回答证据；只有显式 `assist` 的回答模型调用会接收上述有界片段。该上限可在块间中止，不声称能抢占一次阻塞的底层文件读取。文件 hash 只证明当前 generation 内部内容一致，并不是外部签名或可信发布凭据。真实 generation 的创建、备份、恢复、私有语料评测和任何部署/cutover 均是另行审批事项。

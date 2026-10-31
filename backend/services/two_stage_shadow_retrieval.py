@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
 from time import perf_counter
 from typing import Any
@@ -15,6 +16,7 @@ MAX_CLAIMS = 10
 MAX_EVIDENCE = 6
 MAX_PAPERS = 8
 MAX_TEMPORAL_REPAIR_CALLS = 2
+MAX_GLOBAL_EVIDENCE_CALLS = MAX_QUERY_ROUTES
 MAX_SOURCE_DRILLDOWN_CALLS = 5
 _SOURCE_SECTION_QUERY = "abstract introduction conclusion"
 _REFERENCE_HEADING = re.compile(r"^(?:references|bibliography|参考文献)\b", re.IGNORECASE)
@@ -176,7 +178,7 @@ def _candidate_papers(
     for paper_id in ranked:
         if paper_id not in selected:
             selected.append(paper_id)
-        if len(selected) == min(5, MAX_PAPERS):
+        if len(selected) == MAX_PAPERS:
             break
     return selected, years, temporal
 
@@ -285,6 +287,48 @@ def _source_drilldown(
     return evidence, calls
 
 
+def _corroborated_global_evidence(
+    evidence: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep bounded source rescue that has more than one relevance signal.
+
+    A global source hit may bypass a lossy or truncated claim catalogue, but a
+    single hit from the broad primary route is too weak to select a new paper.
+    A paper is admitted when the source evidence is repeated, appears through
+    multiple routes, or comes from a planned specialised route.
+    """
+    paper_counts = Counter(item["paper_id"] for item in evidence)
+    return [
+        {
+            **item,
+            "selection_mode": "global_evidence_rescue",
+        }
+        for item in evidence
+        if (
+            paper_counts[item["paper_id"]] >= 2
+            or len(set(item.get("route_indexes") or [])) >= 2
+            or any(index > 0 for index in item.get("route_indexes") or [])
+        )
+    ]
+
+
+def _coverage_is_incomplete(
+    evidence: Sequence[dict[str, Any]],
+    *,
+    years: dict[str, int],
+    temporal: bool,
+    required_papers: int,
+    required_evidence: int,
+) -> bool:
+    papers = {item["paper_id"] for item in evidence}
+    evidence_years = {years[paper] for paper in papers if paper in years}
+    return (
+        len(evidence) < required_evidence
+        or len(papers) < required_papers
+        or (temporal and len(evidence_years) < 2)
+    )
+
+
 def execute_two_stage_shadow_retrieval(
     retriever: HybridClaimRetriever,
     *,
@@ -317,11 +361,6 @@ def execute_two_stage_shadow_retrieval(
             paper_ids=papers,
             anchor_query=anchor_query,
         )
-    drilldown_calls = 0
-    source_drilldown_used = False
-    if papers and not evidence_ranked:
-        evidence_ranked, drilldown_calls = _source_drilldown(retriever, papers)
-        source_drilldown_used = bool(evidence_ranked)
     supplements: list[dict[str, Any]] = []
     repair_calls = 0
     if temporal and papers:
@@ -329,6 +368,43 @@ def execute_two_stage_shadow_retrieval(
             retriever, normalized, claims, papers, years, evidence_ranked
         )
     supplement_ids = {item["id"] for item in supplements}
+    preliminary_evidence = _diverse(
+        [
+            *supplements,
+            *[item for item in evidence_ranked if item["id"] not in supplement_ids],
+        ],
+        MAX_EVIDENCE,
+    )
+    rescue_calls = 0
+    global_evidence_rescue_used = False
+    if _coverage_is_incomplete(
+        preliminary_evidence,
+        years=years,
+        temporal=temporal,
+        required_papers=required_papers,
+        required_evidence=required_evidence,
+    ):
+        global_ranked, rescue_calls = _ranked_routes(
+            retriever,
+            normalized,
+            kinds=["evidence"],
+            anchor_query=_evidence_anchor_query(normalized),
+        )
+        rescued = _corroborated_global_evidence(global_ranked)
+        if rescued:
+            existing_ids = {item["id"] for item in evidence_ranked}
+            evidence_ranked = [
+                *evidence_ranked,
+                *[item for item in rescued if item["id"] not in existing_ids],
+            ]
+            rescued_papers = list(dict.fromkeys(item["paper_id"] for item in rescued))
+            years.update(retriever.paper_years(rescued_papers))
+            global_evidence_rescue_used = True
+    drilldown_calls = 0
+    source_drilldown_used = False
+    if papers and not evidence_ranked and not supplements:
+        evidence_ranked, drilldown_calls = _source_drilldown(retriever, papers)
+        source_drilldown_used = bool(evidence_ranked)
     evidence = _diverse(
         [*supplements, *[item for item in evidence_ranked if item["id"] not in supplement_ids]],
         MAX_EVIDENCE,
@@ -364,13 +440,17 @@ def execute_two_stage_shadow_retrieval(
             "temporal_intent": temporal,
             "temporal_years_sufficient": temporal_years_sufficient,
             "source_drilldown_used": source_drilldown_used,
+            "global_evidence_rescue_used": global_evidence_rescue_used,
             "candidate_years": sorted({years[paper] for paper in papers if paper in years}),
             "evidence_years": sorted(evidence_years),
         },
         "budget": {
-            "search_calls": claim_calls + evidence_calls + drilldown_calls + repair_calls,
+            "search_calls": (
+                claim_calls + evidence_calls + rescue_calls + drilldown_calls + repair_calls
+            ),
             "max_search_calls": (
                 MAX_QUERY_ROUTES * 2
+                + MAX_GLOBAL_EVIDENCE_CALLS
                 + MAX_SOURCE_DRILLDOWN_CALLS
                 + MAX_TEMPORAL_REPAIR_CALLS
             ),
