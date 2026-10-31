@@ -35,6 +35,7 @@ TESTS = (
     "tests.test_wiki_claims",
     "tests.test_hybrid_claim_retrieval",
     "tests.test_claim_support_answer",
+    "tests.test_shadow_ask_e2e",
 )
 
 
