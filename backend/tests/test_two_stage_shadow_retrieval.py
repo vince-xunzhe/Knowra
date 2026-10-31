@@ -9,7 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services.hybrid_claim_retrieval import HybridClaimRetriever, build_shadow_index
 from services.paper_evidence_service import build_evidence_manifest
-from services.two_stage_shadow_retrieval import execute_two_stage_shadow_retrieval
+from services.two_stage_shadow_retrieval import (
+    _evidence_anchor_query,
+    _matches_primary_anchors,
+    execute_two_stage_shadow_retrieval,
+)
 from services.wiki_shadow_compiler import build_paper_compile_plan
 
 
@@ -39,6 +43,25 @@ def plan(paper_id: str, change: str, source: dict, year: int):
 
 
 class TwoStageShadowRetrievalTests(unittest.TestCase):
+    def test_translated_topic_anchor_rejects_generic_sampling_and_markov_text(self):
+        queries = [
+            "扩散模型采样方法的演进与主要改进综述",
+            "diffusion model sampling early DDPM reverse diffusion Markov chain",
+        ]
+        anchor = _evidence_anchor_query(queries)
+        self.assertFalse(_matches_primary_anchors(anchor, {
+            "title": "Generic generative modeling",
+            "text": "Sampling requires a reverse Markov chain for inference.",
+        }))
+        self.assertTrue(_matches_primary_anchors(anchor, {
+            "title": "Denoising diffusion probabilistic models",
+            "text": "DDPM uses a reverse Markov chain for diffusion sampling.",
+        }))
+        self.assertFalse(_matches_primary_anchors(anchor, {
+            "title": "Diffusion models for monocular depth estimation",
+            "text": "A single-step deterministic model is fast and accurate.",
+        }))
+
     def test_balances_sources_and_drops_reference_chunks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

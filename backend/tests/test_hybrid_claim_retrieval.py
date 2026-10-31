@@ -21,6 +21,7 @@ from services.hybrid_claim_retrieval import (
     execute_cli_plan,
 )
 from services.paper_evidence_service import build_evidence_manifest
+from services import hybrid_claim_retrieval
 from services import wiki_shadow_compiler
 from services.wiki_shadow_compiler import (
     ShadowCompileError,
@@ -232,6 +233,18 @@ class HybridClaimRetrievalTests(unittest.TestCase):
         self.assertTrue(all(
             item["paper_id"] == "paper-boundary" for item in negative["results"]
         ))
+
+    def test_lexical_only_search_hydrates_only_bounded_fts_candidates(self):
+        with mock.patch(
+            "services.hybrid_claim_retrieval._validate_record",
+            wraps=hybrid_claim_retrieval._validate_record,
+        ) as validate_record:
+            result = self.retriever.search(
+                "Action Conditioned Dynamics", kinds=["claim"], limit=5
+            )
+        self.assertTrue(result["results"])
+        self.assertEqual(validate_record.call_count, result["lexical_candidates"])
+        self.assertLess(validate_record.call_count, self.report["records"])
 
     def test_cjk_natural_question_recalls_terms_without_hard_coding_topics(self):
         chinese_root = self.root / "chinese-shadow"
