@@ -44,6 +44,15 @@ def _parser() -> argparse.ArgumentParser:
     promote.add_argument("--reviewer", required=True)
     promote.add_argument("--reviewed-at", required=True)
     promote.add_argument("--acceptance-sha256", required=True)
+    promote.add_argument(
+        "--accept-failed-pages",
+        type=int,
+        required=True,
+        help=(
+            "Exact parser-failed page count reviewed and accepted for this "
+            "generation; promotion fails if the audited count differs."
+        ),
+    )
     promote.add_argument("--expected-active-sha256")
 
     status = commands.add_parser("status")
@@ -71,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 reviewer=arguments.reviewer,
                 reviewed_at=arguments.reviewed_at,
                 acceptance_sha256=arguments.acceptance_sha256,
+                accepted_failed_pages=arguments.accept_failed_pages,
                 expected_active_sha256=arguments.expected_active_sha256,
             )
         elif arguments.command == "rollback":

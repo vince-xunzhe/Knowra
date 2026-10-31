@@ -19,7 +19,10 @@ from services.ask_generation_control import (
 )
 from services.ask_shadow_integration import observe_question
 from services.hybrid_claim_retrieval import build_shadow_index
-from services.paper_evidence_service import build_evidence_manifest
+from services.paper_evidence_service import (
+    build_evidence_manifest,
+    write_evidence_manifest,
+)
 from services.wiki_shadow_compiler import build_paper_compile_plan
 
 
@@ -39,7 +42,9 @@ class AskGenerationControlTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _generation(self, name: str, *, paper_id: str) -> Path:
+    def _generation(
+        self, name: str, *, paper_id: str, failed_page: bool = False
+    ) -> Path:
         root = self.root / "generations" / name
         root.mkdir(parents=True)
         text = "Actions condition a compact latent transition model. " * 12
@@ -47,8 +52,19 @@ class AskGenerationControlTests(unittest.TestCase):
             paper_id=paper_id,
             source_file_hash=_hash(f"source:{paper_id}".encode()),
             source_size_bytes=800,
-            total_pages=1,
-            pages=[{"page_number": 1, "status": "ok", "text": text}],
+            total_pages=2 if failed_page else 1,
+            pages=(
+                [
+                    {
+                        "page_number": 1,
+                        "status": "error",
+                        "error_type": "SyntheticParserError",
+                    },
+                    {"page_number": 2, "status": "ok", "text": text},
+                ]
+                if failed_page
+                else [{"page_number": 1, "status": "ok", "text": text}]
+            ),
             parser_version="synthetic-promotion@v1",
             chunk_chars=1_200,
             overlap_chars=50,
@@ -76,6 +92,7 @@ class AskGenerationControlTests(unittest.TestCase):
             compile_plans=[plan],
             evidence_manifests=[manifest],
         )
+        write_evidence_manifest(manifest, root / "evidence" / f"{paper_id}.json")
         generation = {
             "schema_version": 1,
             "generation_id": name,
@@ -98,6 +115,8 @@ class AskGenerationControlTests(unittest.TestCase):
         generation: Path,
         promotion_id: str,
         expected: str | None,
+        *,
+        accepted_failed_pages: int = 0,
     ) -> dict:
         return promote_generation(
             generation_root=generation,
@@ -107,6 +126,7 @@ class AskGenerationControlTests(unittest.TestCase):
             reviewer="synthetic-reviewer",
             reviewed_at="2026-10-31T00:00:00Z",
             acceptance_sha256=_hash(f"acceptance:{promotion_id}".encode()),
+            accepted_failed_pages=accepted_failed_pages,
             expected_active_sha256=expected,
         )
 
@@ -139,6 +159,40 @@ class AskGenerationControlTests(unittest.TestCase):
         self.assertEqual(promotion["locator_audit"]["missing_locators"], 0)
         self.assertEqual(promotion["locator_audit"]["missing_source_hashes"], 0)
         self.assertGreater(promotion["locator_audit"]["evidence_records"], 0)
+        self.assertEqual(promotion["locator_audit"]["failed_pages"], 0)
+        self.assertRegex(
+            promotion["locator_audit"]["evidence_manifest_digest"],
+            r"^[0-9a-f]{64}$",
+        )
+
+    def test_promotion_requires_exact_explicit_acceptance_of_failed_pages(self):
+        generation = self._generation(
+            "generation-with-failure",
+            paper_id="paper-with-failure",
+            failed_page=True,
+        )
+
+        with self.assertRaisesRegex(
+            GenerationControlError, "failed pages were not explicitly accepted"
+        ):
+            self._promote(generation, "review-rejected", None)
+        self.assertFalse(self.control.exists())
+
+        active = self._promote(
+            generation,
+            "review-accepted",
+            None,
+            accepted_failed_pages=1,
+        )
+        promotion = json.loads(
+            (self.control / "promotions" / "review-accepted.json").read_text()
+        )
+        self.assertEqual(active["action"], "promote")
+        self.assertEqual(promotion["review"]["accepted_failed_pages"], 1)
+        self.assertEqual(promotion["locator_audit"]["failed_pages"], 1)
+        self.assertRegex(
+            promotion["locator_audit"]["failure_digest"], r"^[0-9a-f]{64}$"
+        )
 
     def test_promotion_rejects_missing_source_hash_even_when_index_is_resigned(self):
         generation = self._generation("legacy-generation", paper_id="paper-legacy")
@@ -316,6 +370,11 @@ class AskGenerationControlTests(unittest.TestCase):
             os.utime(index, ns=(value, value))
             return {
                 "evidence_records": 1,
+                "evidence_manifests": 1,
+                "evidence_manifest_digest": _hash(b"manifest"),
+                "source_pages": 1,
+                "failed_pages": 0,
+                "failure_digest": _hash(b"[]"),
                 "missing_locators": 0,
                 "missing_source_hashes": 0,
             }
@@ -346,6 +405,7 @@ class AskGenerationControlTests(unittest.TestCase):
                 reviewer="synthetic-reviewer",
                 reviewed_at="2026-10-31T00:00:00Z",
                 acceptance_sha256=_hash(b"acceptance"),
+                accepted_failed_pages=0,
                 expected_active_sha256=None,
             )
 
@@ -360,6 +420,7 @@ class AskGenerationControlTests(unittest.TestCase):
                 reviewer="synthetic-reviewer",
                 reviewed_at="2026-10-31T00:00:00Z",
                 acceptance_sha256=_hash(b"acceptance"),
+                accepted_failed_pages=0,
                 expected_active_sha256=None,
             )
 

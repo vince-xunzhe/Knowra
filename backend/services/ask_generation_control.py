@@ -23,6 +23,10 @@ from urllib.parse import quote
 from uuid import uuid4
 
 from services.hybrid_claim_retrieval import INDEX_APPLICATION_ID, INDEX_SCHEMA_VERSION
+from services.paper_evidence_service import (
+    EvidenceValidationError,
+    load_evidence_manifest,
+)
 
 
 CONTROL_SCHEMA_VERSION = 1
@@ -268,7 +272,56 @@ def _index_identity(index: Path) -> dict[str, int]:
     }
 
 
-def _locator_audit(index: Path, manifest: Mapping[str, Any]) -> dict[str, int]:
+def _locator_audit(
+    index: Path,
+    manifest: Mapping[str, Any],
+    generation_root: Path,
+) -> dict[str, Any]:
+    evidence_root = generation_root / "evidence"
+    if evidence_root.is_symlink() or not evidence_root.is_dir():
+        raise GenerationControlError("generation evidence manifests are unavailable")
+    chunks: dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]] = {}
+    failed_pages: list[dict[str, Any]] = []
+    manifest_refs: list[dict[str, str]] = []
+    source_pages = 0
+    paths = sorted(evidence_root.glob("*.json"))
+    if not paths:
+        raise GenerationControlError("generation evidence manifests are unavailable")
+    try:
+        for path in paths:
+            if path.is_symlink():
+                raise GenerationControlError("generation evidence manifest is linked")
+            evidence_manifest = load_evidence_manifest(path)
+            if evidence_manifest["parser"].get("document_error_type") is not None:
+                raise GenerationControlError(
+                    "generation contains a document-level parser failure"
+                )
+            manifest_refs.append({
+                "paper_id": evidence_manifest["paper_id"],
+                "manifest_id": evidence_manifest["manifest_id"],
+            })
+            source_pages += evidence_manifest["coverage"]["attempted_pages"]
+            for page in evidence_manifest["pages"]:
+                if page["status"] == "error":
+                    failed_pages.append({
+                        "paper_id": evidence_manifest["paper_id"],
+                        "page_number": page["page_number"],
+                        "error_type": page.get("error_type"),
+                    })
+            for chunk in evidence_manifest["chunks"]:
+                if chunk["id"] in chunks:
+                    raise GenerationControlError("generation evidence chunk is duplicated")
+                chunks[chunk["id"]] = (evidence_manifest, chunk)
+    except (
+        EvidenceValidationError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    ) as error:
+        raise GenerationControlError("generation evidence manifest is invalid") from error
+
     uri = f"file:{quote(str(index))}?mode=ro&immutable=1"
     try:
         connection = sqlite3.connect(uri, uri=True)
@@ -280,14 +333,17 @@ def _locator_audit(index: Path, manifest: Mapping[str, Any]) -> dict[str, int]:
             ):
                 raise GenerationControlError("generation index schema is incompatible")
             rows = connection.execute(
-                "SELECT support_status,text,source_signatures,locator "
+                "SELECT id,support_status,text,source_signatures,locator "
                 "FROM records WHERE kind='evidence'"
             )
             checked = 0
-            for support_status, text, raw_signatures, raw_locator in rows:
+            indexed_ids: set[str] = set()
+            for record_id, support_status, text, raw_signatures, raw_locator in rows:
                 checked += 1
                 locator = json.loads(raw_locator)
                 signatures = json.loads(raw_signatures)
+                expected = chunks.get(record_id)
+                indexed_ids.add(record_id)
                 page = locator.get("page_number") if isinstance(locator, dict) else None
                 start = locator.get("page_char_start") if isinstance(locator, dict) else None
                 end = locator.get("page_char_end") if isinstance(locator, dict) else None
@@ -314,12 +370,36 @@ def _locator_audit(index: Path, manifest: Mapping[str, Any]) -> dict[str, int]:
                     or manifest_id not in signatures
                     or not isinstance(text_hash, str)
                     or text_hash != _sha256_bytes(text.encode("utf-8"))
+                    or expected is None
                 ):
                     raise GenerationControlError(
                         "generation evidence lacks a complete source locator"
                     )
+                evidence_manifest, chunk = expected
+                expected_locator = {
+                    "page_number": chunk["page_number"],
+                    "page_char_start": chunk["page_char_start"],
+                    "page_char_end": chunk["page_char_end"],
+                    "section_kind": chunk["section_kind"],
+                    "section_heading": chunk["section_heading"],
+                    "text_hash": chunk["text_hash"],
+                    "manifest_id": evidence_manifest["manifest_id"],
+                    "source_file_hash": evidence_manifest["source"]["file_hash_sha256"],
+                }
+                if (
+                    text != chunk["text"]
+                    or locator != expected_locator
+                    or evidence_manifest["manifest_id"] not in signatures
+                ):
+                    raise GenerationControlError(
+                        "generation index locator does not match its evidence manifest"
+                    )
             if checked < 1:
                 raise GenerationControlError("generation contains no source evidence")
+            if indexed_ids != set(chunks):
+                raise GenerationControlError(
+                    "generation index and evidence manifests are incomplete"
+                )
             if (
                 metadata.get("source_digest") != manifest["source_digest"]
                 or metadata.get("dense_index_digest") != manifest["dense_index_digest"]
@@ -329,7 +409,26 @@ def _locator_audit(index: Path, manifest: Mapping[str, Any]) -> dict[str, int]:
             connection.close()
     except (sqlite3.Error, json.JSONDecodeError, TypeError) as error:
         raise GenerationControlError("generation locator audit failed") from error
-    return {"evidence_records": checked, "missing_locators": 0, "missing_source_hashes": 0}
+    failure_digest = _sha256_bytes(_stable_json(sorted(
+        failed_pages,
+        key=lambda item: (
+            item["paper_id"], item["page_number"], str(item["error_type"])
+        ),
+    )).encode("utf-8"))
+    evidence_manifest_digest = _sha256_bytes(_stable_json(sorted(
+        manifest_refs,
+        key=lambda item: (item["paper_id"], item["manifest_id"]),
+    )).encode("utf-8"))
+    return {
+        "evidence_records": checked,
+        "evidence_manifests": len(paths),
+        "evidence_manifest_digest": evidence_manifest_digest,
+        "source_pages": source_pages,
+        "failed_pages": len(failed_pages),
+        "failure_digest": failure_digest,
+        "missing_locators": 0,
+        "missing_source_hashes": 0,
+    }
 
 
 def _reviewed_at(value: str) -> str:
@@ -383,6 +482,7 @@ def promote_generation(
     reviewer: str,
     reviewed_at: str,
     acceptance_sha256: str,
+    accepted_failed_pages: int,
     expected_active_sha256: str | None,
 ) -> dict[str, Any]:
     """Audit one immutable generation and explicitly switch the active pointer."""
@@ -395,10 +495,20 @@ def promote_generation(
         raise GenerationControlError("reviewer is invalid")
     if not isinstance(acceptance_sha256, str) or not _SHA256.fullmatch(acceptance_sha256):
         raise GenerationControlError("acceptance digest is invalid")
+    if (
+        isinstance(accepted_failed_pages, bool)
+        or not isinstance(accepted_failed_pages, int)
+        or accepted_failed_pages < 0
+    ):
+        raise GenerationControlError("accepted failed page count is invalid")
     reviewed_at = _reviewed_at(reviewed_at)
     manifest, index, manifest_hash = _generation_manifest(generation)
     identity_before = _index_identity(index)
-    audit = _locator_audit(index, manifest)
+    audit = _locator_audit(index, manifest, generation)
+    if audit["failed_pages"] != accepted_failed_pages:
+        raise GenerationControlError(
+            "generation failed pages were not explicitly accepted"
+        )
     identity_after = _index_identity(index)
     if (
         identity_after != identity_before
@@ -422,6 +532,7 @@ def promote_generation(
             "reviewer": reviewer.strip(),
             "reviewed_at": reviewed_at,
             "acceptance_sha256": acceptance_sha256,
+            "accepted_failed_pages": accepted_failed_pages,
             "approved": True,
         },
     }
@@ -513,7 +624,10 @@ def _promotion_record(control: Path, promotion_id: str) -> tuple[dict[str, Any],
         or not isinstance(record.get("source_digest"), str)
         or not _SHA256.fullmatch(record["source_digest"])
         or not isinstance(review, dict)
-        or set(review) != {"reviewer", "reviewed_at", "acceptance_sha256", "approved"}
+        or set(review) != {
+            "reviewer", "reviewed_at", "acceptance_sha256",
+            "accepted_failed_pages", "approved",
+        }
         or review.get("approved") is not True
         or not isinstance(review.get("reviewer"), str)
         or not review["reviewer"].strip()
@@ -522,13 +636,33 @@ def _promotion_record(control: Path, promotion_id: str) -> tuple[dict[str, Any],
         or not isinstance(review.get("reviewed_at"), str)
         or not isinstance(audit, dict)
         or set(audit) != {
-            "evidence_records", "missing_locators", "missing_source_hashes"
+            "evidence_records", "evidence_manifests", "evidence_manifest_digest",
+            "source_pages",
+            "failed_pages", "failure_digest", "missing_locators",
+            "missing_source_hashes",
         }
+        or isinstance(review.get("accepted_failed_pages"), bool)
+        or not isinstance(review.get("accepted_failed_pages"), int)
+        or review["accepted_failed_pages"] != audit.get("failed_pages")
         or isinstance(audit.get("evidence_records"), bool)
         or not isinstance(audit.get("evidence_records"), int)
         or audit.get("evidence_records", 0) < 1
+        or any(
+            isinstance(audit.get(key), bool)
+            or not isinstance(audit.get(key), int)
+            or audit[key] < 0
+            for key in (
+                "evidence_manifests", "source_pages", "failed_pages",
+            )
+        )
+        or audit.get("evidence_manifests", 0) < 1
+        or audit.get("source_pages", 0) < 1
+        or not isinstance(audit.get("evidence_manifest_digest"), str)
+        or not _SHA256.fullmatch(audit["evidence_manifest_digest"])
         or audit.get("missing_locators") != 0
         or audit.get("missing_source_hashes") != 0
+        or not isinstance(audit.get("failure_digest"), str)
+        or not _SHA256.fullmatch(audit["failure_digest"])
         or not isinstance(identity, dict)
         or set(identity) != {"device", "inode", "size", "mtime_ns", "ctime_ns"}
         or any(isinstance(value, bool) or not isinstance(value, int) or value < 0

@@ -22,7 +22,10 @@ from services.ask_shadow_integration import (
 )
 from services.ask_generation_control import promote_generation
 from services.hybrid_claim_retrieval import build_shadow_index
-from services.paper_evidence_service import build_evidence_manifest
+from services.paper_evidence_service import (
+    build_evidence_manifest,
+    write_evidence_manifest,
+)
 from services.ask_retrieval_budget import RetrievalBudget
 from services.wiki_shadow_compiler import build_paper_compile_plan
 
@@ -92,6 +95,10 @@ class AskShadowIntegrationTests(unittest.TestCase):
             },
             dense_model_id="synthetic-integration-vectors@v1",
         )
+        write_evidence_manifest(
+            self.manifest,
+            self.shadow / "evidence" / "paper-1.json",
+        )
         self.generation = {
             "schema_version": 1,
             "generation_id": "fixture-generation-v1",
@@ -117,6 +124,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
             reviewer="synthetic-test",
             reviewed_at="2026-10-31T00:00:00Z",
             acceptance_sha256=_hash(b"synthetic-acceptance"),
+            accepted_failed_pages=0,
             expected_active_sha256=None,
         )
         self.env = {
