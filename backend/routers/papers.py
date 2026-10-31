@@ -27,6 +27,7 @@ from models import Paper, KnowledgeNode
 from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
 from model_gateway import get_model_entry, get_provider_entry, task_context
 from path_utils import (
+    DATA_DIR,
     portable_data_path,
     resolve_artifact_path,
     resolve_paper_path,
@@ -49,6 +50,7 @@ from services.pipeline_manifest import (
     SEARCH_INDEX_VERSION,
     WIKI_COMPILER_VERSION,
     extraction_is_reusable,
+    extraction_coverage_status,
     invalidate_from,
     manifest_status,
     record_checkpoint,
@@ -442,6 +444,7 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "learning_status": normalize_learning_status(p.learning_status),
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
+        "extraction_coverage": extraction_coverage_status(str(p.id)),
         "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": has_first_page_image,
@@ -899,6 +902,8 @@ def _process_single(paper_id: str):
                         first_page_image_path=(str(resolve_artifact_path(p.first_page_image_path))
                             if cfg.get("use_first_page_image") and p.first_page_image_path else None),
                         file_hash=p.file_hash,
+                        paper_id=str(p.id),
+                        checkpoint_root=DATA_DIR / "extraction_checkpoints",
                     )
                     db.rollback()
                     with task_context("paper_extract"):
@@ -906,6 +911,7 @@ def _process_single(paper_id: str):
                 else:
                     current_result = extraction_result
                 extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = current_result
+                extraction_coverage = getattr(current_result, "coverage", None)
 
                 if not raw or not raw.strip():
                     raise PaperExtractionError(
@@ -975,6 +981,12 @@ def _process_single(paper_id: str):
                     extraction,
                     raw,
                 )
+                if isinstance(extraction_coverage, dict):
+                    record_layer(
+                        str(p.id),
+                        "extraction_coverage",
+                        extraction_coverage,
+                    )
 
                 if prepared_embeddings is None:
                     prepared_embeddings = prepare_graph_embeddings(
