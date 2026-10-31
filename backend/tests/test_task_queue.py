@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 import unittest
+import json
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -203,6 +204,54 @@ main()
         self.assertLess(time.monotonic() - start, 1)
         result = self.wait_status(job, 'completed')
         self.assertNotEqual(result['result']['pid'], os.getpid())
+
+    def test_external_worker_requeues_old_failed_ask_refresh_marker(self):
+        data_root = Path(self.tmp.name) / 'workspace' / 'data'
+        data_root.mkdir(parents=True)
+        state_root = data_root.parent / '.knowra' / 'ask-generation-refresh'
+        state_root.mkdir(parents=True)
+        marker = state_root / 'refresh-request.json'
+        marker.write_text(json.dumps({
+            'schema_version': 1,
+            'request_id': 'a' * 32,
+            'requested_at': '2026-01-01T00:00:00Z',
+            'reason': 'test',
+        }))
+        failed = self.queue.submit(
+            'ask_generation_refresh', 'ask_generation_refresh',
+            {'request_id': '0' * 32},
+        )
+        self.queue.update(failed['job_id'], status='failed', error='synthetic')
+        with self.queue.connect() as database:
+            database.execute(
+                'UPDATE jobs SET updated=? WHERE id=?',
+                (time.time() - 120, failed['job_id']),
+            )
+
+        code = f'''
+from pathlib import Path
+import path_utils
+path_utils.DATA_DIR=Path({str(data_root)!r})
+from services.task_executor import HANDLERS
+def refresh(ctx,payload):
+    Path({str(marker)!r}).unlink()
+    return {{'reconciled':True}}
+HANDLERS['ask_generation_refresh']=refresh
+from scripts.task_worker import main
+main()
+'''
+        self.start_worker(code)
+        end = time.monotonic() + 10
+        latest = None
+        while time.monotonic() < end:
+            latest = self.queue.latest('ask_generation_refresh')
+            if latest and latest['job_id'] != failed['job_id'] and latest['status'] == 'completed':
+                break
+            time.sleep(.05)
+        else:
+            self.fail(f'External worker did not reconcile refresh marker: {latest}')
+        self.assertEqual(latest['result'], {'reconciled': True})
+        self.assertFalse(marker.exists())
 
     def test_managed_upgrade_drains_current_job_before_replacement(self):
         first_job = self.queue.submit('test', 'papers', {})

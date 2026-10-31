@@ -18,12 +18,57 @@ from typing import Any
 from urllib.parse import quote
 
 from services.hybrid_claim_retrieval import build_shadow_index
-from services.paper_evidence_service import build_pdf_evidence, write_evidence_manifest
+from services.paper_evidence_service import (
+    build_pdf_evidence,
+    load_evidence_manifest,
+    write_evidence_manifest,
+)
 from services.wiki_shadow_compiler import build_paper_compile_plan, validate_compile_plan
 
 
 class ShadowGenerationError(ValueError):
     """The requested generation would cross an isolation boundary."""
+
+
+def _paper_source(*, papers_root: Path, filepath: Any, filename: Any) -> Path:
+    raw = str(filepath or "").replace("\\", "/")
+    parts = [part for part in raw.split("/") if part not in {"", "."}]
+    relative: Path | None = None
+    for index in range(len(parts) - 1):
+        if parts[index:index + 2] == ["data", "papers"]:
+            relative = Path(*parts[index + 2:])
+            break
+    if relative is None and raw:
+        candidate = Path(raw)
+        if candidate.is_absolute():
+            try:
+                relative = candidate.resolve().relative_to(papers_root.resolve())
+            except (OSError, ValueError):
+                relative = None
+        elif parts and parts[0] == "papers":
+            relative = Path(*parts[1:])
+        elif parts and parts[0] != "data":
+            relative = Path(*parts)
+    if relative is None or not relative.parts:
+        fallback = Path(str(filename or ""))
+        if len(fallback.parts) != 1:
+            raise ShadowGenerationError("paper source path is invalid")
+        relative = fallback
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ShadowGenerationError("paper source escaped the restored papers directory")
+    candidate = papers_root / relative
+    if any(
+        (papers_root / Path(*relative.parts[:index])).is_symlink()
+        for index in range(1, len(relative.parts) + 1)
+    ):
+        raise ShadowGenerationError("paper source path contains a symlink")
+    try:
+        pdf = candidate.resolve(strict=True)
+    except OSError as error:
+        raise ShadowGenerationError("paper source is unavailable") from error
+    if not pdf.is_relative_to(papers_root) or not pdf.is_file():
+        raise ShadowGenerationError("paper source escaped the restored papers directory")
+    return pdf
 
 
 def _stable_json(value: Any) -> str:
@@ -38,6 +83,14 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
@@ -48,6 +101,7 @@ def _atomic_json(path: Path, value: Any) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(name, path)
+        _fsync_directory(path.parent)
     finally:
         try:
             os.unlink(name)
@@ -84,6 +138,10 @@ def build_restored_shadow_generation(
     production_wiki_root: str | Path,
     compiler_model_label: str = "existing-structured-extraction",
     locale: str = "zh",
+    library_revision: dict[str, Any] | None = None,
+    reuse_generation_root: str | Path | None = None,
+    reuse_evidence_ids: set[str] | None = None,
+    reuse_plan_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build evidence, claim plans and a lexical shadow index from a restore."""
     data, output, production = _isolated_roots(
@@ -94,6 +152,13 @@ def build_restored_shadow_generation(
     if not database.is_file() or database.is_symlink() or not papers_root.is_dir():
         raise ShadowGenerationError("restored database or papers directory is unavailable")
     output.mkdir(mode=0o700)
+    reuse_root = Path(reuse_generation_root).resolve(strict=True) if reuse_generation_root else None
+    evidence_reuse = set(reuse_evidence_ids or ())
+    plan_reuse = set(reuse_plan_ids or ())
+    if not plan_reuse.issubset(evidence_reuse):
+        raise ShadowGenerationError("compile plan reuse requires evidence reuse")
+    if (evidence_reuse or plan_reuse) and reuse_root is None:
+        raise ShadowGenerationError("reuse ids require a previous generation")
 
     manifests: list[dict[str, Any]] = []
     plans: list[dict[str, Any]] = []
@@ -102,16 +167,13 @@ def build_restored_shadow_generation(
     connection = _read_connection(database)
     try:
         rows = connection.execute(
-            "SELECT id, filename, file_hash, title, raw_llm_response, notes "
+            "SELECT id, filepath, filename, file_hash, title, raw_llm_response, notes "
             "FROM papers WHERE processed = 1 AND raw_llm_response IS NOT NULL ORDER BY id"
         )
         for row in rows:
             rows_seen += 1
             try:
-                filename = Path(str(row["filename"] or "")).name
-                pdf = (papers_root / filename).resolve(strict=True)
-                if not pdf.is_relative_to(papers_root) or pdf.is_symlink() or not pdf.is_file():
-                    raise ShadowGenerationError("paper source escaped the restored papers directory")
+                paper_id = str(row["id"])
                 extraction = json.loads(str(row["raw_llm_response"] or ""))
                 if not isinstance(extraction, dict):
                     raise ShadowGenerationError("structured extraction is not an object")
@@ -120,24 +182,37 @@ def build_restored_shadow_generation(
                     raise ShadowGenerationError("paper title is unavailable")
                 recorded_hash = str(row["file_hash"] or "").strip().lower()
                 expected_hash = recorded_hash if len(recorded_hash) == 64 else None
-                manifest = build_pdf_evidence(
-                    pdf, paper_id=str(row["id"]), source_file_hash=expected_hash
-                )
-                plan = build_paper_compile_plan(
-                    paper_id=str(row["id"]),
-                    title=title,
-                    extraction=extraction,
-                    notes=str(row["notes"] or ""),
-                    model=compiler_model_label,
-                    locale=locale,
-                    source_file_hash=manifest["source"]["file_hash_sha256"],
-                    evidence_manifest=manifest,
-                )
+                if paper_id in evidence_reuse:
+                    manifest = load_evidence_manifest(reuse_root / "evidence" / f"{paper_id}.json")
+                else:
+                    pdf = _paper_source(
+                        papers_root=papers_root,
+                        filepath=row["filepath"],
+                        filename=row["filename"],
+                    )
+                    manifest = build_pdf_evidence(
+                        pdf, paper_id=paper_id, source_file_hash=expected_hash
+                    )
+                if paper_id in plan_reuse:
+                    plan = json.loads(
+                        (reuse_root / "plans" / f"{paper_id}.json").read_text(encoding="utf-8")
+                    )
+                else:
+                    plan = build_paper_compile_plan(
+                        paper_id=paper_id,
+                        title=title,
+                        extraction=extraction,
+                        notes=str(row["notes"] or ""),
+                        model=compiler_model_label,
+                        locale=locale,
+                        source_file_hash=manifest["source"]["file_hash_sha256"],
+                        evidence_manifest=manifest,
+                    )
                 validate_compile_plan(plan)
                 manifests.append(manifest)
                 plans.append(plan)
-                write_evidence_manifest(manifest, output / "evidence" / f"{row['id']}.json")
-                _atomic_json(output / "plans" / f"{row['id']}.json", plan)
+                write_evidence_manifest(manifest, output / "evidence" / f"{paper_id}.json")
+                _atomic_json(output / "plans" / f"{paper_id}.json", plan)
             except Exception as error:  # per-paper failure is measured, never printed with content/path
                 name = type(error).__name__
                 failures[name] = failures.get(name, 0) + 1
@@ -179,7 +254,7 @@ def build_restored_shadow_generation(
         "dense_model_id": None,
     }
     _atomic_json(output / "summary.json", summary)
-    _atomic_json(output / "generation.json", {
+    generation_manifest = {
         "schema_version": 1,
         "generation_id": output.name,
         "status": "ready",
@@ -190,7 +265,22 @@ def build_restored_shadow_generation(
         "index_sha256": _sha256_file(index_path),
         "index_bytes": index_path.stat().st_size,
         "production_eligible": False,
-    })
+    }
+    if library_revision is not None:
+        inventory_path = output / "library-inventory.json"
+        _atomic_json(inventory_path, {
+            "schema_version": library_revision["schema_version"],
+            "revision": library_revision["revision"],
+            "entries": library_revision["entries"],
+        })
+        generation_manifest.update({
+            "library_revision": library_revision["revision"],
+            "library_paper_count": library_revision["paper_count"],
+            "paper_ids_digest": library_revision["paper_ids_digest"],
+            "library_inventory_relpath": "library-inventory.json",
+            "library_inventory_sha256": _sha256_file(inventory_path),
+        })
+    _atomic_json(output / "generation.json", generation_manifest)
     return summary
 
 

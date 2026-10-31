@@ -15,6 +15,25 @@ from services.task_runtime import store
 from services.worker_revision import runtime_revision
 
 
+def reconcile_ask_generation_refresh(*, live_data_root=None):
+    """Requeue a durable refresh marker even without an API supervisor."""
+    from path_utils import DATA_DIR
+    from services.ask_generation_refresh import (
+        REFRESH_REQUEST_FILENAME,
+        default_refresh_paths,
+        ensure_pending_refresh,
+    )
+
+    root = DATA_DIR if live_data_root is None else Path(live_data_root)
+    marker = default_refresh_paths(root)["state_root"] / REFRESH_REQUEST_FILENAME
+    if marker.is_file():
+        return ensure_pending_refresh(
+            live_data_root=root,
+            retry_after_seconds=60.0,
+        )
+    return {"requested": False, "reason": "marker_absent"}
+
+
 def main():
     queue = store()
     revision = runtime_revision()
@@ -43,6 +62,7 @@ def main():
         heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
         heartbeat_thread.start()
         from services.task_executor import execute
+        next_refresh_reconcile = 0.0
         while True:
             if managed and queue.target_revision() not in (None, revision):
                 break
@@ -50,6 +70,14 @@ def main():
             if job:
                 execute(queue, job)
             else:
+                now = time.monotonic()
+                if now >= next_refresh_reconcile:
+                    next_refresh_reconcile = now + 5.0
+                    try:
+                        reconcile_ask_generation_refresh()
+                    except Exception:
+                        import traceback
+                        traceback.print_exc()
                 time.sleep(0.5)
     finally:
         stopped.set()

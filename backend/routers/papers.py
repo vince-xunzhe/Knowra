@@ -1515,6 +1515,12 @@ def update_paper_response(
             },
         )
     sync_record_from_paper(p, event="manual_response_edit")
+    try:
+        from path_utils import DATA_DIR
+        from services.ask_generation_refresh import mark_and_enqueue_refresh
+        mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="paper_response_updated")
+    except Exception as refresh_error:
+        logger.warning("ask generation refresh enqueue failed: %s", type(refresh_error).__name__)
     db.refresh(p)
     return _serialize_paper_detail(p, db)
 
@@ -1541,6 +1547,12 @@ def update_paper_notes(
     except Exception:
         pass
     sync_record_from_paper(p, event="notes_update")
+    try:
+        from path_utils import DATA_DIR
+        from services.ask_generation_refresh import mark_and_enqueue_refresh
+        mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="paper_notes_updated")
+    except Exception as refresh_error:
+        logger.warning("ask generation refresh enqueue failed: %s", type(refresh_error).__name__)
     db.refresh(p)
     return _serialize_paper_detail(p, db)
 

@@ -23,6 +23,7 @@ import {
   createSynthesisConcept,
   getWikiIndexStatus,
   getWikiSearchIndexStatus,
+  getAskEvidenceStatus,
   rebuildWikiIndex,
   rebuildWikiSearchIndex,
   renderWikiOutput,
@@ -32,6 +33,7 @@ import {
   type SynthesisConceptResult,
   type WikiIndexStatus,
   type WikiSearchIndexStatus,
+  type AskEvidenceStatus,
   type WikiOutputFormat,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from './TaskNotice'
@@ -339,6 +341,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
   const [notice, setNotice] = useState<{ tone: 'emerald' | 'amber'; text: string } | null>(null)
   const [overviewStatus, setOverviewStatus] = useState<WikiIndexStatus | null>(null)
   const [searchIndexStatus, setSearchIndexStatus] = useState<WikiSearchIndexStatus | null>(null)
+  const [evidenceStatus, setEvidenceStatus] = useState<AskEvidenceStatus | null>(null)
   const [indexStatusesLoading, setIndexStatusesLoading] = useState(open)
   const [rebuildingOverview, setRebuildingOverview] = useState(false)
   const [rebuildingSearch, setRebuildingSearch] = useState(false)
@@ -378,11 +381,12 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
     if (!open) return
     let cancelled = false
     const requestId = ++indexRequestId.current
-    Promise.allSettled([getWikiIndexStatus(), getWikiSearchIndexStatus()])
-      .then(([overview, search]) => {
+    Promise.allSettled([getWikiIndexStatus(), getWikiSearchIndexStatus(), getAskEvidenceStatus()])
+      .then(([overview, search, evidence]) => {
         if (cancelled || requestId !== indexRequestId.current) return
         setOverviewStatus(overview.status === 'fulfilled' ? overview.value : null)
         setSearchIndexStatus(search.status === 'fulfilled' ? search.value : null)
+        setEvidenceStatus(evidence.status === 'fulfilled' ? evidence.value : null)
         setIndexStatusesLoading(false)
       })
     const focusFrame = requestAnimationFrame(() => inputRef.current?.focus())
@@ -688,7 +692,7 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
           data-testid="wiki-index-statuses"
           className="px-5 py-2 border-b border-slate-800/70 space-y-1.5 text-[10.5px] text-slate-500"
         >
-          {indexStatusesLoading && overviewStatus === null && searchIndexStatus === null ? (
+          {indexStatusesLoading && overviewStatus === null && searchIndexStatus === null && evidenceStatus === null ? (
             <span className="text-slate-600">{tr("索引状态加载中…")}</span>
           ) : (
             <>
@@ -781,6 +785,35 @@ export default function AskDrawer({ open, onClose, onSynthesisCreated }: Props) 
                   {formatBytes(searchIndexStatus.source.bytes)} · {formatTokens(searchIndexStatus.source.estimated_tokens)} tokens ·{' '}
                   {formatLatency(searchIndexStatus.source.measurement_ms)}</div>
               )}
+
+              <div data-testid="ask-evidence-status" className="flex min-w-0 items-center gap-2">
+                <span className="w-[4.5rem] shrink-0 font-medium text-slate-300">{tr("原文证据")}</span>
+                {evidenceStatus === null ? (
+                  <span className="text-rose-300">{tr("状态读取失败")}</span>
+                ) : evidenceStatus.status === 'stale' ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                    <span className="truncate text-amber-200">{tr("资料已变化，原文证据待更新")}</span>
+                  </>
+                ) : evidenceStatus.ready ? (
+                  <>
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                    <span className="truncate">
+                      {tr("已启用 ·")}{' '}{evidenceStatus.generation_id}
+                      {evidenceStatus.freshness === 'unknown' ? ` · ${tr("待首次同步校验")}` : ''}</span>
+                  </>
+                ) : evidenceStatus.status === 'not_initialized' ? (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-amber-400" />
+                    <span className="truncate text-amber-200">{tr("尚无已审核的原文证据 generation")}</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={11} className="shrink-0 text-rose-400" />
+                    <span className="truncate text-rose-300">{tr("原文证据不可用 ·")}{' '}{evidenceStatus.reason}</span>
+                  </>
+                )}
+              </div>
             </>
           )}
         </div>

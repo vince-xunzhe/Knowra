@@ -1,10 +1,11 @@
-"""Default-off production bridge for a validated Ask shadow generation.
+"""Production bridge for a reviewed Ask evidence generation.
 
 The bridge never builds or writes a generation and accepts only an immutable
-root outside the live data tree. ``observe`` remains telemetry-only.  The
-explicit ``assist`` mode may return a small set of located source-text excerpts
-to the Ask orchestrator; retrieval still does not assert entailment and the
-trace serializer never exposes source text.
+root outside the live data tree.  A normal installation automatically uses a
+reviewed generation promoted into the checkout-local control directory; no
+environment switch is required.  Explicit ``off`` and ``observe`` modes remain
+available for rollback and diagnostics.  Retrieval still does not assert
+entailment and the trace serializer never exposes source text.
 """
 
 from __future__ import annotations
@@ -24,6 +25,12 @@ from typing import Any, Callable
 from services.ask_generation_control import (
     GenerationControlError,
     resolve_active_generation,
+)
+from services.ask_generation_refresh import (
+    AskGenerationRefreshError,
+    generation_revision,
+    library_revision,
+    refresh_status,
 )
 from services.hybrid_claim_retrieval import (
     HybridClaimRetriever,
@@ -49,6 +56,10 @@ MAX_ANSWER_EVIDENCE_CHARACTERS = 1_600
 _SECONDARY_ANSWER_SECTIONS = frozenset({"background", "related_work", "references"})
 _GENERATION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_LIBRARY_MANIFEST_FIELDS = {
+    "library_revision", "library_paper_count", "paper_ids_digest",
+    "library_inventory_relpath", "library_inventory_sha256",
+}
 _MULTI_SOURCE_MARKERS = (
     "比较", "对比", "演进", "变化", "经历", "跨论文", "多篇",
     "compare", "comparison", "evolution", "changes", "across papers",
@@ -67,7 +78,19 @@ def _stable_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def _disabled() -> dict[str, Any]:
+def default_generation_control_root(
+    *, live_data_root: Path = LIVE_DATA_ROOT,
+) -> Path:
+    """Return the stable per-library control path used by normal startup.
+
+    Keeping control beside, rather than inside, ``data`` preserves the hard
+    non-overlap boundary while making a reviewed activation survive ordinary
+    pulls and restarts of the same local-first workspace.
+    """
+    return live_data_root.parent / ".knowra" / "ask-generation-control"
+
+
+def _disabled(reason: str = "shadow_mode_off") -> dict[str, Any]:
     return {
         "schema_version": GENERATION_SCHEMA_VERSION,
         "status": "disabled",
@@ -78,7 +101,7 @@ def _disabled() -> dict[str, Any]:
         "candidate_locators": [],
         "coverage": None,
         "budget": None,
-        "reason": "shadow_mode_off",
+        "reason": reason,
     }
 
 
@@ -139,7 +162,10 @@ def _load_manifest(root: Path) -> tuple[dict[str, Any], Path]:
         "source_digest", "dense_index_digest", "dense_model_id",
         "index_sha256", "index_bytes", "production_eligible",
     }
-    if not isinstance(manifest, dict) or set(manifest) != required:
+    fields = frozenset(manifest) if isinstance(manifest, dict) else frozenset()
+    if not isinstance(manifest, dict) or fields not in {
+        frozenset(required), frozenset(required | _LIBRARY_MANIFEST_FIELDS)
+    }:
         raise AskShadowIntegrationError("generation manifest shape is invalid")
     if manifest.get("schema_version") != GENERATION_SCHEMA_VERSION:
         raise AskShadowIntegrationError("generation manifest schema is unsupported")
@@ -238,11 +264,13 @@ def answer_mode_enabled(
     live_data_root: Path = LIVE_DATA_ROOT,
 ) -> bool:
     values = os.environ if env is None else env
-    if str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold() != "assist":
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if mode != "assist":
         return False
-    control_root = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
-    if not control_root:
-        return False
+    control_root = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip() or str(
+        default_generation_control_root(live_data_root=live_data_root)
+    )
     try:
         resolve_active_generation(
             control_root=control_root,
@@ -251,6 +279,91 @@ def answer_mode_enabled(
     except GenerationControlError:
         return False
     return True
+
+
+def runtime_status(
+    env: Mapping[str, str] | None = None,
+    *,
+    live_data_root: Path = LIVE_DATA_ROOT,
+) -> dict[str, Any]:
+    """Return a privacy-safe status for the Ask UI and release diagnostics."""
+    values = os.environ if env is None else env
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if mode == "off":
+        return {
+            "status": "disabled",
+            "mode": "off",
+            "ready": False,
+            "generation_id": None,
+            "reason": "explicitly_disabled",
+        }
+    if mode == "observe":
+        return {
+            "status": "diagnostic",
+            "mode": "observe",
+            "ready": False,
+            "generation_id": None,
+            "reason": "observe_only",
+        }
+    if mode != "assist":
+        return {
+            "status": "unavailable",
+            "mode": mode,
+            "ready": False,
+            "generation_id": None,
+            "reason": "shadow_mode_invalid",
+        }
+    explicit_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
+    control_root = Path(explicit_control) if explicit_control else default_generation_control_root(
+        live_data_root=live_data_root
+    )
+    if not control_root.exists():
+        return {
+            "status": "not_initialized",
+            "mode": "assist",
+            "ready": False,
+            "generation_id": None,
+            "reason": "reviewed_generation_missing",
+        }
+    try:
+        activation = resolve_active_generation(
+            control_root=control_root,
+            live_data_root=live_data_root,
+        )
+    except GenerationControlError:
+        return {
+            "status": "unavailable",
+            "mode": "assist",
+            "ready": False,
+            "generation_id": None,
+            "reason": "reviewed_generation_invalid",
+        }
+    freshness = refresh_status(
+        live_data_root=live_data_root, control_root=control_root
+    )
+    freshness_value = freshness["freshness"]
+    is_ready = freshness_value == "fresh"
+    result = {
+        "status": "ready" if is_ready else (
+            "stale" if freshness_value in {"stale", "unknown"} else "unavailable"
+        ),
+        "mode": "assist",
+        "ready": is_ready,
+        "generation_id": activation["generation_id"],
+        "reason": (
+            "reviewed_generation_active" if is_ready
+            else "generation_revision_missing" if freshness_value == "unknown"
+            else "library_revision_changed" if freshness_value == "stale"
+            else freshness.get("reason", "library_revision_unavailable")
+        ),
+    }
+    if freshness_value != "unavailable":
+        result.update(
+            freshness=freshness["freshness"],
+            paper_count=freshness.get("paper_count"),
+        )
+    return result
 
 
 def _answer_excerpt(
@@ -438,6 +551,53 @@ def _two_stage_response(response: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def observation_is_current(
+    observation: Mapping[str, Any], *, live_data_root: Path = LIVE_DATA_ROOT,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    """Revalidate selected evidence immediately before an answer is accepted."""
+    if observation.get("status") != "ready" or observation.get("mode") != "assist":
+        return False
+    values = os.environ if env is None else env
+    deadline = perf_counter() + MAX_OBSERVATION_MS / 1_000
+    raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
+    control_root = raw_control or default_generation_control_root(
+        live_data_root=live_data_root
+    )
+    try:
+        active = resolve_active_generation(
+            control_root=control_root,
+            live_data_root=live_data_root,
+        )
+        if active["generation_id"] != observation.get("generation_id"):
+            return False
+        recorded = generation_revision(Path(active["generation_root"]))
+        current = library_revision(
+            live_data_root / "knowledge.db",
+            trusted_revision=recorded,
+            deadline=deadline,
+        )
+    except (
+        AskGenerationRefreshError,
+        GenerationControlError,
+        OSError,
+        sqlite3.Error,
+        TypeError,
+        ValueError,
+    ):
+        return False
+    if recorded is None:
+        return False
+    current_entries = {
+        entry["paper_id"]: entry for entry in current.get("entries", [])
+    }
+    return all(
+        current_entries.get(entry["paper_id"], {}).get("input_digest")
+        == entry["input_digest"]
+        for entry in recorded.get("entries", [])
+    )
+
+
 def observe_question(
     question: str,
     *,
@@ -455,8 +615,15 @@ def observe_question(
     Errors become a compact unavailable observation so an explicitly enabled
     shadow observer cannot break the existing production answer path.
     """
+    started = perf_counter()
+    deadline = started + MAX_OBSERVATION_MS / 1_000
     values = os.environ if env is None else env
-    mode = str(values.get("KNOWRA_ASK_SHADOW_MODE", "off")).strip().casefold()
+    raw_mode = values.get("KNOWRA_ASK_SHADOW_MODE")
+    mode = "assist" if raw_mode is None else str(raw_mode).strip().casefold()
+    if raw_mode is None and not default_generation_control_root(
+        live_data_root=live_data_root
+    ).exists():
+        return _disabled("reviewed_generation_missing")
     if mode == "off":
         return _disabled()
     if mode not in {"observe", "assist"}:
@@ -465,8 +632,10 @@ def observe_question(
         return _unavailable("shadow_adapter_invalid", mode=mode)
     production_eligible = False
     if mode == "assist":
-        raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip()
-        if not raw_control:
+        raw_control = str(values.get("KNOWRA_ASK_GENERATION_CONTROL", "")).strip() or str(
+            default_generation_control_root(live_data_root=live_data_root)
+        )
+        if not Path(raw_control).exists():
             return _unavailable("generation_control_missing", mode=mode)
         try:
             activation = resolve_active_generation(
@@ -476,13 +645,42 @@ def observe_question(
         except GenerationControlError:
             return _unavailable("generation_control_invalid", mode=mode)
         raw_root = str(activation["generation_root"])
+        if not (live_data_root / "knowledge.db").is_file():
+            return _unavailable("library_revision_unavailable", mode=mode)
+        try:
+            recorded_revision = generation_revision(Path(raw_root))
+        except (AskGenerationRefreshError, OSError, ValueError):
+            return _unavailable("generation_revision_invalid", mode=mode)
+        if recorded_revision is None:
+            return _unavailable("generation_revision_missing", mode=mode)
+        try:
+            current_revision = library_revision(
+                live_data_root / "knowledge.db",
+                trusted_revision=recorded_revision,
+                deadline=deadline,
+            )
+        except (AskGenerationRefreshError, sqlite3.Error, OSError, ValueError):
+            return _unavailable("library_revision_unavailable", mode=mode)
+        if recorded_revision["revision"] != current_revision["revision"]:
+            current_entries = {
+                entry["paper_id"]: entry
+                for entry in current_revision.get("entries", [])
+            }
+            invalid_existing = [
+                entry["paper_id"]
+                for entry in recorded_revision.get("entries", [])
+                if current_entries.get(entry["paper_id"], {}).get("input_digest")
+                != entry["input_digest"]
+            ]
+            if invalid_existing:
+                return _unavailable("generation_stale", mode=mode)
+        if perf_counter() >= deadline:
+            return _unavailable("library_revision_timeout", mode=mode)
         production_eligible = True
     else:
         raw_root = str(values.get("KNOWRA_ASK_SHADOW_ROOT", "")).strip()
         if not raw_root:
             return _unavailable("shadow_root_missing", mode=mode)
-    started = perf_counter()
-    deadline = started + MAX_OBSERVATION_MS / 1_000
     stage = "generation_root"
     try:
         root = _safe_generation_root(raw_root, live_data_root=live_data_root)
@@ -564,6 +762,30 @@ def observe_question(
         identity_after = _index_identity(index_path, deadline=deadline)
         if identity_after != identity_before:
             raise AskShadowIntegrationError("generation index changed during observation")
+        if mode == "assist":
+            stage = "library_revision_after"
+            try:
+                final_revision = library_revision(
+                    live_data_root / "knowledge.db",
+                    trusted_revision=recorded_revision,
+                    deadline=deadline,
+                )
+            except (AskGenerationRefreshError, sqlite3.Error, OSError, ValueError):
+                return _unavailable("library_revision_unavailable", mode=mode)
+            if recorded_revision["revision"] != final_revision["revision"]:
+                final_entries = {
+                    entry["paper_id"]: entry
+                    for entry in final_revision.get("entries", [])
+                }
+                invalid_existing = any(
+                    final_entries.get(entry["paper_id"], {}).get("input_digest")
+                    != entry["input_digest"]
+                    for entry in recorded_revision.get("entries", [])
+                )
+                if invalid_existing:
+                    return _unavailable("generation_stale", mode=mode)
+            if perf_counter() >= deadline:
+                return _unavailable("library_revision_timeout", mode=mode)
         stage = "observation_compaction"
         return _compact_observation(
             manifest,

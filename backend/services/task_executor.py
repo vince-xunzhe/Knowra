@@ -104,6 +104,13 @@ def process_papers(ctx, payload):
     state.update(running=False, current='', finished_at=now(),
                  last_message=f"处理完成：{state['succeeded']} 篇成功，{state['errors']} 篇失败")
     ctx.flush()
+    if state['succeeded']:
+        try:
+            from path_utils import DATA_DIR
+            from services.ask_generation_refresh import mark_and_enqueue_refresh
+            mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="papers_processed")
+        except Exception as refresh_error:
+            state["generation_refresh_warning"] = type(refresh_error).__name__
     if state['errors']:
         raise RuntimeError(state['last_message'])
     return dict(state)
@@ -225,6 +232,44 @@ def lint(ctx, payload):
     return result
 
 
+def refresh_ask_generation(ctx, payload):
+    """Coalesce library mutations into one stable, atomically promoted snapshot."""
+    from path_utils import DATA_DIR
+    from services.ask_generation_refresh import (
+        AskGenerationRefreshError,
+        default_refresh_paths,
+        refresh_generation,
+        refresh_status,
+    )
+
+    paths = default_refresh_paths(DATA_DIR)
+    ctx.phase('构建原文证据快照')
+    last_error = None
+    for attempt in range(1, 4):
+        ctx.progress = {"label": "构建原文证据快照", "attempt": attempt}
+        ctx.flush()
+        try:
+            result = refresh_generation(
+                data_root=DATA_DIR,
+                production_wiki_root=paths["production_wiki_root"],
+                generation_parent=paths["generation_parent"],
+                control_root=paths["control_root"],
+                state_root=paths["state_root"],
+            )
+            status = refresh_status(
+                live_data_root=DATA_DIR,
+                control_root=paths["control_root"],
+                deadline_seconds=None,
+            )
+            if status["freshness"] == "fresh":
+                return {**result, "freshness": "fresh", "attempt": attempt}
+            last_error = AskGenerationRefreshError("library changed after promotion")
+        except AskGenerationRefreshError as error:
+            last_error = error
+        ctx.phase('检测到资料变化，合并最新版本后重试')
+    raise last_error or AskGenerationRefreshError("generation refresh did not stabilize")
+
+
 def pipeline(ctx, payload):
     from database import SessionLocal
     from routers import papers, promotion
@@ -281,7 +326,7 @@ def roadmap_import(ctx, payload):
     return import_board(ctx, payload)
 
 
-HANDLERS = {'roadmap': roadmap, 'roadmap_import': roadmap_import, 'domain': domain, 'scan': scan, 'papers': process_papers, 'compile': compile_items, 'promotion': promote, 'lint': lint, 'pipeline': pipeline}
+HANDLERS = {'roadmap': roadmap, 'roadmap_import': roadmap_import, 'domain': domain, 'scan': scan, 'papers': process_papers, 'compile': compile_items, 'promotion': promote, 'lint': lint, 'pipeline': pipeline, 'ask_generation_refresh': refresh_ask_generation}
 
 
 def execute(queue, job):
@@ -307,3 +352,22 @@ def execute(queue, job):
         stopped.set()
         monitor.join()
         ctx.flush()
+        try:
+            from path_utils import DATA_DIR
+            from services.ask_generation_refresh import (
+                REFRESH_REQUEST_FILENAME,
+                default_refresh_paths,
+                ensure_pending_refresh,
+            )
+            marker = (
+                default_refresh_paths(DATA_DIR)["state_root"]
+                / REFRESH_REQUEST_FILENAME
+            )
+            if marker.is_file():
+                ensure_pending_refresh(
+                    live_data_root=DATA_DIR,
+                    retry_after_seconds=60.0,
+                )
+        except Exception:
+            import traceback
+            traceback.print_exc()
