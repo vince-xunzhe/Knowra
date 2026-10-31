@@ -83,6 +83,12 @@ UV_CACHE_DIR="$PWD/.cache/uv" uv --no-config pip compile backend/requirements-de
 
 ## Ask shadow 接线（默认关闭）
 
+shadow evidence 的 PDF 抽取以 pypdf 为主解析器，并只在文档打开或单页抽取失败时，从同一
+份已哈希的内存快照懒加载 PDFium。正常页不得触发备用解析器；恢复页在 manifest 中记录
+实际 parser/version 与主解析异常类型，主备均失败时保留两种错误类型并继续处理后续页。
+任何异常消息、路径和正文都不得进入错误字段。旧 manifest 没有这些可选 provenance 字段
+时保持可读，新 generation 必须通过页面覆盖及 locator 审计后才能 promotion。
+
 实验性 claim/source 检索只能通过一个已经验证、不可变且位于 live `data/` 之外的 generation 使用。默认 `KNOWRA_ASK_SHADOW_MODE=off`；此时 Ask 不解析 generation 路径，也不增加 trace。显式设置 `observe` 和绝对 `KNOWRA_ASK_SHADOW_ROOT` 只进行只读候选检索，结果不得改变用户答案、引用或现有 evidence gate。`assist` 不接受这个直接 root：generation 必须先以 `backend/scripts/manage_ask_generation.py promote` 绑定审核人、带时区审核时间、验收报告 SHA-256、完整 locator/source hash 审计及 generation/index identity，再通过独立 control root 的 `active.json` 原子指针启用。promotion 必须提供 `--accept-failed-pages N`；工具会从 evidence manifests 重新计算失败页及其摘要，只有审核者显式接受的准确数量与审计一致时才允许写 control。运行时设置绝对 `KNOWRA_ASK_GENERATION_CONTROL`；没有有效 active pointer 时不会调用路由规划或回答模型。
 
 显式 `assist` 仅在旧 Wiki evidence gate 不足、两阶段检索达到来源覆盖门槛、且回答模型对每个实质段落使用允许的 evidence ID 时，才用最多 4 条有页码/字符定位的原文片段生成回答；未知或缺失引用、模型/预算失败、来源覆盖不足都回退到原有拒答。`assist` 的引用表示“定位到原文”，不能解释为已经自动完成 entailment adjudication；切回 `off` 是无需 control 写入的即时运行回滚。需要切回上一份已审核 generation 时，使用 `rollback` 子命令并提供当前 active 文件 SHA-256 作为 compare-and-swap 前置条件；promotion/rollback 使用进程锁、不可变审核记录、切换 intent 和同目录原子替换。替换前失败必须保留旧 pointer；若替换已完成但目录 `fsync` 失败，CLI 返回 `uncertain`，不得盲目重试，先用 `status` 读取 active source of truth。

@@ -9,6 +9,7 @@ evidence contract is validated on synthetic data.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import io
 import json
 import os
@@ -18,10 +19,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import pypdf
+import pypdfium2
 
 
 EVIDENCE_SCHEMA_VERSION = 1
-PARSER_NAME = "pypdf"
+PARSER_NAME = "pypdf_with_pdfium_page_fallback"
 DEFAULT_CHUNK_CHARS = 2400
 DEFAULT_CHUNK_OVERLAP = 240
 TEXT_NORMALIZATION = "surrogate_replacement_and_outer_strip_v1"
@@ -60,7 +62,51 @@ def _sha256_text(text: str) -> str:
 
 
 def _parser_version() -> str:
-    return f"pypdf-{getattr(pypdf, '__version__', 'unknown')}"
+    return (
+        f"pypdf-{getattr(pypdf, '__version__', 'unknown')}+"
+        f"pypdfium2-{importlib.metadata.version('pypdfium2')}"
+    )
+
+
+def _parser_label(name: str, version: str) -> str:
+    return f"{name}-{version}"
+
+
+def _primary_parser_label() -> str:
+    return _parser_label("pypdf", getattr(pypdf, "__version__", "unknown"))
+
+
+def _fallback_parser_label() -> str:
+    return _parser_label(
+        "pypdfium2", importlib.metadata.version("pypdfium2")
+    )
+
+
+def _open_pdfium_document(source_bytes: bytes):
+    return pypdfium2.PdfDocument(source_bytes)
+
+
+def _extract_pdfium_page(document: Any, index: int) -> str:
+    page = document[index]
+    try:
+        text_page = page.get_textpage()
+        try:
+            return text_page.get_text_bounded()
+        finally:
+            text_page.close()
+    finally:
+        page.close()
+
+
+def _error_type(error: Exception) -> str:
+    return type(error).__name__
+
+
+def _page_provenance(item: dict[str, Any]) -> dict[str, Any]:
+    fields = ("parser_used", "primary_error_type", "fallback_error_type")
+    if not any(field in item for field in fields):
+        return {}
+    return {field: item.get(field) for field in fields}
 
 
 def _heading_kind(line: str) -> str | None:
@@ -204,6 +250,8 @@ def build_evidence_manifest(
     parser_name: str = PARSER_NAME,
     parser_version: str | None = None,
     document_error_type: str | None = None,
+    document_primary_error_type: str | None = None,
+    document_fallback_error_type: str | None = None,
     chunk_chars: int = DEFAULT_CHUNK_CHARS,
     overlap_chars: int = DEFAULT_CHUNK_OVERLAP,
 ) -> dict[str, Any]:
@@ -287,7 +335,7 @@ def build_evidence_manifest(
                     overlap_chars=overlap_chars,
                 ))
             chunks.extend(page_chunks)
-            page_records.append({
+            page_record = {
                 "page_number": number,
                 "status": "ok",
                 "text_characters": len(text),
@@ -297,9 +345,11 @@ def build_evidence_manifest(
                     chunk["section_kind"] for chunk in page_chunks
                 )),
                 "error_type": None,
-            })
+            }
+            page_record.update(_page_provenance(item))
+            page_records.append(page_record)
         elif status == "empty":
-            page_records.append({
+            page_record = {
                 "page_number": number,
                 "status": "empty",
                 "text_characters": 0,
@@ -307,12 +357,14 @@ def build_evidence_manifest(
                 "chunk_ids": [],
                 "section_kinds": [],
                 "error_type": None,
-            })
+            }
+            page_record.update(_page_provenance(item))
+            page_records.append(page_record)
         else:
             error_type = str(item.get("error_type") or "UnknownError").strip()
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", error_type):
                 raise EvidenceValidationError(f"invalid error_type for page {number}")
-            page_records.append({
+            page_record = {
                 "page_number": number,
                 "status": "error",
                 "text_characters": 0,
@@ -320,7 +372,9 @@ def build_evidence_manifest(
                 "chunk_ids": [],
                 "section_kinds": [],
                 "error_type": error_type,
-            })
+            }
+            page_record.update(_page_provenance(item))
+            page_records.append(page_record)
 
     attempted = len(page_records)
     if total_pages is not None and seen_pages != set(range(1, total_pages + 1)):
@@ -362,6 +416,8 @@ def build_evidence_manifest(
             "version": parser_version or _parser_version(),
             "text_normalization": TEXT_NORMALIZATION,
             "document_error_type": document_error_type,
+            "document_primary_error_type": document_primary_error_type,
+            "document_fallback_error_type": document_fallback_error_type,
         },
         "chunking": {
             "max_characters": chunk_chars,
@@ -393,44 +449,84 @@ def build_pdf_evidence(
         raise EvidenceValidationError("provided source hash does not match the PDF")
     file_hash = actual_file_hash
     size = len(source_bytes)
-    try:
-        reader = pypdf.PdfReader(io.BytesIO(source_bytes))
-        total_pages = len(reader.pages)
-    except Exception as error:
-        return build_evidence_manifest(
-            paper_id=paper_id,
-            source_file_hash=file_hash,
-            source_size_bytes=size,
-            total_pages=None,
-            pages=[],
-            document_error_type=type(error).__name__,
-            chunk_chars=chunk_chars,
-            overlap_chars=overlap_chars,
-        )
-
+    reader = None
+    fallback_document = None
+    document_primary_error_type = None
     pages: list[dict[str, Any]] = []
-    for number in range(1, total_pages + 1):
+    try:
         try:
-            page = reader.pages[number - 1]
-            text = _sanitize_text(page.extract_text() or "").strip()
+            reader = pypdf.PdfReader(io.BytesIO(source_bytes))
+            total_pages = len(reader.pages)
         except Exception as error:
-            pages.append({
-                "page_number": number,
-                "status": "error",
-                "error_type": type(error).__name__,
-            })
-            continue
-        pages.append({
-            "page_number": number,
-            "status": "ok" if text else "empty",
-            "text": text,
-        })
+            document_primary_error_type = _error_type(error)
+            try:
+                fallback_document = _open_pdfium_document(source_bytes)
+                total_pages = len(fallback_document)
+            except Exception as fallback_error:
+                return build_evidence_manifest(
+                    paper_id=paper_id,
+                    source_file_hash=file_hash,
+                    source_size_bytes=size,
+                    total_pages=None,
+                    pages=[],
+                    document_error_type=document_primary_error_type,
+                    document_primary_error_type=document_primary_error_type,
+                    document_fallback_error_type=_error_type(fallback_error),
+                    chunk_chars=chunk_chars,
+                    overlap_chars=overlap_chars,
+                )
+
+        for number in range(1, total_pages + 1):
+            primary_error_type = document_primary_error_type
+            if reader is not None:
+                try:
+                    page = reader.pages[number - 1]
+                    text = _sanitize_text(page.extract_text() or "").strip()
+                    pages.append({
+                        "page_number": number,
+                        "status": "ok" if text else "empty",
+                        "text": text,
+                        "parser_used": _primary_parser_label(),
+                        "primary_error_type": None,
+                        "fallback_error_type": None,
+                    })
+                    continue
+                except Exception as error:
+                    primary_error_type = _error_type(error)
+
+            try:
+                if fallback_document is None:
+                    fallback_document = _open_pdfium_document(source_bytes)
+                text = _sanitize_text(
+                    _extract_pdfium_page(fallback_document, number - 1) or ""
+                ).strip()
+                pages.append({
+                    "page_number": number,
+                    "status": "ok" if text else "empty",
+                    "text": text,
+                    "parser_used": _fallback_parser_label(),
+                    "primary_error_type": primary_error_type,
+                    "fallback_error_type": None,
+                })
+            except Exception as fallback_error:
+                pages.append({
+                    "page_number": number,
+                    "status": "error",
+                    "error_type": primary_error_type or _error_type(fallback_error),
+                    "parser_used": None,
+                    "primary_error_type": primary_error_type,
+                    "fallback_error_type": _error_type(fallback_error),
+                })
+    finally:
+        if fallback_document is not None:
+            fallback_document.close()
     return build_evidence_manifest(
         paper_id=paper_id,
         source_file_hash=file_hash,
         source_size_bytes=size,
         total_pages=total_pages,
         pages=pages,
+        document_primary_error_type=document_primary_error_type,
         chunk_chars=chunk_chars,
         overlap_chars=overlap_chars,
     )
@@ -495,6 +591,18 @@ def validate_evidence_manifest(manifest: dict[str, Any]) -> None:
         )
     ):
         raise EvidenceValidationError("invalid document error type")
+    document_primary_error_type = parser.get("document_primary_error_type")
+    document_fallback_error_type = parser.get("document_fallback_error_type")
+    for error_type in (document_primary_error_type, document_fallback_error_type):
+        if error_type is not None and (
+            not isinstance(error_type, str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,127}", error_type)
+        ):
+            raise EvidenceValidationError("invalid document fallback metadata")
+    if document_fallback_error_type is not None and document_error_type is None:
+        raise EvidenceValidationError("orphaned document fallback error")
+    if document_error_type is not None and document_primary_error_type != document_error_type:
+        raise EvidenceValidationError("document primary error mismatch")
     pages = manifest.get("pages")
     chunks = manifest.get("chunks")
     if not isinstance(pages, list) or not isinstance(chunks, list):
@@ -531,6 +639,40 @@ def validate_evidence_manifest(manifest: dict[str, Any]) -> None:
         status = page.get("status")
         if status not in {"ok", "empty", "error"}:
             raise EvidenceValidationError("invalid page status")
+        provenance_present = any(
+            field in page
+            for field in ("parser_used", "primary_error_type", "fallback_error_type")
+        )
+        parser_used = page.get("parser_used")
+        primary_error_type = page.get("primary_error_type")
+        fallback_error_type = page.get("fallback_error_type")
+        if provenance_present:
+            if status in {"ok", "empty"}:
+                if (
+                    not isinstance(parser_used, str)
+                    or not parser_used.strip()
+                    or len(parser_used) > 160
+                    or fallback_error_type is not None
+                    or (primary_error_type is None) != parser_used.startswith("pypdf-")
+                    or (primary_error_type is not None) != parser_used.startswith(
+                        "pypdfium2-"
+                    )
+                ):
+                    raise EvidenceValidationError("invalid successful-page provenance")
+            elif parser_used is not None:
+                raise EvidenceValidationError("failed page cannot name a parser result")
+            for error_type in (primary_error_type, fallback_error_type):
+                if error_type is not None and (
+                    not isinstance(error_type, str)
+                    or not re.fullmatch(
+                        r"[A-Za-z_][A-Za-z0-9_.]{0,127}", error_type
+                    )
+                ):
+                    raise EvidenceValidationError("invalid page parser error metadata")
+            if status == "error" and (
+                primary_error_type is None or fallback_error_type is None
+            ):
+                raise EvidenceValidationError("incomplete failed-page provenance")
         characters = page.get("text_characters")
         if isinstance(characters, bool) or not isinstance(characters, int) or characters < 0:
             raise EvidenceValidationError("invalid page character count")
@@ -554,6 +696,8 @@ def validate_evidence_manifest(manifest: dict[str, Any]) -> None:
                 r"[A-Za-z_][A-Za-z0-9_.]{0,127}", error_type
             ):
                 raise EvidenceValidationError("invalid failed-page error type")
+            if provenance_present and error_type != primary_error_type:
+                raise EvidenceValidationError("failed-page primary error mismatch")
         page_by_number[number] = page
     if total_pages is not None and set(page_by_number) != set(range(1, total_pages + 1)):
         raise EvidenceValidationError("source page records are incomplete")
