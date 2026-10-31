@@ -69,6 +69,9 @@ function paper(id, title, category, learningStatus = 'not_started') {
     paper_team_override: null, paper_team_source: 'none', learning_status: learningStatus, year: 2026, error: null,
     created_at: null, extracted_text: null, raw_llm_response: JSON.stringify({ title, abstract_summary: 'Synthetic abstract' }),
     extraction: { title, abstract_summary: 'Synthetic abstract' }, extraction_model: 'fixture-only',
+    extraction_coverage: { strategy: 'full-page-hierarchy-v1', model_input_coverage: 'all_extracted_text_chunks',
+      source_pages: 18, attempted_pages: 18, ok_pages: 17, empty_pages: 1, failed_pages: 0,
+      failed_page_numbers: [], page_iteration_complete: true, source_chunks: 42, map_batches: 7 },
     notes: notes([{ id: `note-${id}`, title: `${title} note`, content: `${title} original content` }]),
     has_first_page_image: true, chat: structuredClone(chat), knowledge_nodes: [] }
 }
@@ -328,6 +331,8 @@ try {
       await json(route, item); return true
     })
     await expect(page.getByRole('heading', { name: 'Fixture Alpha', exact: true })).toBeVisible()
+    await expect(page.getByText('原文覆盖', { exact: true })).toBeVisible()
+    await expect(page.getByText(/已遍历全部 18 页；42 个可抽取文本块分 7 批/)).toBeVisible()
     await page.getByTitle('编辑', { exact: true }).click()
     const draft = page.getByPlaceholder(/^用 Markdown 写下/)
     await draft.fill('User note draft survives refresh')
