@@ -28,6 +28,9 @@ from services.hybrid_claim_retrieval import (
     execute_api_plan,
     execute_cli_plan,
 )
+from services.two_stage_shadow_retrieval import (
+    execute_two_stage_shadow_retrieval,
+)
 
 
 GENERATION_SCHEMA_VERSION = 1
@@ -271,6 +274,24 @@ def _compact_observation(
     return observation
 
 
+def _two_stage_response(response: Mapping[str, Any]) -> dict[str, Any]:
+    evidence = list(response.get("evidence") or [])
+    evidence_ids = {item.get("id") for item in evidence}
+    claims = [
+        item for item in response.get("claims") or []
+        if item.get("id") not in evidence_ids
+    ]
+    return {
+        "results": [*evidence, *claims][:MAX_OBSERVATION_CANDIDATES],
+        "coverage": response["coverage"],
+        "budget": response["budget"],
+        "answerability_reason": (
+            "coverage_met" if response.get("answerable")
+            else "retrieval_coverage_incomplete"
+        ),
+    }
+
+
 def observe_question(
     question: str,
     *,
@@ -280,6 +301,7 @@ def observe_question(
     production_wiki_root: Path = LIVE_WIKI_ROOT,
     query_vector: Sequence[float] | None = None,
     dense_model_id: str | None = None,
+    query_routes: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Read one immutable generation and return candidate-only telemetry.
 
@@ -328,22 +350,41 @@ def observe_question(
             != manifest["dense_model_id"]
         ):
             raise AskShadowIntegrationError("generation manifest does not match the index")
-        route: dict[str, Any] = {"query": question}
-        if query_vector is not None:
-            route["query_vector"] = list(query_vector)
-            route["dense_model_id"] = dense_model_id
         required = 2 if _requires_multiple_sources(question) else 1
-        plan = build_retrieval_plan(
-            question=question,
-            routes=[route],
-            required_papers=required,
-            required_source_records=required,
-            limit=MAX_OBSERVATION_CANDIDATES,
-        )
-        execute: Callable[..., dict[str, Any]] = (
-            execute_cli_plan if adapter == "cli" else execute_api_plan
-        )
-        response = execute(retriever, plan)
+        if query_routes is not None:
+            if (
+                not isinstance(query_routes, (list, tuple))
+                or not 1 <= len(query_routes) <= 4
+                or any(not isinstance(route, str) or not route.strip() for route in query_routes)
+            ):
+                raise AskShadowIntegrationError("two-stage query routes are invalid")
+            if query_vector is not None or dense_model_id is not None:
+                raise AskShadowIntegrationError(
+                    "two-stage observation does not accept detached query vectors"
+                )
+            response = _two_stage_response(execute_two_stage_shadow_retrieval(
+                retriever,
+                question=question,
+                queries=list(query_routes),
+                required_papers=required,
+                required_evidence=required,
+            ))
+        else:
+            route: dict[str, Any] = {"query": question}
+            if query_vector is not None:
+                route["query_vector"] = list(query_vector)
+                route["dense_model_id"] = dense_model_id
+            plan = build_retrieval_plan(
+                question=question,
+                routes=[route],
+                required_papers=required,
+                required_source_records=required,
+                limit=MAX_OBSERVATION_CANDIDATES,
+            )
+            execute: Callable[..., dict[str, Any]] = (
+                execute_cli_plan if adapter == "cli" else execute_api_plan
+            )
+            response = execute(retriever, plan)
         identity_after = _index_identity(index_path, deadline=deadline)
         if identity_after != identity_before:
             raise AskShadowIntegrationError("generation index changed during observation")

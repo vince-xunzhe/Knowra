@@ -53,6 +53,7 @@ SEARCH_TIMEOUT_MS = 500
 PLAN_TIMEOUT_MS = 2_000
 MIN_DENSE_SIMILARITY = 0.35
 _TERM_SPLIT = re.compile(r"[^\w一-鿿぀-ヿ]+", re.UNICODE)
+_CJK_RUN = re.compile(r"[一-鿿぀-ヿ]+")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -528,9 +529,31 @@ def build_shadow_index(
     }
 
 
-def _fts_query(query: str) -> str:
+def _lexical_terms(query: str, *, tokenizer: str) -> list[str]:
     parts = [part for part in _TERM_SPLIT.split(query) if part.strip()]
-    return " OR ".join(f'"{part.replace(chr(34), chr(34) * 2)}"' for part in parts)
+    terms: list[str] = []
+    for part in parts:
+        if tokenizer == "trigram" and _CJK_RUN.fullmatch(part):
+            width = 3 if len(part) >= 3 else len(part)
+            if width:
+                terms.extend(part[index:index + width] for index in range(len(part) - width + 1))
+        else:
+            terms.append(part)
+    return list(dict.fromkeys(term for term in terms if term.strip()))[:48]
+
+
+def _fts_query(query: str, *, tokenizer: str) -> str:
+    """Build a bounded high-recall lexical query for Latin and CJK text.
+
+    FTS5's trigram tokenizer can index continuous Chinese text, but quoting an
+    entire natural-language question turns it into an accidental exact-phrase
+    search.  Generate language-agnostic CJK trigrams instead; BM25 rewards
+    records matching several terms, while the answer evidence gate remains
+    responsible for support.  The unicode61 fallback retains its prior token
+    behavior because it cannot match arbitrary CJK substrings.
+    """
+    unique = _lexical_terms(query, tokenizer=tokenizer)
+    return " OR ".join(f'"{term.replace(chr(34), chr(34) * 2)}"' for term in unique)
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
@@ -616,6 +639,7 @@ class HybridClaimRetriever:
             metadata = dict(conn.execute("SELECT key,value FROM metadata"))
             self.vector_dimension = int(metadata["vector_dimension"])
             self.dense_model_id = metadata["dense_model_id"]
+            self.tokenizer = metadata["tokenizer"]
             self.source_digest = metadata["source_digest"]
             self.dense_index_digest = metadata["dense_index_digest"]
             if expected_source_digest is not None and expected_source_digest != self.source_digest:
@@ -701,7 +725,7 @@ class HybridClaimRetriever:
                     parameters.extend(values)
             where = (" AND " + " AND ".join(conditions)) if conditions else ""
             lexical: list[str] = []
-            safe = _fts_query(query)
+            safe = _fts_query(query, tokenizer=self.tokenizer)
             if safe:
                 rows = conn.execute(
                     "SELECT s.id FROM search s JOIN records r ON r.id=s.id "
@@ -768,6 +792,19 @@ class HybridClaimRetriever:
                     if score >= MIN_DENSE_SIMILARITY:
                         dense_scores.append((row[0], score))
             dense_scores.sort(key=lambda item: (-item[1], item[0]))
+            lexical_terms = _lexical_terms(query, tokenizer=self.tokenizer)
+            minimum_matches = 2 if len(lexical_terms) >= 2 and any(
+                _CJK_RUN.search(term) for term in lexical_terms
+            ) else 1
+            lexical = [
+                identifier for identifier in lexical
+                if sum(
+                    term.casefold() in (
+                        payloads[identifier]["title"] + " " + payloads[identifier]["text"]
+                    ).casefold()
+                    for term in lexical_terms
+                ) >= minimum_matches
+            ]
             dense_scores = dense_scores[:MAX_CHANNEL_RESULTS]
             fused: dict[str, dict[str, Any]] = {}
             for channel, ranked in (
@@ -809,6 +846,42 @@ class HybridClaimRetriever:
             raise
         finally:
             conn.close()
+
+    def paper_years(self, paper_ids: Sequence[str]) -> dict[str, int]:
+        """Return bounded structured-extraction years for candidate papers."""
+        normalized = sorted(set(str(item).strip() for item in paper_ids if str(item).strip()))
+        if len(normalized) > MAX_FILTER_PAPERS:
+            raise HybridRetrievalError("paper year lookup exceeds the filter budget")
+        if not normalized:
+            return {}
+        current_path = _safe_shadow_read_path(
+            self.index_path,
+            shadow_root=self.shadow_root,
+            production_wiki_root=self.production_wiki_root,
+        )
+        conn = _read_connection(current_path)
+        try:
+            metadata = dict(conn.execute("SELECT key,value FROM metadata"))
+            if (
+                metadata.get("source_digest") != self.source_digest
+                or metadata.get("dense_index_digest") != self.dense_index_digest
+                or metadata.get("dense_model_id") != self.dense_model_id
+                or int(metadata.get("vector_dimension", "-1")) != self.vector_dimension
+            ):
+                raise HybridRetrievalError("shadow index changed after retriever initialization")
+            rows = conn.execute(
+                "SELECT paper_id,text FROM records WHERE kind='claim' AND field_path='year' "
+                f"AND paper_id IN ({','.join('?' for _ in normalized)}) ORDER BY paper_id,id",
+                normalized,
+            ).fetchall()
+        finally:
+            conn.close()
+        years: dict[str, int] = {}
+        for paper_id, text in rows:
+            match = re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", str(text))
+            if match and paper_id not in years:
+                years[paper_id] = int(match.group())
+        return years
 
 
 def _normalize_route(route: Mapping[str, Any], *, field: str) -> dict[str, Any]:

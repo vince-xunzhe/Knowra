@@ -190,6 +190,69 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertNotIn("Actions enter", payload)
         self.assertNotIn("query", payload)
 
+    def test_two_stage_routes_are_shared_read_only_and_keep_shadow_status(self):
+        before = {
+            path.relative_to(self.shadow): (path.stat().st_size, path.stat().st_mtime_ns)
+            for path in self.shadow.rglob("*")
+            if path.is_file()
+        }
+        routes = [
+            "world model action latent dynamics",
+            "action-conditioned world model",
+        ]
+        cli = observe_question(
+            "How did world and action models change over time?",
+            adapter="cli",
+            env=self.env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=routes,
+        )
+        api = observe_question(
+            "How did world and action models change over time?",
+            adapter="api",
+            env=self.env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=routes,
+        )
+        after = {
+            path.relative_to(self.shadow): (path.stat().st_size, path.stat().st_mtime_ns)
+            for path in self.shadow.rglob("*")
+            if path.is_file()
+        }
+        self.assertEqual(before, after)
+        self.assertEqual(cli["status"], "ready")
+        self.assertEqual(cli["candidates"], api["candidates"])
+        self.assertEqual(cli["candidate_locators"], api["candidate_locators"])
+        self.assertFalse(cli["production_eligible"])
+        self.assertIn("source_drilldown_used", cli["coverage"])
+        self.assertLessEqual(
+            cli["budget"]["search_calls"], cli["budget"]["max_search_calls"]
+        )
+
+    def test_two_stage_routes_fail_closed_on_invalid_shape_or_detached_vector(self):
+        invalid = observe_question(
+            "question",
+            adapter="cli",
+            env=self.env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=[1],
+        )
+        detached = observe_question(
+            "question",
+            adapter="api",
+            env=self.env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["world model"],
+            query_vector=[1.0, 0.0],
+            dense_model_id="synthetic-integration-vectors@v1",
+        )
+        self.assertEqual(invalid["status"], "unavailable")
+        self.assertEqual(detached["status"], "unavailable")
+
     def test_invalid_generation_fails_closed_without_touching_live_data(self):
         original = (self.shadow / "generation.json").read_text(encoding="utf-8")
         tampered = {**self.generation, "source_digest": "0" * 64}
@@ -300,12 +363,13 @@ class AskShadowIntegrationTests(unittest.TestCase):
             mock.patch.object(
                 ask_agent.ask_shadow_integration,
                 "observe_question",
-                side_effect=lambda question, *, adapter: real_observe(
+                side_effect=lambda question, *, adapter, query_routes=None: real_observe(
                     question,
                     adapter=adapter,
                     env=self.env,
                     live_data_root=self.live_data,
                     production_wiki_root=self.live_wiki,
+                    query_routes=query_routes,
                 ),
             ),
         ):
@@ -332,6 +396,40 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertEqual(
             observed.duration_ms,
             baseline.duration_ms + observed.trace[-1].duration_ms,
+        )
+
+    def test_finish_result_forwards_unique_search_routes_to_shadow_observer(self):
+        trace = [
+            ask_agent.TraceStep(0, "search_wiki", {"q": "世界模型"}, "one", 1),
+            ask_agent.TraceStep(1, "search_wiki", {"q": "world model"}, "two", 1),
+            ask_agent.TraceStep(2, "search_wiki", {"q": "世界模型"}, "duplicate", 1),
+        ]
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=1,
+            index_available=True,
+            reason="synthetic",
+        )
+        with mock.patch.object(
+            ask_agent.ask_shadow_integration,
+            "observe_question",
+            return_value={"status": "disabled"},
+        ) as observe:
+            ask_agent._finish_result(
+                answer="answer",
+                question="question",
+                trace=trace,
+                model="codex-cli/synthetic",
+                duration_ms=2,
+                assessment=assessment,
+            )
+        self.assertEqual(observe.call_args.kwargs["adapter"], "cli")
+        self.assertEqual(
+            observe.call_args.kwargs["query_routes"],
+            ["世界模型", "world model"],
         )
 
 

@@ -233,6 +233,41 @@ class HybridClaimRetrievalTests(unittest.TestCase):
             item["paper_id"] == "paper-boundary" for item in negative["results"]
         ))
 
+    def test_cjk_natural_question_recalls_terms_without_hard_coding_topics(self):
+        chinese_root = self.root / "chinese-shadow"
+        chinese_index = chinese_root / "indexes" / "claims.sqlite"
+        relevant = _plan(
+            "paper-chinese-world", "动作条件世界模型",
+            "世界模型把动作作为潜在状态转移的显式输入。",
+            _manifest("paper-chinese-world", "Actions condition latent transitions."),
+        )
+        unrelated = _plan(
+            "paper-chinese-factory", "制造业轮廓模型",
+            "制造业动作规范改变了样条轮廓的公差。",
+            _manifest("paper-chinese-factory", "Manufacturing spline tolerance."),
+        )
+        build_shadow_index(
+            index_path=chinese_index,
+            shadow_root=chinese_root,
+            production_wiki_root=self.production,
+            compile_plans=[relevant, unrelated],
+        )
+        retriever = HybridClaimRetriever(
+            chinese_index,
+            shadow_root=chinese_root,
+            production_wiki_root=self.production,
+        )
+        natural = retriever.search(
+            "世界模型与动作模型的结合，在建模上经历了哪些变化？",
+            kinds=["claim"], limit=5,
+        )
+        self.assertTrue(natural["results"])
+        self.assertEqual(natural["results"][0]["paper_id"], "paper-chinese-world")
+        absent = retriever.search(
+            "量子引力中的全息纠缠熵如何计算？", kinds=["claim"], limit=5
+        )
+        self.assertEqual(absent["results"], [])
+
     def test_cli_and_api_share_one_bounded_plan_and_single_gap(self):
         plan = build_retrieval_plan(
             question="How did prediction become action conditioned?",
