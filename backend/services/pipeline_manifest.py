@@ -290,9 +290,10 @@ def invalidate_from(
     *,
     root: Optional[Path] = None,
 ) -> dict[str, Any]:
-    order = ["extraction", "graph", "wiki", "search"]
-    if layer not in order:
+    public_order = ["extraction", "graph", "wiki", "search"]
+    if layer not in public_order:
         raise ValueError(f"Unknown manifest layer: {layer}")
+    order = ["extraction", "extraction_coverage", "graph", "wiki", "search"]
     manifest = load_manifest(paper_id, root=root)
     layers = manifest.setdefault("layers", {})
     for name in order[order.index(layer) :]:
@@ -320,3 +321,43 @@ def manifest_status(paper_id: str, *, root: Optional[Path] = None) -> dict[str, 
         },
         "updated_at": manifest.get("updated_at"),
     }
+
+
+def extraction_coverage_status(
+    paper_id: str, *, root: Optional[Path] = None
+) -> dict[str, Any] | None:
+    """Return a privacy-safe extraction coverage summary for the paper UI."""
+    manifest = load_manifest(paper_id, root=root)
+    layer = (manifest.get("layers") or {}).get("extraction_coverage")
+    if not isinstance(layer, dict):
+        return None
+    allowed = {
+        "strategy",
+        "coverage_scope",
+        "model_input_coverage",
+        "source_pages",
+        "attempted_pages",
+        "ok_pages",
+        "empty_pages",
+        "failed_pages",
+        "page_iteration_complete",
+        "local_page_iteration_complete",
+        "source_characters",
+        "source_chunks",
+        "map_batches",
+        "map_batches_completed",
+        "reduction_levels",
+        "local_text_fallback_used",
+        "local_audit_error_type",
+        "limitations",
+        "completed_at",
+    }
+    result = {key: layer[key] for key in allowed if key in layer}
+    result["failed_page_numbers"] = [
+        int(page["page_number"])
+        for page in layer.get("page_sources", [])
+        if isinstance(page, dict)
+        and page.get("status") == "error"
+        and isinstance(page.get("page_number"), int)
+    ]
+    return result

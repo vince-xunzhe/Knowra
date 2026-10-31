@@ -431,6 +431,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
         paper_category: visibleDetail.paper_category_override || null,
         paper_category_source: visibleDetail.paper_category_override ? 'manual' : 'none',
         raw_llm_response: null,
+        extraction_coverage: null,
         error: null,
         knowledge_nodes: [],
       }
@@ -810,6 +811,42 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     {visibleProcessMeta.stage === 'failed'
                       ? (visibleErrorSummary || visibleProcessMeta.summary)
                       : visibleProcessMeta.summary}
+                  </p>
+                </div>
+              )}
+
+              {visibleDetail.extraction_coverage && (
+                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                  <p className="text-[11px] font-medium text-slate-200">{tr("原文覆盖")}</p>
+                  {visibleDetail.extraction_coverage.strategy === 'full-page-hierarchy-v1' ? (
+                    <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${visibleDetail.extraction_coverage.page_iteration_complete ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {visibleDetail.extraction_coverage.page_iteration_complete
+                        ? tr("已遍历全部 {0} 页；{1} 个可抽取文本块分 {2} 批完成分层抽取。空白页 {3}，失败页 {4}。", {
+                            0: visibleDetail.extraction_coverage.source_pages ?? 0,
+                            1: visibleDetail.extraction_coverage.source_chunks ?? 0,
+                            2: visibleDetail.extraction_coverage.map_batches ?? 0,
+                            3: visibleDetail.extraction_coverage.empty_pages ?? 0,
+                            4: visibleDetail.extraction_coverage.failed_pages ?? 0,
+                          })
+                        : tr("原文覆盖不完整：已尝试 {0}/{1} 页，失败页 {2}。系统不会把这次抽取标为完整。", {
+                            0: visibleDetail.extraction_coverage.attempted_pages ?? 0,
+                            1: visibleDetail.extraction_coverage.source_pages ?? '?',
+                            2: (visibleDetail.extraction_coverage.failed_page_numbers || []).join(', ') || tr("未知"),
+                          })}
+                    </p>
+                  ) : (
+                    <p className="mt-1 text-[11px] leading-relaxed text-amber-300">
+                      {tr("本地页审计：{0}/{1} 页；API file_search 由服务商检索，无法验证模型实际收到哪些页面。", {
+                        0: visibleDetail.extraction_coverage.attempted_pages ?? tr("未知"),
+                        1: visibleDetail.extraction_coverage.source_pages ?? tr("未知"),
+                      })}
+                      {visibleDetail.extraction_coverage.local_text_fallback_used
+                        ? tr(" 本次还使用了有长度上限的本地文本兜底。")
+                        : ''}
+                    </p>
+                  )}
+                  <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                    {tr("页覆盖只证明输入处理范围；层级笔记和最终模型仍可能遗漏语义。")}
                   </p>
                 </div>
               )}

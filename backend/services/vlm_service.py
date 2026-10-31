@@ -10,8 +10,9 @@ import math
 import re
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 from openai import OpenAI
 from openai import NotFoundError, APIStatusError
@@ -22,9 +23,15 @@ from path_setup import ensure_project_root_on_path
 from path_utils import resolve_artifact_path
 from services.pdf_service import (
     compute_hash,
-    extract_text_pages,
     render_pdf_pages,
     select_key_pages,
+)
+from services.paper_evidence_service import build_pdf_evidence
+from services.paper_extraction_hierarchy import (
+    ExtractionCoverageError,
+    SourceBatch,
+    prepare_hierarchical_notes,
+    provider_file_search_coverage,
 )
 from services.paper_category_service import get_active_categories
 
@@ -59,6 +66,27 @@ class PaperExtractionError(RuntimeError):
         self.assistant_id = assistant_id
 
 
+@dataclass(frozen=True)
+class PaperExtractionResult:
+    """Backward-compatible six-value result with explicit coverage metadata."""
+
+    parsed: dict
+    raw: str
+    file_id: str
+    assistant_id: str
+    thread_id: str
+    vector_store_id: str
+    coverage: dict
+
+    def __iter__(self) -> Iterator[object]:
+        yield self.parsed
+        yield self.raw
+        yield self.file_id
+        yield self.assistant_id
+        yield self.thread_id
+        yield self.vector_store_id
+
+
 def _log(msg: str) -> None:
     print(f"[vlm] {msg}", file=sys.stderr, flush=True)
 
@@ -85,9 +113,8 @@ ASSISTANT_NAME = "knowledge-tree-paper-extractor"
 RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 LOCAL_TEXT_FALLBACK_MAX_CHARS = 32000
 LOCAL_CHAT_CONTEXT_MAX_CHARS = 24000
-LOCAL_EXTRACTION_CHUNK_CHAR_BUDGET = 12000
-LOCAL_EXTRACTION_MAX_CHUNKS = 4
 LOCAL_EXTRACTION_CHUNK_TIMEOUT_S = 150
+LOCAL_EXTRACTION_REDUCE_TIMEOUT_S = 180
 LOCAL_EXTRACTION_FINAL_TIMEOUT_S = 600
 RUNTIME_CATEGORY_MARKER = "═══════════ 运行时可选论文大类（以此处为准） ═══════════"
 
@@ -229,43 +256,6 @@ def _history_to_transcript(chat_history: Optional[list]) -> str:
         speaker = "用户" if role == "user" else "助手"
         turns.append(f"{speaker}: {content}")
     return "\n".join(turns)
-
-
-def _build_page_chunks(page_texts: list[dict]) -> list[dict]:
-    chunks: list[dict] = []
-    current_pages: list[int] = []
-    current_parts: list[str] = []
-    current_len = 0
-
-    def _flush():
-        nonlocal current_pages, current_parts, current_len
-        if current_pages and current_parts:
-            chunks.append({
-                "start_page": current_pages[0],
-                "end_page": current_pages[-1],
-                "text": "\n\n".join(current_parts),
-            })
-        current_pages = []
-        current_parts = []
-        current_len = 0
-
-    for item in page_texts:
-        page_number = int(item.get("page_number") or 0)
-        text = str(item.get("text") or "").strip()
-        if page_number <= 0 or not text:
-            continue
-        page_block = f"[PAGE {page_number}]\n{text}"
-        if current_parts and current_len + len(page_block) > LOCAL_EXTRACTION_CHUNK_CHAR_BUDGET:
-            _flush()
-            if len(chunks) >= LOCAL_EXTRACTION_MAX_CHUNKS:
-                break
-        current_pages.append(page_number)
-        current_parts.append(page_block)
-        current_len += len(page_block)
-
-    if len(chunks) < LOCAL_EXTRACTION_MAX_CHUNKS:
-        _flush()
-    return chunks[:LOCAL_EXTRACTION_MAX_CHUNKS]
 
 
 def _resolve_image_paths_for_pages(
@@ -766,84 +756,117 @@ def extract_knowledge_from_paper(
     fallback_text: Optional[str] = None,
     first_page_image_path: Optional[str] = None,
     file_hash: Optional[str] = None,
-) -> tuple[dict, str, str, str, str, str]:
+    paper_id: Optional[str] = None,
+    checkpoint_root: Optional[str | Path] = None,
+) -> PaperExtractionResult:
     """Run structured extraction on a single PDF via Assistants + file_search.
 
-    Returns (parsed_json, raw_response, file_id, assistant_id, thread_or_response_id, vector_store_id).
+    Iterates as the historical six-value tuple and also exposes ``coverage``.
     Callers should persist file_id on the Paper row, assistant_id in config,
     and thread_id on the Paper row so follow-up chat can reuse the thread.
     """
     cfg, provider_type = _resolve_model_gateway_context(model)
     prompt = _with_runtime_paper_categories(prompt)
     if provider_type == "codex_cli":
-        local_prompt = _build_local_text_fallback_prompt(prompt, fallback_text or "")
-        page_texts, num_pages = extract_text_pages(
-            pdf_filepath,
-            max_chars_per_page=4500,
-            max_total_chars=54000,
-        )
-        page_chunks = _build_page_chunks(page_texts)
-        page_overview = ", ".join(
-            f"{chunk['start_page']}-{chunk['end_page']}" if chunk["start_page"] != chunk["end_page"] else str(chunk["start_page"])
-            for chunk in page_chunks
-        ) or "无有效文本页"
-        chunk_notes: list[str] = []
-        for index, chunk in enumerate(page_chunks, start=1):
-            chunk_prompt = (
-                "请阅读下面这段论文正文，提炼对最终结构化抽取有帮助的证据笔记。\n"
-                "尽量保留技术名词、数据集名、实验数字和因果关系。\n\n"
-                f"[PDF_FILEPATH]\n{pdf_filepath}\n\n"
-                f"[CHUNK_INDEX]\n{index}/{len(page_chunks)}\n\n"
-                f"[PAGE_RANGE]\n{chunk['start_page']}-{chunk['end_page']}\n\n"
-                f"[CHUNK_TEXT]\n{chunk['text']}"
+        raw = ""
+        try:
+            supplied_hash = str(file_hash or "").strip().lower()
+            trusted_hash = supplied_hash if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) else None
+            manifest = build_pdf_evidence(
+                pdf_filepath,
+                paper_id=paper_id or trusted_hash or Path(pdf_filepath).stem,
+                source_file_hash=trusted_hash,
             )
-            try:
-                notes = call_text_model(
+
+            def call_map(batch: SourceBatch) -> str:
+                return call_text_model(
                     cfg,
                     model_id=model,
-                    system=response_instructions(LOCAL_EXTRACTION_NOTES_INSTRUCTIONS, cfg.get("prompt_locale", "zh")),
-                    user=chunk_prompt,
+                    system=response_instructions(
+                        LOCAL_EXTRACTION_NOTES_INSTRUCTIONS,
+                        cfg.get("prompt_locale", "zh"),
+                    ),
+                    user=(
+                        "请为最终结构化抽取生成有来源的证据笔记。不得遗漏输入中的来源块；"
+                        "保留技术实体、数字、因果关系及每条结论的 evidence_id 和页码。\n\n"
+                        f"[SOURCE_BATCH id={batch.batch_id}]\n{batch.text}\n[/SOURCE_BATCH]"
+                    ),
                     reasoning_effort=reasoning_effort,
-                    max_tokens=1200,
+                    max_tokens=1800,
                     temperature=0.1,
                     timeout_s=LOCAL_EXTRACTION_CHUNK_TIMEOUT_S,
                 ).strip()
-            except ProviderConfigurationError:
-                raise
-            except Exception as exc:
-                _log(
-                    f"codex chunk notes failed for pages {chunk['start_page']}-{chunk['end_page']}: {exc}"
+
+            def call_reduce(level: int, group_id: str, text: str, pages: tuple[int, ...]) -> str:
+                return call_text_model(
+                    cfg,
+                    model_id=model,
+                    system=response_instructions(
+                        LOCAL_EXTRACTION_NOTES_INSTRUCTIONS,
+                        cfg.get("prompt_locale", "zh"),
+                    ),
+                    user=(
+                        "请压缩下列证据笔记供最终结构化抽取使用。保留关键实体、数字、"
+                        "冲突、局限及 evidence_id/页码；不得把未支持的推断写成事实。\n\n"
+                        f"[REDUCE level={level} id={group_id} pages={pages}]\n{text}\n[/REDUCE]"
+                    ),
+                    reasoning_effort=reasoning_effort,
+                    max_tokens=1800,
+                    temperature=0.1,
+                    timeout_s=LOCAL_EXTRACTION_REDUCE_TIMEOUT_S,
+                ).strip()
+
+            notes = prepare_hierarchical_notes(
+                manifest,
+                prompt=(
+                    f"{prompt}\n\n[HIERARCHY_POLICY]\n{LOCAL_EXTRACTION_NOTES_INSTRUCTIONS}\n"
+                    f"{LOCAL_EXTRACTION_INSTRUCTIONS}\n"
+                    f"locale={cfg.get('prompt_locale', 'zh')}"
+                ),
+                model=model,
+                reasoning_effort=reasoning_effort,
+                call_map=call_map,
+                call_reduce=call_reduce,
+                checkpoint_root=Path(checkpoint_root) if checkpoint_root else None,
+            )
+            coverage = dict(notes.coverage)
+            cached_final = notes.checkpoint.final_response() if notes.checkpoint else None
+            if cached_final:
+                raw = cached_final
+                coverage["final_response_resumed"] = True
+                coverage["final_model_calls_this_attempt"] = 0
+                coverage["total_model_calls_this_attempt"] = coverage.get(
+                    "model_calls_this_attempt", 0
                 )
-                notes = ""
-            if notes:
-                chunk_notes.append(
-                    f"## Chunk {index} | pages {chunk['start_page']}-{chunk['end_page']}\n{notes}"
+                parsed = _normalize_extraction(_parse_json_lenient(raw))
+                issues = extraction_quality_issues(parsed)
+                if extraction_has_critical_issues(parsed):
+                    raise ExtractionCoverageError("checkpointed final extraction is invalid")
+                synthetic_thread_id = f"local-codex-extract:{Path(pdf_filepath).stem}"
+                return PaperExtractionResult(
+                    parsed, raw, "", "", synthetic_thread_id, "", coverage
                 )
 
-        image_paths = _resolve_image_paths_for_pages(
-            pdf_filepath,
-            file_hash=file_hash,
-            first_page_image_path=first_page_image_path,
-            num_pages=num_pages,
-        )
-        raw = ""
-        try:
+            num_pages = int(manifest["source"].get("total_pages") or 0)
+            image_paths = _resolve_image_paths_for_pages(
+                pdf_filepath,
+                file_hash=manifest["source"]["file_hash_sha256"],
+                first_page_image_path=first_page_image_path,
+                num_pages=num_pages,
+            )
             final_strategies = [
                 {
                     "name": "full",
-                    "chunk_notes": chunk_notes,
                     "image_paths": image_paths,
                     "timeout_s": LOCAL_EXTRACTION_FINAL_TIMEOUT_S,
                 },
                 {
                     "name": "fewer_images",
-                    "chunk_notes": chunk_notes,
                     "image_paths": image_paths[:2],
                     "timeout_s": 420,
                 },
                 {
                     "name": "text_only",
-                    "chunk_notes": chunk_notes[:2],
                     "image_paths": [],
                     "timeout_s": 300,
                 },
@@ -855,9 +878,9 @@ def extract_knowledge_from_paper(
                     "请严格遵守用户给出的 JSON schema 与字段要求，输出单个 JSON 对象。\n"
                     "如果某些字段材料不足，可以留空，但不要省略整个对象结构，也不要编造。\n\n"
                     f"[PDF_FILEPATH]\n{pdf_filepath}\n\n"
-                    f"[PAGE_OVERVIEW]\n共 {num_pages} 页；本地分段覆盖：{page_overview}\n\n"
-                    f"[CHUNK_NOTES]\n{chr(10).join(strategy['chunk_notes']) or '[无分段笔记，退回使用本地全文文本]'}\n\n"
-                    f"[TASK_PROMPT]\n{local_prompt}"
+                    f"[COVERAGE]\n{json.dumps(coverage, ensure_ascii=False, sort_keys=True)}\n\n"
+                    f"[HIERARCHICAL_EVIDENCE_NOTES]\n{notes.text}\n\n"
+                    f"[TASK_PROMPT]\n{prompt}"
                 )
                 try:
                     raw = call_text_model(
@@ -890,8 +913,22 @@ def extract_knowledge_from_paper(
                     file_id="",
                     assistant_id="",
                 )
+            if notes.checkpoint:
+                notes.checkpoint.save_final_response(raw)
+            coverage["final_response_resumed"] = False
+            coverage["final_model_calls_this_attempt"] = 1
+            coverage["total_model_calls_this_attempt"] = (
+                int(coverage.get("model_calls_this_attempt") or 0) + 1
+            )
         except (PaperExtractionError, ProviderConfigurationError):
             raise
+        except ExtractionCoverageError as coverage_error:
+            raise PaperExtractionError(
+                f"原文覆盖不完整: {coverage_error}",
+                raw=raw,
+                file_id="",
+                assistant_id="",
+            ) from coverage_error
         except Exception as e:
             preview = raw if raw else "<empty response>"
             if len(preview) > 200:
@@ -903,7 +940,9 @@ def extract_knowledge_from_paper(
                 assistant_id="",
             ) from e
         synthetic_thread_id = f"local-codex-extract:{Path(pdf_filepath).stem}"
-        return parsed, raw, "", "", synthetic_thread_id, ""
+        return PaperExtractionResult(
+            parsed, raw, "", "", synthetic_thread_id, "", coverage
+        )
 
     client = OpenAI(api_key=api_key)
     file_id = _ensure_file(client, cached_file_id, pdf_filepath)
@@ -912,6 +951,7 @@ def extract_knowledge_from_paper(
 
     raw = ""
     thread_id = ""
+    fallback_used = False
     try:
         parsed, raw, assistant_id, thread_id, vector_store_id = _run_extraction_once(
             client,
@@ -924,6 +964,7 @@ def extract_knowledge_from_paper(
         )
         issues = extraction_quality_issues(parsed)
         if issues and fallback_text and fallback_text.strip():
+            fallback_used = True
             _log(
                 "extraction missing core content "
                 f"({', '.join(issues)}); retrying with local PDF text fallback"
@@ -961,7 +1002,36 @@ def extract_knowledge_from_paper(
             assistant_id=assistant_id,
         ) from e
 
-    return parsed, raw, file_id, assistant_id, thread_id, vector_store_id
+    audit_manifest = None
+    audit_error_type = None
+    try:
+        supplied_hash = str(file_hash or "").strip().lower()
+        audit_manifest = build_pdf_evidence(
+            pdf_filepath,
+            paper_id=paper_id or supplied_hash or Path(pdf_filepath).stem,
+            source_file_hash=(
+                supplied_hash if re.fullmatch(r"[0-9a-f]{64}", supplied_hash) else None
+            ),
+        )
+    except Exception as audit_error:
+        audit_error_type = type(audit_error).__name__
+    coverage = provider_file_search_coverage(
+        audit_manifest, audit_error_type=audit_error_type
+    )
+    coverage["local_text_fallback_used"] = fallback_used
+    if fallback_used:
+        coverage["limitations"].append(
+            f"the fallback supplied only the first {LOCAL_TEXT_FALLBACK_MAX_CHARS} local text characters"
+        )
+    return PaperExtractionResult(
+        parsed,
+        raw,
+        file_id,
+        assistant_id,
+        thread_id,
+        vector_store_id,
+        coverage,
+    )
 
 
 # --- follow-up chat ----------------------------------------------------------

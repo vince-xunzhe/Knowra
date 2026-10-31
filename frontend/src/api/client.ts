@@ -52,6 +52,25 @@ export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
   extraction: Record<string, unknown> | null
+  extraction_coverage: {
+    strategy?: string
+    model_input_coverage?: string
+    source_pages?: number | null
+    attempted_pages?: number | null
+    ok_pages?: number | null
+    empty_pages?: number | null
+    failed_pages?: number | null
+    failed_page_numbers?: number[]
+    page_iteration_complete?: boolean | null
+    local_page_iteration_complete?: boolean | null
+    source_characters?: number | null
+    source_chunks?: number | null
+    map_batches?: number | null
+    map_batches_completed?: number | null
+    local_text_fallback_used?: boolean
+    local_audit_error_type?: string
+    limitations?: string[]
+  } | null
   // Which model produced the current raw_llm_response (e.g. "gpt-4.1",
   // "gpt-5.5"). null for legacy rows that pre-date the column.
   extraction_model: string | null
