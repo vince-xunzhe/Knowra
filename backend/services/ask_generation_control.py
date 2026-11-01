@@ -32,6 +32,7 @@ from services.paper_evidence_service import (
 CONTROL_SCHEMA_VERSION = 1
 GENERATION_SCHEMA_VERSION = 1
 MAX_JSON_BYTES = 32_000
+MAX_LIBRARY_INVENTORY_BYTES = 8_388_608
 MAX_INDEX_BYTES = 1_073_741_824
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -210,6 +211,20 @@ def _control_layout(control: Path, *, create: bool) -> None:
             raise GenerationControlError("control file layout is unsafe")
 
 
+def _safe_generation_file(root: Path, relpath: str, *, label: str) -> Path:
+    candidate = root / relpath
+    _no_symlink_components(candidate)
+    try:
+        resolved = candidate.resolve(strict=True)
+    except OSError as error:
+        raise GenerationControlError(f"{label} is unavailable") from error
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise GenerationControlError(f"{label} escaped its root")
+    if not 2 <= resolved.stat().st_size <= MAX_LIBRARY_INVENTORY_BYTES:
+        raise GenerationControlError(f"{label} exceeds its size budget")
+    return resolved
+
+
 def _generation_manifest(
     root: Path, *, verify_index_hash: bool = True
 ) -> tuple[dict[str, Any], Path, str]:
@@ -219,7 +234,15 @@ def _generation_manifest(
         "source_digest", "dense_index_digest", "dense_model_id",
         "index_sha256", "index_bytes", "production_eligible",
     }
-    if set(manifest) != required or manifest.get("schema_version") != GENERATION_SCHEMA_VERSION:
+    optional_revision = {
+        "library_revision", "library_paper_count", "paper_ids_digest",
+        "library_inventory_relpath", "library_inventory_sha256",
+    }
+    keys = set(manifest)
+    if (
+        frozenset(keys) not in {frozenset(required), frozenset(required | optional_revision)}
+        or manifest.get("schema_version") != GENERATION_SCHEMA_VERSION
+    ):
         raise GenerationControlError("generation manifest shape is invalid")
     if (
         manifest.get("status") != "ready"
@@ -234,6 +257,25 @@ def _generation_manifest(
     size = manifest.get("index_bytes")
     if isinstance(size, bool) or not isinstance(size, int) or not 1 <= size <= MAX_INDEX_BYTES:
         raise GenerationControlError("generation index size is invalid")
+    if keys == required | optional_revision and (
+        not isinstance(manifest.get("library_revision"), str)
+        or not _SHA256.fullmatch(manifest["library_revision"])
+        or isinstance(manifest.get("library_paper_count"), bool)
+        or not isinstance(manifest.get("library_paper_count"), int)
+        or manifest["library_paper_count"] < 1
+        or not isinstance(manifest.get("paper_ids_digest"), str)
+        or not _SHA256.fullmatch(manifest["paper_ids_digest"])
+        or manifest.get("library_inventory_relpath") != "library-inventory.json"
+        or not isinstance(manifest.get("library_inventory_sha256"), str)
+        or not _SHA256.fullmatch(manifest["library_inventory_sha256"])
+    ):
+        raise GenerationControlError("generation library revision is invalid")
+    if keys == required | optional_revision:
+        inventory = _safe_generation_file(
+            root, manifest["library_inventory_relpath"], label="generation library inventory"
+        )
+        if _sha256_file(inventory) != manifest["library_inventory_sha256"]:
+            raise GenerationControlError("generation library inventory does not match its manifest")
     dense_model_id = manifest.get("dense_model_id")
     if dense_model_id is not None and (
         not isinstance(dense_model_id, str)

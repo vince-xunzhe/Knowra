@@ -60,6 +60,7 @@ const sessions = {
 const indexStatus = { exists: true, healthy: true, path: 'fixture/index.md', size: 1024, estimated_tokens: 240, read_latency_ms: 1, current_papers: 2, current_concepts: 0, stale: false }
 const searchIndexStatus = { exists: true, healthy: true, total: 2, by_kind: { paper: 2, concept: 0 }, db_path: 'fixture/wiki_search.sqlite', db_size: 32768, indexed_characters: 1800, estimated_tokens: 520, stale: false, status_latency_ms: 2,
   source: { files: 2, by_kind: { paper: 2, concept: 0 }, bytes: 4096, characters: 1800, estimated_tokens: 520, token_estimate_method: 'fixture heuristic', unreadable_files: 0, latest_modified_ns: 0, measurement_ms: 1 } }
+const evidenceStatus = { status: 'ready', mode: 'assist', ready: true, generation_id: 'fixture-generation-v1', reason: 'reviewed_generation_active' }
 const chat = { messages: [], thread_created_at: null, expires_at: null, days_remaining: null, ttl_days: 30, ready: true }
 const notes = blocks => '<!--notes-v2-->\n' + JSON.stringify(blocks)
 function paper(id, title, category, learningStatus = 'not_started') {
@@ -134,6 +135,7 @@ try {
     const page = await newPage('ask', async (route, path) => {
       if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
       if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
+      if (path === '/api/wiki/ask/evidence-status') { await json(route, evidenceStatus); return true }
       if (path === '/api/wiki/ask') { asks++; await json(route, { detail: 'Synthetic ask failure' }, 400); return true }
       return false
     })
@@ -166,6 +168,7 @@ try {
     const page = await newPage('ask', async (route, path) => {
       if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
       if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
+      if (path === '/api/wiki/ask/evidence-status') { await json(route, evidenceStatus); return true }
       if (path === '/api/wiki/ask') {
         asks++
         await json(route, {
@@ -219,6 +222,7 @@ try {
           return true
         }
         if (path === '/api/wiki/search/stats') { await json(route, searchIndexStatus); return true }
+        if (path === '/api/wiki/ask/evidence-status') { await json(route, evidenceStatus); return true }
         if (path === '/api/wiki/outputs/render') { exports++; await exportReply.promise; await json(route, { rel_path: 'fixture-old-export.md' }); return true }
         return false
       })
@@ -262,6 +266,7 @@ try {
     const page = await newPage('ask', async (route, path, request) => {
       if (path === '/api/wiki/index/status') { await json(route, indexStatus); return true }
       if (path === '/api/wiki/search/stats') { searchStatusReads++; await json(route, searchIndexStatus); return true }
+      if (path === '/api/wiki/ask/evidence-status') { await json(route, evidenceStatus); return true }
       if (path === '/api/wiki/reindex' && request.method() === 'POST') {
         refreshes++
         if (refreshes === 1) {
@@ -275,10 +280,13 @@ try {
     })
     const overview = page.getByTestId('wiki-overview-status')
     const search = page.getByTestId('wiki-search-status')
+    const evidence = page.getByTestId('ask-evidence-status')
     await expect(overview).toContainText('Wiki 总览')
     await expect(overview).toContainText('index.md · 1.0 KB · ~240 tokens · 1 ms')
     await expect(search).toContainText('全文搜索')
     await expect(search).toContainText('FTS5 · 2 篇文档 · 32.0 KB · ~520 tokens · 2 ms')
+    await expect(evidence).toContainText('原文证据')
+    await expect(evidence).toContainText('已启用 · fixture-generation-v1')
     await expect(page.getByTestId('wiki-index-statuses')).toContainText('Wiki 目录 · 2 个文件 · 4.0 KB · ~520 tokens · 1 ms')
 
     const evidenceDir = process.env.KNOWRA_WIKI_INDEX_EVIDENCE_DIR

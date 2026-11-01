@@ -194,7 +194,19 @@ def startup():
 
 if not is_cloud_mode():
     from services.task_runtime import start_supervisor, stop_supervisor
+    from path_utils import DATA_DIR
+    from services.ask_generation_refresh import (
+        ensure_pending_refresh,
+    )
+
+    def _ensure_ask_generation_refresh() -> None:
+        try:
+            ensure_pending_refresh(live_data_root=DATA_DIR)
+        except Exception as error:
+            print(f"[ask_generation] startup refresh enqueue failed: {type(error).__name__}")
+
     app.add_event_handler("startup", start_supervisor)
+    app.add_event_handler("startup", _ensure_ask_generation_refresh)
     app.add_event_handler("shutdown", stop_supervisor)
     # Registered after startup() so the existing library schema is ready first.
     app.add_event_handler("startup", recommendation_local.start_local)

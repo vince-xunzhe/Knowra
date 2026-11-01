@@ -876,7 +876,9 @@ def _finish_result(
             budget=budget,
             reasoning_effort=reasoning_effort,
         )
-        if assisted is not None:
+        if assisted is not None and ask_shadow_integration.observation_is_current(
+            shadow_observation
+        ):
             final_answer, citations = assisted
             cited_files = [str(item["ref"]) for item in citations]
     if budget is not None:
@@ -1052,6 +1054,10 @@ def _answer_from_shadow_evidence(
         f"page={item.get('page_number')}\n{item['quote']}"
         for item in evidence
     )
+    # A delete/update after retrieval must fail closed immediately before any
+    # stale excerpt is sent to the configured answer provider.
+    if not ask_shadow_integration.observation_is_current(observation):
+        return None
     try:
         raw, blocked = _run_budgeted_model_call(
             budget,

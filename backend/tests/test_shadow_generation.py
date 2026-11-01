@@ -32,13 +32,14 @@ class RestoredShadowGenerationTests(unittest.TestCase):
         self.pdf.write_bytes(b"synthetic-pdf")
         database = sqlite3.connect(self.data / "knowledge.db")
         database.execute(
-            "CREATE TABLE papers (id TEXT, filename TEXT, file_hash TEXT, title TEXT, "
+            "CREATE TABLE papers (id TEXT, filepath TEXT, filename TEXT, file_hash TEXT, title TEXT, "
             "raw_llm_response TEXT, notes TEXT, processed INTEGER)"
         )
         database.execute(
-            "INSERT INTO papers VALUES (?,?,?,?,?,?,1)",
+            "INSERT INTO papers VALUES (?,?,?,?,?,?,?,1)",
             (
-                "paper-1", "paper.pdf", hashlib.sha256(b"synthetic-pdf").hexdigest(),
+                "paper-1", "data/papers/paper.pdf", "paper.pdf",
+                hashlib.md5(b"synthetic-pdf").hexdigest(),
                 "Synthetic Paper", json.dumps({
                     "title": "Synthetic Paper", "year": 2024,
                     "innovations": {"this_work": "Actions condition the transition."},

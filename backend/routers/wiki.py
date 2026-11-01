@@ -22,6 +22,7 @@ from database import get_db
 from models import KnowledgeNode, Paper
 from services.wiki_graph_service import build_wiki_graph
 from services import wiki_search as wiki_search_service
+from services.ask_shadow_integration import runtime_status as ask_evidence_runtime_status
 from services import wiki_index
 from services import wiki_lint_service
 from services.wiki_lint_job import lint_job
@@ -212,6 +213,12 @@ def get_status():
     from services.task_runtime import snapshot
     with _state_lock:
         return snapshot('compile', compile_state)
+
+
+@router.get("/ask/evidence-status")
+def get_ask_evidence_status():
+    """Report whether normal Ask can use a reviewed source-evidence generation."""
+    return ask_evidence_runtime_status()
 
 
 @router.get("/freshness")

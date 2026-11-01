@@ -17,6 +17,9 @@ sys.path.insert(0, str(BACKEND))
 import database  # noqa: E402
 from path_utils import DATA_DIR  # noqa: E402
 from services.paper_dedupe_service import repair_duplicate_papers  # noqa: E402
+from services.ask_generation_refresh import (  # noqa: E402
+    mark_and_enqueue_refresh,
+)
 from services.sqlite_backup import backup_sqlite
 
 
@@ -81,6 +84,9 @@ def main() -> int:
 
     # Now that duplicates are gone, install the uniqueness guards if possible.
     database.init_db()
+
+    if summary.removed_papers:
+        mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="paper_deduplicated")
 
     payload = summary.as_dict()
     payload["backup_dir"] = str(backup_dir) if backup_dir else None

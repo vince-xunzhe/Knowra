@@ -842,6 +842,19 @@ export const askWiki = (
     )
     .then(r => r.data)
 
+export interface AskEvidenceStatus {
+  status: 'ready' | 'stale' | 'not_initialized' | 'unavailable' | 'disabled' | 'diagnostic'
+  mode: string
+  ready: boolean
+  generation_id: string | null
+  reason: string
+  freshness?: 'fresh' | 'stale' | 'unknown' | 'unavailable'
+  paper_count?: number | null
+}
+
+export const getAskEvidenceStatus = () =>
+  api.get<AskEvidenceStatus>('/wiki/ask/evidence-status').then(r => r.data)
+
 export interface WikiIndexStatus {
   exists: boolean
   healthy?: boolean

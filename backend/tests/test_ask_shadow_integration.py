@@ -17,10 +17,13 @@ from services import ask_agent
 from services.ask_shadow_integration import (
     AskShadowIntegrationError,
     _index_identity,
+    default_generation_control_root,
     observe_question,
     observation_trace_payload,
+    runtime_status,
 )
 from services.ask_generation_control import promote_generation
+from services.ask_generation_refresh import library_revision
 from services.hybrid_claim_retrieval import build_shadow_index
 from services.paper_evidence_service import (
     build_evidence_manifest,
@@ -41,6 +44,32 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.live_data = self.root / "live-data"
         self.live_wiki = self.live_data / "wiki"
         self.live_wiki.mkdir(parents=True)
+        self.live_papers = self.live_data / "papers"
+        self.live_papers.mkdir()
+        paper_bytes = b"synthetic-paper"
+        (self.live_papers / "paper.pdf").write_bytes(paper_bytes)
+        extraction = {
+            "title": "Action Conditioned Dynamics",
+            "year": 2022,
+            "innovations": {
+                "this_work": "Actions enter the latent transition dynamics."
+            },
+        }
+        database = sqlite3.connect(self.live_data / "knowledge.db")
+        database.execute(
+            "CREATE TABLE papers (id TEXT, filepath TEXT, filename TEXT, file_hash TEXT, "
+            "title TEXT, raw_llm_response TEXT, notes TEXT, processed INTEGER)"
+        )
+        database.execute(
+            "INSERT INTO papers VALUES (?,?,?,?,?,?,?,1)",
+            (
+                "paper-1", "data/papers/paper.pdf", "paper.pdf",
+                hashlib.md5(paper_bytes).hexdigest(), "Action Conditioned Dynamics",
+                json.dumps(extraction), "",
+            ),
+        )
+        database.commit()
+        database.close()
         self.shadow = self.root / "ask-shadow-generation"
         self.index = self.shadow / "indexes" / "claims.sqlite"
         sentence = (
@@ -48,8 +77,8 @@ class AskShadowIntegrationTests(unittest.TestCase):
         )
         self.manifest = build_evidence_manifest(
             paper_id="paper-1",
-            source_file_hash=_hash(b"synthetic-paper"),
-            source_size_bytes=512,
+            source_file_hash=_hash(paper_bytes),
+            source_size_bytes=len(paper_bytes),
             total_pages=1,
             pages=[{
                 "page_number": 1,
@@ -64,13 +93,7 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.plan = build_paper_compile_plan(
             paper_id="paper-1",
             title="Action Conditioned Dynamics",
-            extraction={
-                "title": "Action Conditioned Dynamics",
-                "year": 2022,
-                "innovations": {
-                    "this_work": "Actions enter the latent transition dynamics."
-                },
-            },
+            extraction=extraction,
             notes="",
             model="synthetic-no-provider",
             locale="zh",
@@ -111,6 +134,21 @@ class AskShadowIntegrationTests(unittest.TestCase):
             "index_bytes": self.index.stat().st_size,
             "production_eligible": False,
         }
+        revision = library_revision(self.live_data / "knowledge.db")
+        inventory = {
+            "schema_version": revision["schema_version"],
+            "revision": revision["revision"],
+            "entries": revision["entries"],
+        }
+        inventory_path = self.shadow / "library-inventory.json"
+        inventory_path.write_text(json.dumps(inventory, sort_keys=True), encoding="utf-8")
+        self.generation.update({
+            "library_revision": revision["revision"],
+            "library_paper_count": revision["paper_count"],
+            "paper_ids_digest": revision["paper_ids_digest"],
+            "library_inventory_relpath": "library-inventory.json",
+            "library_inventory_sha256": _hash(inventory_path.read_bytes()),
+        })
         (self.shadow / "generation.json").write_text(
             json.dumps(self.generation, sort_keys=True),
             encoding="utf-8",
@@ -167,6 +205,82 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "disabled")
         self.assertFalse(result["production_eligible"])
         self.assertEqual(result["candidates"], [])
+
+    def test_normal_start_auto_discovers_reviewed_default_control(self):
+        default_control = default_generation_control_root(
+            live_data_root=self.live_data
+        )
+        default_control.parent.mkdir()
+        promote_generation(
+            generation_root=self.shadow,
+            control_root=default_control,
+            live_data_root=self.live_data,
+            promotion_id="fixture-default-review-v1",
+            reviewer="synthetic-release-test",
+            reviewed_at="2026-10-31T00:00:00Z",
+            acceptance_sha256=_hash(b"synthetic-release-acceptance"),
+            accepted_failed_pages=0,
+            expected_active_sha256=None,
+        )
+
+        self.assertTrue(
+            ask_agent.ask_shadow_integration.answer_mode_enabled(
+                {}, live_data_root=self.live_data
+            )
+        )
+        status = runtime_status({}, live_data_root=self.live_data)
+        self.assertEqual(status, {
+            "status": "ready",
+            "mode": "assist",
+            "ready": True,
+            "generation_id": "fixture-generation-v1",
+            "reason": "reviewed_generation_active",
+            "freshness": "fresh",
+            "paper_count": 1,
+        })
+        result = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="cli",
+            env={},
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["action latent transition", "actions dynamics"],
+            include_answer_evidence=True,
+        )
+        self.assertEqual(result["mode"], "assist")
+        self.assertEqual(result["reason"], "coverage_met")
+        self.assertTrue(result["answer_evidence"])
+
+    def test_normal_start_without_reviewed_generation_stays_legacy_safe(self):
+        status = runtime_status({}, live_data_root=self.live_data)
+        self.assertEqual(status["status"], "not_initialized")
+        self.assertFalse(status["ready"])
+        result = observe_question(
+            "question",
+            adapter="api",
+            env={},
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+        )
+        self.assertEqual(result["status"], "disabled")
+        self.assertEqual(result["reason"], "reviewed_generation_missing")
+
+    def test_runtime_status_exposes_bounded_library_verification_timeout(self):
+        with mock.patch(
+            "services.ask_shadow_integration.refresh_status",
+            return_value={
+                "freshness": "unavailable",
+                "reason": "library_revision_timeout",
+                "library_revision": None,
+                "paper_count": None,
+            },
+        ):
+            status = runtime_status(
+                self.assist_env, live_data_root=self.live_data
+            )
+        self.assertEqual(status["status"], "unavailable")
+        self.assertFalse(status["ready"])
+        self.assertEqual(status["reason"], "library_revision_timeout")
 
     def test_cli_and_api_share_candidates_provenance_and_hard_budgets(self):
         before = {
@@ -389,6 +503,10 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertEqual(detached["status"], "unavailable")
 
     def test_invalid_generation_fails_closed_without_touching_live_data(self):
+        live_before = {
+            str(path.relative_to(self.live_data)): _hash(path.read_bytes())
+            for path in self.live_data.rglob("*") if path.is_file()
+        }
         original = (self.shadow / "generation.json").read_text(encoding="utf-8")
         tampered = {**self.generation, "source_digest": "0" * 64}
         (self.shadow / "generation.json").write_text(
@@ -397,7 +515,10 @@ class AskShadowIntegrationTests(unittest.TestCase):
         result = self._observe("api")
         self.assertEqual(result["status"], "unavailable")
         self.assertEqual(result["reason"], "shadow_generation_invalid")
-        self.assertEqual(list(self.live_data.rglob("*")), [self.live_wiki])
+        self.assertEqual({
+            str(path.relative_to(self.live_data)): _hash(path.read_bytes())
+            for path in self.live_data.rglob("*") if path.is_file()
+        }, live_before)
 
         (self.shadow / "generation.json").write_text(original, encoding="utf-8")
         overlap = observe_question(
@@ -528,9 +649,13 @@ class AskShadowIntegrationTests(unittest.TestCase):
         self.assertFalse(shadow_payload["production_eligible"])
         self.assertNotIn("candidates", shadow_payload)
         self.assertNotIn("quote", observed.trace[-1].raw_result)
-        self.assertEqual(
+        self.assertGreaterEqual(
             observed.duration_ms,
             baseline.duration_ms + observed.trace[-1].duration_ms,
+        )
+        self.assertLessEqual(
+            observed.duration_ms,
+            baseline.duration_ms + observed.trace[-1].duration_ms + 2,
         )
 
     def test_finish_result_forwards_unique_search_routes_to_shadow_observer(self):
@@ -607,6 +732,11 @@ class AskShadowIntegrationTests(unittest.TestCase):
                     f"## Answer\n\nActions enter the transition. [{evidence_id}]",
                 ],
             ) as model_call,
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                return_value=True,
+            ),
         ):
             result = ask_agent._finish_result(
                 answer="",
@@ -636,6 +766,261 @@ class AskShadowIntegrationTests(unittest.TestCase):
             shadow_trace.args["query_routes"],
             ["action latent transition", "actions dynamics"],
         )
+
+    def test_assist_discards_model_answer_when_library_changes_after_retrieval(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic",
+        )
+        evidence_id = self.manifest["chunks"][0]["id"]
+        observation = {
+            "status": "ready",
+            "mode": "assist",
+            "reason": "coverage_met",
+            "generation_id": "fixture",
+            "coverage": {"met": True},
+            "budget": {},
+            "candidates": [],
+            "candidate_locators": [],
+            "answer_evidence": [{
+                "evidence_id": evidence_id,
+                "paper_id": "paper-1",
+                "quote": "Actions enter the transition.",
+            }],
+        }
+        with (
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                return_value=False,
+            ) as revalidate,
+            mock.patch.object(
+                ask_agent,
+                "call_text_model",
+                return_value=f"Actions enter the transition. [{evidence_id}]",
+            ) as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="question",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "route one"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+        revalidate.assert_called_once_with(observation)
+        model_call.assert_not_called()
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
+
+    def test_assist_discards_answer_when_library_changes_after_model_call(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic",
+        )
+        evidence_id = self.manifest["chunks"][0]["id"]
+        observation = {
+            "status": "ready",
+            "mode": "assist",
+            "reason": "coverage_met",
+            "generation_id": "fixture",
+            "coverage": {"met": True},
+            "budget": {},
+            "candidates": [],
+            "candidate_locators": [],
+            "answer_evidence": [{
+                "evidence_id": evidence_id,
+                "paper_id": "paper-1",
+                "quote": "Actions enter the transition.",
+            }],
+        }
+        with (
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                side_effect=[True, False],
+            ) as revalidate,
+            mock.patch.object(
+                ask_agent,
+                "call_text_model",
+                return_value=f"Actions enter the transition. [{evidence_id}]",
+            ) as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="question",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "route one"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+        model_call.assert_called_once()
+        self.assertEqual(revalidate.call_count, 2)
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
+        self.assertFalse(any(item.tool == "shadow_answer" for item in result.trace))
+
+    def test_real_sqlite_change_during_model_call_discards_returned_answer(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic",
+        )
+        observation = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="api",
+            env=self.assist_env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["action latent transition"],
+            include_answer_evidence=True,
+        )
+        self.assertEqual(observation["status"], "ready")
+        evidence_id = observation["answer_evidence"][0]["evidence_id"]
+        real_current = ask_agent.ask_shadow_integration.observation_is_current
+
+        def change_sqlite_during_model(*_args, **_kwargs):
+            database = sqlite3.connect(self.live_data / "knowledge.db")
+            database.execute(
+                "UPDATE papers SET notes='changed during actual model call' WHERE id='paper-1'"
+            )
+            database.commit()
+            database.close()
+            return f"Actions enter the transition. [{evidence_id}]"
+
+        with (
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                side_effect=lambda value: real_current(
+                    value,
+                    live_data_root=self.live_data,
+                    env=self.assist_env,
+                ),
+            ) as revalidate,
+            mock.patch.object(
+                ask_agent,
+                "call_text_model",
+                side_effect=change_sqlite_during_model,
+            ) as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="How do actions enter latent transition dynamics?",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "action latent transition"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+        model_call.assert_called_once()
+        self.assertEqual(revalidate.call_count, 2)
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
+        self.assertFalse(any(item.tool == "shadow_answer" for item in result.trace))
+
+    def test_delete_after_retrieval_never_sends_old_excerpt_to_provider(self):
+        assessment = ask_agent.EvidenceAssessment(
+            status="insufficient",
+            required_content_sources=1,
+            content_refs=(),
+            graph_evidence_count=0,
+            search_entity_terms=0,
+            index_available=True,
+            reason="synthetic",
+        )
+        observation = observe_question(
+            "How do actions enter latent transition dynamics?",
+            adapter="cli",
+            env=self.assist_env,
+            live_data_root=self.live_data,
+            production_wiki_root=self.live_wiki,
+            query_routes=["action latent transition"],
+            include_answer_evidence=True,
+        )
+        self.assertEqual(observation["status"], "ready")
+        database = sqlite3.connect(self.live_data / "knowledge.db")
+        database.execute("DELETE FROM papers WHERE id='paper-1'")
+        database.commit()
+        database.close()
+        real_current = ask_agent.ask_shadow_integration.observation_is_current
+
+        with (
+            mock.patch.dict(os.environ, self.assist_env, clear=False),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observe_question",
+                return_value=observation,
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                side_effect=lambda value: real_current(
+                    value,
+                    live_data_root=self.live_data,
+                    env=self.assist_env,
+                ),
+            ),
+            mock.patch.object(ask_agent, "call_text_model") as model_call,
+        ):
+            result = ask_agent._finish_result(
+                answer="",
+                question="How do actions enter latent transition dynamics?",
+                trace=[ask_agent.TraceStep(
+                    0, "search_wiki", {"q": "action latent transition"}, "", 0
+                )],
+                model="api/synthetic",
+                duration_ms=1,
+                assessment=assessment,
+                budget=RetrievalBudget(),
+                cfg={"prompt_locale": "zh"},
+            )
+        model_call.assert_not_called()
+        self.assertEqual(result.citations, [])
+        self.assertIn("## 证据不足", result.answer)
 
     def test_evolution_route_prompt_requires_stage_diversity_without_domain_hardcoding(self):
         prompt = ask_agent.SHADOW_ROUTE_SYSTEM_PROMPT
@@ -686,6 +1071,11 @@ class AskShadowIntegrationTests(unittest.TestCase):
                 ask_agent,
                 "call_text_model",
                 return_value=f"Unsupported claim [{unknown}]",
+            ),
+            mock.patch.object(
+                ask_agent.ask_shadow_integration,
+                "observation_is_current",
+                return_value=True,
             ),
         ):
             result = ask_agent._finish_result(

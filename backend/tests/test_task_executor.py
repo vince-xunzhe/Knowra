@@ -71,13 +71,16 @@ class TaskExecutorTests(unittest.TestCase):
             papers.processing_state['done'] += 1
             papers.processing_state['succeeded'] += 1
         job = self.queue.submit('papers', 'papers', {'paper_ids': ['a', 'b']})
-        with patch.object(papers, '_process_single', side_effect=process):
+        with patch.object(papers, '_process_single', side_effect=process), \
+             patch('services.ask_generation_refresh.mark_and_enqueue_refresh') as refresh:
             executor.execute(self.queue, self.queue.claim())
             self.assertEqual(self.queue.get(job['job_id'])['status'], 'failed')
             self.assertIn('paper:a', self.queue.get(job['job_id'])['checkpoints'])
+            refresh.assert_called_once()
             fail_b = False
             self.queue.resume(job['job_id'])
             executor.execute(self.queue, self.queue.claim())
+            self.assertEqual(refresh.call_count, 2)
         self.assertEqual(calls, ['a', 'b', 'b'])
         self.assertEqual(self.queue.get(job['job_id'])['status'], 'completed')
         self.assertEqual(self.queue.snapshot('papers')['done'], 2)
@@ -110,6 +113,28 @@ class TaskExecutorTests(unittest.TestCase):
         saved = self.queue.get(job['job_id'])
         self.assertEqual(saved['status'], 'failed')
         self.assertEqual(saved['result'], report)
+
+    def test_pipeline_completion_requeues_durable_generation_marker(self):
+        state_root = Path(self.tmp.name) / "refresh"
+        state_root.mkdir()
+        (state_root / "refresh-request.json").write_text("{}")
+        job = self.queue.submit("test", "pipeline", {})
+        executor.HANDLERS["test"] = lambda ctx, payload: {"ok": True}
+        self.addCleanup(executor.HANDLERS.pop, "test", None)
+
+        def ensure(**kwargs):
+            self.assertEqual(self.queue.get(job["job_id"])["status"], "completed")
+            return {"requested": True}
+
+        with patch(
+            "services.ask_generation_refresh.default_refresh_paths",
+            return_value={"state_root": state_root},
+        ), patch(
+            "services.ask_generation_refresh.ensure_pending_refresh",
+            side_effect=ensure,
+        ) as pending:
+            executor.execute(self.queue, self.queue.claim())
+        pending.assert_called_once()
 
     def test_compilation_restores_successful_page_checkpoints(self):
         from routers import wiki

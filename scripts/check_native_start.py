@@ -33,7 +33,7 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 
-PYTHON_GUARD = r'''import json, os, pathlib, socket, sys
+PYTHON_GUARD = r'''import json, os, pathlib, socket, sys, urllib.parse
 ROOT = pathlib.Path(os.environ['KNOWRA_SMOKE_ROOT']).resolve()
 RECORD = ROOT / '.cache/processes.jsonl'
 VIOLATIONS = ROOT / '.cache/violations.jsonl'
@@ -64,7 +64,11 @@ def audit(event, args):
     elif event == 'socket.getaddrinfo' and args[0] not in ('127.0.0.1', '::1', 'localhost', None):
         deny('external DNS', args[0])
     elif event == 'sqlite3.connect':
-        path = pathlib.Path(args[0]).resolve()
+        raw = os.fsdecode(args[0])
+        if raw.startswith('file:'):
+            path = pathlib.Path(urllib.parse.unquote(urllib.parse.urlparse(raw).path)).resolve()
+        else:
+            path = pathlib.Path(raw).resolve()
         if os.environ.get('KNOWRA_SMOKE_NO_DATA_OPEN') == '1': deny('prelaunch SQLite', path)
         if not path.is_relative_to(ROOT / 'data'): deny('outside SQLite', path)
     elif event == 'subprocess.Popen':

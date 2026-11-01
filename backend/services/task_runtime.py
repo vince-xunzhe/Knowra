@@ -103,6 +103,20 @@ def start_supervisor():
         while not _supervisor_stop.wait(5):
             try:
                 ensure_worker()
+                from services.ask_generation_refresh import (
+                    REFRESH_REQUEST_FILENAME,
+                    default_refresh_paths,
+                    ensure_pending_refresh,
+                )
+                marker = (
+                    default_refresh_paths(DATA_DIR)["state_root"]
+                    / REFRESH_REQUEST_FILENAME
+                )
+                if marker.is_file():
+                    ensure_pending_refresh(
+                        live_data_root=DATA_DIR,
+                        retry_after_seconds=60.0,
+                    )
             except Exception:
                 import traceback
                 traceback.print_exc()

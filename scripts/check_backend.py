@@ -38,6 +38,7 @@ TESTS = (
     "tests.test_shadow_ask_e2e",
     "tests.test_ask_generation_control",
     "tests.test_ask_shadow_integration",
+    "tests.test_ask_generation_refresh",
     "tests.test_shadow_generation",
     "tests.test_two_stage_shadow_retrieval",
 )

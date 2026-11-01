@@ -1,0 +1,27 @@
+{
+  "baseline": "origin/main",
+  "node": "v24.14.1",
+  "browser": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "before": {
+    "variant": "before",
+    "statusText": "Wiki 总览\nindex.md · 1.0 KB · ~240 tokens · 1 ms · 2 论文 / 0 概念\n刷新总览",
+    "failureRetained": null,
+    "requests": [
+      "GET /api/wiki/index/status",
+      "GET /api/wiki/search/stats"
+    ],
+    "violations": []
+  },
+  "after": {
+    "variant": "after",
+    "statusText": "Wiki 总览\nindex.md · 1.0 KB · ~240 tokens · 1 ms · 2 论文 / 0 概念\n刷新总览\n全文搜索\nFTS5 · 2 篇文档 · 32.0 KB · ~520 tokens · 2 ms\n刷新全文索引\nWiki 目录 · 2 个文件 · 4.0 KB · ~520 tokens · 1 ms\n原文证据\n已启用 · fixture-generation-v1",
+    "failureRetained": true,
+    "requests": [
+      "GET /api/wiki/index/status",
+      "GET /api/wiki/search/stats",
+      "GET /api/wiki/ask/evidence-status",
+      "POST /api/wiki/reindex"
+    ],
+    "violations": []
+  }
+}
