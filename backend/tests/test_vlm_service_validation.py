@@ -286,6 +286,12 @@ class ExtractionValidationTests(unittest.TestCase):
         self.assertEqual(vector_store_id, "")
         self.assertTrue(thread_id.startswith("local-codex-extract:"))
         self.assertEqual(mock_call_text_model.call_count, 2)
+        operation_ids = [
+            call.kwargs["attempt_operation_id"]
+            for call in mock_call_text_model.call_args_list
+        ]
+        self.assertTrue(operation_ids[0].startswith("paper-extract:map:"))
+        self.assertTrue(operation_ids[1].startswith("paper-extract:final:"))
         final_call = mock_call_text_model.call_args_list[-1].kwargs
         self.assertIn("[HIERARCHICAL_EVIDENCE_NOTES]", final_call["user"])
         self.assertIn("[NOTE id=map:", final_call["user"])

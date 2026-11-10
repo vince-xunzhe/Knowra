@@ -5,6 +5,8 @@ Compatibility strategy:
 - Newer GPT-5.4/5.5 models use Responses API + file_search because they are
   not available in the Assistants API.
 """
+from __future__ import annotations
+
 import json
 import math
 import re
@@ -68,7 +70,7 @@ class PaperExtractionError(RuntimeError):
 
 @dataclass(frozen=True)
 class PaperExtractionResult:
-    """Backward-compatible six-value result with explicit coverage metadata."""
+    """Backward-compatible six-value result plus local audit artifacts."""
 
     parsed: dict
     raw: str
@@ -77,6 +79,7 @@ class PaperExtractionResult:
     thread_id: str
     vector_store_id: str
     coverage: dict
+    evidence_manifest: Optional[dict] = None
 
     def __iter__(self) -> Iterator[object]:
         yield self.parsed
@@ -795,6 +798,10 @@ def extract_knowledge_from_paper(
                     max_tokens=1800,
                     temperature=0.1,
                     timeout_s=LOCAL_EXTRACTION_CHUNK_TIMEOUT_S,
+                    attempt_operation_id=(
+                        f"paper-extract:map:{manifest['source']['file_hash_sha256']}:"
+                        f"{batch.batch_id}"
+                    ),
                 ).strip()
 
             def call_reduce(level: int, group_id: str, text: str, pages: tuple[int, ...]) -> str:
@@ -814,6 +821,10 @@ def extract_knowledge_from_paper(
                     max_tokens=1800,
                     temperature=0.1,
                     timeout_s=LOCAL_EXTRACTION_REDUCE_TIMEOUT_S,
+                    attempt_operation_id=(
+                        f"paper-extract:reduce:{manifest['source']['file_hash_sha256']}:"
+                        f"{group_id}"
+                    ),
                 ).strip()
 
             notes = prepare_hierarchical_notes(
@@ -844,7 +855,7 @@ def extract_knowledge_from_paper(
                     raise ExtractionCoverageError("checkpointed final extraction is invalid")
                 synthetic_thread_id = f"local-codex-extract:{Path(pdf_filepath).stem}"
                 return PaperExtractionResult(
-                    parsed, raw, "", "", synthetic_thread_id, "", coverage
+                    parsed, raw, "", "", synthetic_thread_id, "", coverage, manifest
                 )
 
             num_pages = int(manifest["source"].get("total_pages") or 0)
@@ -893,6 +904,10 @@ def extract_knowledge_from_paper(
                         max_tokens=4000,
                         temperature=0.1,
                         timeout_s=strategy["timeout_s"],
+                        attempt_operation_id=(
+                            f"paper-extract:final:{manifest['source']['file_hash_sha256']}:"
+                            f"{strategy['name']}"
+                        ),
                     )
                     break
                 except Exception as exc:
@@ -941,7 +956,7 @@ def extract_knowledge_from_paper(
             ) from e
         synthetic_thread_id = f"local-codex-extract:{Path(pdf_filepath).stem}"
         return PaperExtractionResult(
-            parsed, raw, "", "", synthetic_thread_id, "", coverage
+            parsed, raw, "", "", synthetic_thread_id, "", coverage, manifest
         )
 
     client = OpenAI(api_key=api_key)
@@ -1031,6 +1046,7 @@ def extract_knowledge_from_paper(
         thread_id,
         vector_store_id,
         coverage,
+        audit_manifest,
     )
 
 

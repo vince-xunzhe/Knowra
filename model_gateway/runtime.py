@@ -11,6 +11,11 @@ from typing import Any
 
 from openai import OpenAI
 
+from .attempt_budget import (
+    ProviderAttemptBudget,
+    ProviderAttemptBudgetError,
+    request_identity,
+)
 from .config import get_model_entry, get_provider_entry
 from .telemetry import log_codex_cli_call, track_call
 
@@ -313,7 +318,7 @@ def create_openai_client_for_model(
     return client, model_entry["upstream_model"], provider, model_entry
 
 
-def call_text_model(
+def _call_text_model_unbudgeted(
     cfg: dict[str, Any],
     *,
     model_id: str,
@@ -418,6 +423,69 @@ def call_text_model(
         surface="chat",
     )
     return (response.choices[0].message.content or "").strip()
+
+
+def call_text_model(
+    cfg: dict[str, Any],
+    *,
+    model_id: str,
+    system: str,
+    user: str,
+    max_tokens: int = 1800,
+    temperature: float = 0.3,
+    reasoning_effort: str | None = None,
+    image_paths: list[str] | None = None,
+    timeout_s: int = 180,
+    attempt_operation_id: str | None = None,
+) -> str:
+    budget = ProviderAttemptBudget.from_environment()
+    if budget is None:
+        return _call_text_model_unbudgeted(
+            cfg,
+            model_id=model_id,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            image_paths=image_paths,
+            timeout_s=timeout_s,
+        )
+    if not attempt_operation_id:
+        raise ProviderAttemptBudgetError(
+            "provider attempt guard is active but this request has no operation id"
+        )
+    reservation = budget.reserve(
+        attempt_operation_id,
+        request_identity(
+            model_id=model_id,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            image_paths=image_paths,
+        ),
+    )
+    try:
+        result = _call_text_model_unbudgeted(
+            cfg,
+            model_id=model_id,
+            system=system,
+            user=user,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            reasoning_effort=reasoning_effort,
+            image_paths=image_paths,
+            timeout_s=timeout_s,
+        )
+    except Exception as error:
+        budget.finish(reservation, status="unknown", error_class=type(error).__name__)
+        raise ProviderAttemptBudgetError(
+            f"provider attempt {reservation.number} outcome is unknown; automatic replay blocked"
+        ) from error
+    budget.finish(reservation, status="succeeded")
+    return result
 
 
 def embed_text(

@@ -293,7 +293,14 @@ def invalidate_from(
     public_order = ["extraction", "graph", "wiki", "search"]
     if layer not in public_order:
         raise ValueError(f"Unknown manifest layer: {layer}")
-    order = ["extraction", "extraction_coverage", "graph", "wiki", "search"]
+    order = [
+        "extraction",
+        "extraction_coverage",
+        "source_evidence",
+        "graph",
+        "wiki",
+        "search",
+    ]
     manifest = load_manifest(paper_id, root=root)
     layers = manifest.setdefault("layers", {})
     for name in order[order.index(layer) :]:

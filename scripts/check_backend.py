@@ -33,6 +33,8 @@ TESTS = (
     "tests.test_ask_quality_eval",
     "tests.test_paper_evidence_service",
     "tests.test_paper_extraction_hierarchy",
+    "tests.test_paper_source_compilation",
+    "tests.test_provider_attempt_budget",
     "tests.test_vlm_service_validation",
     "tests.test_wiki_claims",
     "tests.test_hybrid_claim_retrieval",

@@ -34,7 +34,15 @@ ensure_project_root_on_path()
 
 from models import KnowledgeNode, Paper
 from model_gateway import call_text_model
-from path_utils import DATA_DIR
+from path_utils import DATA_DIR, resolve_paper_path
+from services.paper_evidence_service import build_pdf_evidence
+from services.paper_source_compilation import (
+    SOURCE_WIKI_POLICY,
+    compile_source_wiki,
+    load_current_evidence_manifest,
+    save_current_evidence_manifest,
+    source_batch_prompt,
+)
 from services.graph_service import (
     is_publishable_concept_node,
     node_origin,
@@ -209,8 +217,14 @@ def _normalize_int_list(values: Any) -> List[int]:
     return out
 
 
-def _paper_compile_signature(paper: Paper, model: Optional[str] = None) -> str:
+def _paper_compile_signature(
+    paper: Paper,
+    model: Optional[str] = None,
+    *,
+    source_manifest_id: Optional[str] = None,
+) -> str:
     return _hash_payload({
+        "compiler_policy": SOURCE_WIKI_POLICY if source_manifest_id else "legacy-extraction-wiki-v1",
         "paper_id": paper.id,
         "title": paper.title or paper.filename,
         "authors": list(paper.authors or []),
@@ -219,6 +233,7 @@ def _paper_compile_signature(paper: Paper, model: Optional[str] = None) -> str:
         "wiki_compile_model": model,
         "raw_llm_response": paper.raw_llm_response or "",
         "notes": paper.notes or "",
+        "source_manifest_id": source_manifest_id,
     })
 
 
@@ -288,6 +303,7 @@ def _call_llm(
     reasoning_effort: Optional[str] = None,
     task_id: Optional[str] = None,
     timeout_s: Optional[int] = None,
+    attempt_operation_id: Optional[str] = None,
 ) -> str:
     """Dispatch plain text generation through the shared model gateway.
 
@@ -326,6 +342,7 @@ def _call_llm(
             max_tokens=max_tokens,
             temperature=0.3,
             reasoning_effort=reasoning_effort,
+            attempt_operation_id=attempt_operation_id,
             **extra,
         )
 
@@ -340,6 +357,13 @@ PAPER_PAGE_SYSTEM = (
     "3. 涉及到的概念/方法/数据集名称用 [[名称]] 标记，方便后续 backlink。\n"
     "4. 末尾不要写 Sources 段；frontmatter 已记录 paper_id。"
 )
+
+PAPER_SOURCE_PAGE_SYSTEM = (
+    "你是个人论文 Wiki 的分页编译器。输入包含一段带 evidence_id、页码和字符范围的"
+    "论文原文。只根据当前批次写 Markdown 小节，保留方法、实验数字、表格表头与数据行"
+    "的关系、限制和反例；每个事实段落都标页码。不要把文本覆盖说成图表或公式视觉理解。"
+)
+PAPER_SOURCE_PROMPT_VERSION = "paper-source-page-v1"
 
 # Wiki generation is an offline batch job. Codex CLI calls regularly finish
 # close to the gateway's 180-second interactive ceiling, so give compile jobs
@@ -356,11 +380,11 @@ def _paper_user_prompt(paper: Paper, extraction: dict) -> str:
         "",
         "## 抽取 JSON",
         "```json",
-        extraction_text[:8000],
+        extraction_text,
         "```",
     ]
     if paper.notes:
-        parts += ["", "## 用户笔记", paper.notes[:4000]]
+        parts += ["", "## 用户笔记", paper.notes]
     parts += [
         "",
         "请输出 wiki 条目。建议章节（仅在材料覆盖时才写，没有就跳过）：",
@@ -545,25 +569,99 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
     except (TypeError, json.JSONDecodeError):
         extraction = None
     if not isinstance(extraction, dict):
-        extraction = {"_raw": str(paper.raw_llm_response)[:4000]}
+        extraction = {"_raw": str(paper.raw_llm_response)}
+
+    source_manifest = None
+    filepath = str(getattr(paper, "filepath", "") or "").strip()
+    if filepath:
+        recorded_hash = str(getattr(paper, "file_hash", "") or "").lower()
+        trusted_hash = (
+            recorded_hash
+            if re.fullmatch(r"[0-9a-f]{64}", recorded_hash)
+            else None
+        )
+        source_manifest = load_current_evidence_manifest(
+            root=DATA_DIR / "paper_evidence",
+            paper_id=str(paper.id),
+            library_file_hash=recorded_hash or None,
+            source_sha256=trusted_hash,
+        )
+        if source_manifest is None:
+            pdf_path = resolve_paper_path(filepath)
+            if not pdf_path.is_file():
+                raise FileNotFoundError(f"paper PDF is unavailable: {pdf_path}")
+            source_manifest = build_pdf_evidence(
+                pdf_path,
+                paper_id=str(paper.id),
+                source_file_hash=trusted_hash,
+            )
+            save_current_evidence_manifest(
+                source_manifest,
+                root=DATA_DIR / "paper_evidence",
+                library_file_hash=recorded_hash or None,
+            )
 
     WIKI_PAPERS_DIR.mkdir(parents=True, exist_ok=True)
     path = _paper_page_path(paper)
-    signature = _paper_compile_signature(paper, model)
+    source_manifest_id = (
+        str(source_manifest["manifest_id"]) if source_manifest is not None else None
+    )
+    signature = _paper_compile_signature(
+        paper,
+        model,
+        source_manifest_id=source_manifest_id,
+    )
     if path.is_file():
         existing_meta = _read_frontmatter_from_path(path) or {}
         if existing_meta.get("source_signature") == signature:
             _cleanup_same_id_pages(WIKI_PAPERS_DIR, "paper_id", paper.id, path)
             return path
 
-    body = _call_llm(
-        None,
-        model,
-        PAPER_PAGE_SYSTEM,
-        _paper_user_prompt(paper, extraction),
-        task_id="wiki_compile",
-        timeout_s=WIKI_COMPILE_TIMEOUT_S,
-    )
+    source_coverage: dict[str, Any] | None = None
+    if source_manifest is not None:
+        cfg = load_config()
+        reasoning_effort = task_reasoning_effort(cfg, "wiki_compile")
+
+        def call_source_batch(batch, index: int, total: int) -> str:
+            return _call_llm(
+                None,
+                model,
+                PAPER_SOURCE_PAGE_SYSTEM,
+                source_batch_prompt(batch, index=index, total=total),
+                max_tokens=2400,
+                reasoning_effort=reasoning_effort,
+                task_id="wiki_compile",
+                timeout_s=WIKI_COMPILE_TIMEOUT_S,
+                attempt_operation_id=(
+                    f"paper-wiki:{source_manifest['source']['file_hash_sha256']}:"
+                    f"{batch.batch_id}"
+                ),
+            )
+
+        compiled = compile_source_wiki(
+            source_manifest,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            prompt_version=PAPER_SOURCE_PAGE_SYSTEM + "\n" + PAPER_SOURCE_PROMPT_VERSION,
+            call_batch=call_source_batch,
+            checkpoint_root=DATA_DIR / "wiki_source_checkpoints" / str(paper.id),
+        )
+        body = compiled.body
+        if paper.notes:
+            body += "\n## 用户笔记\n\n" + paper.notes + "\n"
+        source_coverage = compiled.coverage
+    else:
+        # Compatibility path for synthetic/unit callers without a source PDF.
+        # Real papers with a filepath fail above rather than silently returning
+        # to the historical 8k prefix behavior.
+        body = _call_llm(
+            None,
+            model,
+            PAPER_PAGE_SYSTEM,
+            _paper_user_prompt(paper, extraction),
+            task_id="wiki_compile",
+            timeout_s=WIKI_COMPILE_TIMEOUT_S,
+        )
 
     title = _paper_page_title(paper)
     slug = _slugify(title, fallback=f"paper-{paper.id}")
@@ -579,9 +677,24 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
         "paper_category": effective_paper_category(paper, extraction if isinstance(extraction, dict) else None),
         "compiled_at": _now_iso(),
         "compile_model": model,
+        "compiler_policy": (
+            SOURCE_WIKI_POLICY if source_coverage is not None else "legacy-extraction-wiki-v1"
+        ),
         "source_signature": signature,
         "source_record": f"data/paper_records/{_id_prefix(paper)}-{record_stem}.md",
     }
+    if source_coverage is not None:
+        meta.update({
+            "source_manifest_id": source_coverage["source_manifest_id"],
+            "source_sha256": source_coverage["source_sha256"],
+            "source_pages": source_coverage["source_pages"],
+            "source_characters": source_coverage["source_characters"],
+            "source_chunks": source_coverage["source_chunks"],
+            "source_compile_batches": source_coverage["compile_batches"],
+            "text_coverage": source_coverage["text_coverage"],
+            "semantic_completeness": source_coverage["semantic_completeness"],
+            "visual_coverage": source_coverage["visual_coverage"],
+        })
     page = _render_frontmatter(meta) + f"\n# {title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
     removed = _cleanup_same_id_pages(WIKI_PAPERS_DIR, "paper_id", paper.id, path)

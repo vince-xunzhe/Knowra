@@ -20,12 +20,12 @@ import {
   listPapers, getPaper, reprocessPaper, updatePaperResponse, updatePaperCategory, updatePaperNotes,
   updatePaperLearningStatus,
   getStatus,
-  pdfFileUrl, firstPageUrl,
+  pdfFileUrl, firstPageUrl, getPaperSourceEvidence,
   sendPaperChat, resetPaperChat, uploadNoteImage,
   listPaperCategories,
   type PaperRecord, type PaperDetail, type PaperCategoryItem,
   type PaperLearningStatus,
-  type ChatState, type ChatMessage,
+  type ChatState, type ChatMessage, type PaperSourceEvidencePage,
 } from '../api/client'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
@@ -104,6 +104,119 @@ interface ActionNotice {
 
 interface ReviewPageProps {
   initialPaperId?: number | string | null
+}
+
+function SourceEvidencePanel({ paperId, sourcePages }: { paperId: number; sourcePages: number }) {
+  useLocale()
+  const [open, setOpen] = useState(false)
+  const [page, setPage] = useState(1)
+  const [payload, setPayload] = useState<PaperSourceEvidencePage | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    getPaperSourceEvidence(paperId, page)
+      .then(result => {
+        if (!cancelled) setPayload(result)
+      })
+      .catch(reason => {
+        if (!cancelled) {
+          setPayload(null)
+          setError(getApiErrorMessage(reason))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [open, page, paperId])
+
+  return (
+    <div className="mt-2 border-t border-slate-800/70 pt-2">
+      <button
+        type="button"
+        onClick={() => setOpen(value => {
+          if (!value) {
+            setLoading(true)
+            setError(null)
+          }
+          return !value
+        })}
+        className="inline-flex items-center gap-1.5 text-[11px] text-indigo-300 transition-colors hover:text-indigo-200"
+      >
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        {tr("逐页核对原文")}
+      </button>
+      {open && (
+        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/55 p-3">
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            <button
+              type="button"
+              disabled={page <= 1 || loading}
+              onClick={() => {
+                setLoading(true)
+                setError(null)
+                setPage(value => Math.max(1, value - 1))
+              }}
+              className="rounded border border-slate-700 px-2 py-1 text-slate-300 disabled:opacity-40"
+            >
+              {tr("上一页")}
+            </button>
+            <span className="text-slate-400">{tr("第 {0} / {1} 页", { 0: page, 1: sourcePages })}</span>
+            <button
+              type="button"
+              disabled={page >= sourcePages || loading}
+              onClick={() => {
+                setLoading(true)
+                setError(null)
+                setPage(value => Math.min(sourcePages, value + 1))
+              }}
+              className="rounded border border-slate-700 px-2 py-1 text-slate-300 disabled:opacity-40"
+            >
+              {tr("下一页")}
+            </button>
+            <a
+              href={`${pdfFileUrl(paperId)}#page=${page}`}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto inline-flex items-center gap-1 text-indigo-300 hover:text-indigo-200"
+            >
+              <ExternalLink size={11} /> {tr("在 PDF 中打开此页")}
+            </a>
+          </div>
+          {loading && (
+            <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-slate-500">
+              <Loader2 size={11} className="animate-spin" /> {tr("读取本地原文…")}
+            </p>
+          )}
+          {error && <p className="mt-3 text-[11px] leading-relaxed text-amber-300">{error}</p>}
+          {!loading && payload && (
+            <div className="mt-3 space-y-3">
+              {payload.page.chunks.length === 0 ? (
+                <p className="text-[11px] text-slate-500">
+                  {payload.page.status === 'empty' ? tr("此页没有可提取文本。") : tr("此页原文解析不可用。")}
+                </p>
+              ) : payload.page.chunks.map(chunk => (
+                <div key={chunk.evidence_id} className="rounded border border-slate-800/80 bg-slate-900/60 p-2.5">
+                  <p className="mb-1.5 font-mono text-[10px] text-slate-500">
+                    p.{chunk.page_number} · {chunk.section_heading || chunk.section_kind} · {chunk.page_char_start}–{chunk.page_char_end}
+                  </p>
+                  <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words font-sans text-[11px] leading-5 text-slate-300">
+                    {chunk.text}
+                  </pre>
+                </div>
+              ))}
+              <p className="text-[10px] leading-relaxed text-slate-500">
+                {tr("这里显示 PDF 的本地文本层；图表布局、图片和公式视觉含义仍需在 PDF 中人工核对。")}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
@@ -432,6 +545,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
         paper_category_source: visibleDetail.paper_category_override ? 'manual' : 'none',
         raw_llm_response: null,
         extraction_coverage: null,
+        source_evidence: null,
         error: null,
         knowledge_nodes: [],
       }
@@ -848,6 +962,25 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
                     {tr("页覆盖只证明输入处理范围；层级笔记和最终模型仍可能遗漏语义。")}
                   </p>
+                </div>
+              )}
+
+              {visibleDetail.source_evidence && (
+                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                  <p className="text-[11px] font-medium text-slate-200">{tr("原文对照")}</p>
+                  <p className={`mt-1 text-[11px] leading-relaxed ${visibleDetail.source_evidence.page_iteration_complete ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {tr("本地文本层：{0} 页、{1} 个可定位文本块；空白页 {2}，失败页 {3}。", {
+                      0: visibleDetail.source_evidence.source_pages,
+                      1: visibleDetail.source_evidence.source_chunks,
+                      2: visibleDetail.source_evidence.empty_pages,
+                      3: visibleDetail.source_evidence.failed_pages,
+                    })}
+                  </p>
+                  <SourceEvidencePanel
+                    key={visibleDetail.id}
+                    paperId={visibleDetail.id}
+                    sourcePages={visibleDetail.source_evidence.source_pages}
+                  />
                 </div>
               )}
 
