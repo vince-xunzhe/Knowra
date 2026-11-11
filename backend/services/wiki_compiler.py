@@ -43,6 +43,12 @@ from services.paper_source_compilation import (
     save_current_evidence_manifest,
     source_batch_prompt,
 )
+from services.concept_source_compilation import (
+    CONCEPT_SOURCE_POLICY,
+    ConceptSourceBatch,
+    ConceptSourceDocument,
+    compile_bounded_concept,
+)
 from services.graph_service import (
     is_publishable_concept_node,
     node_origin,
@@ -257,6 +263,7 @@ def _concept_compile_signature(
     model: Optional[str] = None,
 ) -> str:
     return _hash_payload({
+        "compiler_policy": CONCEPT_SOURCE_POLICY,
         "concept_id": node.id,
         "title": node.title,
         "content": node.content or "",
@@ -271,6 +278,9 @@ def _concept_compile_signature(
                 "title": paper.title or paper.filename,
                 "processed_at": paper.processed_at.isoformat() if paper.processed_at else None,
                 "extraction_model": getattr(paper, "extraction_model", None),
+                "raw_llm_response_sha256": hashlib.sha256(
+                    str(paper.raw_llm_response or "").encode("utf-8")
+                ).hexdigest(),
             }
             for paper in papers
         ],
@@ -706,8 +716,8 @@ def compile_paper_page(paper: Paper, api_key: str, model: str) -> Optional[Path]
 # --- compile_concept_pages --------------------------------------------------
 
 CONCEPT_PAGE_SYSTEM = (
-    "你是个人 LLM wiki 的编译器。给定一个概念名称、它的简介，以及多篇论文中"
-    "对它的描述片段，用中文写一篇综述式的概念条目。要求：\n"
+    "你是个人 LLM wiki 的有界分批编译器。输入是一个概念的简介或多篇论文的"
+    "带来源分块，用中文写可归并的综述式概念条目。要求：\n"
     "1. 不要逐篇复述每篇论文；做横向综合：共识、分歧、未解。\n"
     "2. 引用某篇论文时使用内联标记 [[paper:{id}]]，例如 “…… [[paper:42]] 提出 ……”。\n"
     "3. 用 markdown，正文小节从 ## 二级标题开始。\n"
@@ -715,21 +725,10 @@ CONCEPT_PAGE_SYSTEM = (
     "5. 不要编造未在输入材料中出现的内容。"
 )
 
-
-def _concept_user_prompt(node: KnowledgeNode, snippets: List[Tuple[int, str]]) -> str:
-    parts = [
-        f"# 概念名称: {node.title}",
-        f"# 概念类型: {node.node_type}",
-        f"# 简介: {(node.content or '')[:1500]}",
-        "",
-        f"# 涉及该概念的论文 ({len(snippets)} 篇):",
-    ]
-    for paper_id, snippet in snippets:
-        parts.append(f"\n## paper:{paper_id}\n{snippet[:2500]}")
-    parts.append(
-        "\n请输出概念条目。建议章节（仅在材料覆盖时才写）：## 定义 / ## 不同视角 / ## 共识与分歧 / ## 进一步阅读"
-    )
-    return "\n".join(parts)
+CONCEPT_REDUCE_SYSTEM = (
+    "你是个人 LLM wiki 的有界归并器。只合并输入中已有的概念材料，保留"
+    " [[paper:id]] 引用、共识、分歧、限制和关键数值；不得引入外部事实。"
+)
 
 
 def _node_paper_ids(node: KnowledgeNode) -> List[int]:
@@ -737,8 +736,11 @@ def _node_paper_ids(node: KnowledgeNode) -> List[int]:
 
 
 def _snippet_for_paper(paper: Paper) -> str:
-    """Compact representation of a paper used as input to concept compile.
-    Prefer high-signal extraction fields; fall back to title."""
+    """Legacy compact representation used by promotion suggestions.
+
+    Concept Wiki compilation no longer uses this lossy helper; it builds
+    source documents and performs bounded, lossless splitting instead.
+    """
     if paper.raw_llm_response:
         try:
             ex = json.loads(paper.raw_llm_response)
@@ -758,10 +760,83 @@ def _snippet_for_paper(paper: Paper) -> str:
             ):
                 val = ex.get(key)
                 if val:
-                    bits.append(f"{key}: {json.dumps(val, ensure_ascii=False)[:600]}")
+                    bits.append(f"{key}: {json.dumps(val, ensure_ascii=False)}")
             if bits:
                 return "\n".join(bits)
     return f"title: {paper.title or paper.filename}"
+
+
+_CONCEPT_SOURCE_FIELDS = (
+    "title",
+    "problem_area",
+    "tech_stack_position",
+    "keywords",
+    "abstract_summary",
+    "core_contribution",
+    "problem",
+    "motivation",
+    "principle",
+    "innovations",
+    "experimental_gains",
+    "historical_position",
+    "limitations",
+    "techniques",
+    "datasets",
+    "baselines",
+    "contributions",
+    "key_findings",
+    # Compatibility with historical/third-party extraction shapes.
+    "method",
+)
+
+
+def _concept_source_documents(
+    node: KnowledgeNode,
+    papers: List[Paper],
+) -> List[ConceptSourceDocument]:
+    """Return the complete selected text used by bounded concept compilation.
+
+    These include the historical high-signal fields plus the current extraction
+    contract's narrative and graph fields. Values are no longer cut at 600/2500
+    characters; the planner performs bounded, lossless splitting later.
+    """
+    documents: List[ConceptSourceDocument] = []
+    if node.content:
+        documents.append(ConceptSourceDocument(
+            source_key=f"concept:{node.id}:content",
+            label="concept_description",
+            text=str(node.content),
+        ))
+
+    for paper in papers:
+        extraction: Any = None
+        if paper.raw_llm_response:
+            try:
+                extraction = json.loads(paper.raw_llm_response)
+            except (TypeError, json.JSONDecodeError):
+                extraction = None
+        added = False
+        if isinstance(extraction, dict):
+            for key in _CONCEPT_SOURCE_FIELDS:
+                value = extraction.get(key)
+                if value in (None, "", [], {}):
+                    continue
+                text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                documents.append(ConceptSourceDocument(
+                    source_key=f"paper:{paper.id}:{key}",
+                    label=key,
+                    paper_id=str(paper.id),
+                    text=text,
+                ))
+                added = True
+        if not added:
+            documents.append(ConceptSourceDocument(
+                source_key=f"paper:{paper.id}:title",
+                label="title",
+                paper_id=str(paper.id),
+                text=str(paper.title or paper.filename or paper.id),
+            ))
+    return documents
 
 
 def compile_concept_page(
@@ -778,8 +853,8 @@ def compile_concept_page(
 
     papers = _published_concept_source_papers(node, db)
     finish_read_snapshot(db)
-    snippets = [(p.id, _snippet_for_paper(p)) for p in papers]
-    if not snippets:
+    documents = _concept_source_documents(node, papers)
+    if not documents:
         return None
 
     WIKI_CONCEPTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -792,15 +867,48 @@ def compile_concept_page(
             _cleanup_same_id_pages(WIKI_CONCEPTS_DIR, "concept_id", node.id, path)
             return path
 
-    body = _call_llm(
-        None,
-        model,
-        CONCEPT_PAGE_SYSTEM,
-        _concept_user_prompt(node, snippets),
-        max_tokens=1500,
-        task_id="wiki_compile",
-        timeout_s=WIKI_COMPILE_TIMEOUT_S,
+    cfg = load_config()
+    reasoning_effort = task_reasoning_effort(cfg, "wiki_compile")
+
+    def call_concept_batch(batch: ConceptSourceBatch, index: int, total: int) -> str:
+        return _call_llm(
+            None,
+            model,
+            CONCEPT_PAGE_SYSTEM,
+            batch.prompt,
+            max_tokens=1800,
+            reasoning_effort=reasoning_effort,
+            task_id="wiki_compile",
+            timeout_s=WIKI_COMPILE_TIMEOUT_S,
+            attempt_operation_id=f"concept-wiki:{signature}:map:{batch.batch_id}",
+        )
+
+    def call_concept_reduce(prompt: str, index: int, total: int, final: bool) -> str:
+        prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:20]
+        return _call_llm(
+            None,
+            model,
+            CONCEPT_REDUCE_SYSTEM,
+            prompt,
+            max_tokens=1800,
+            reasoning_effort=reasoning_effort,
+            task_id="wiki_compile",
+            timeout_s=WIKI_COMPILE_TIMEOUT_S,
+            attempt_operation_id=(
+                f"concept-wiki:{signature}:reduce:{'final' if final else 'partial'}:"
+                f"{index}:{total}:{prompt_hash}"
+            ),
+        )
+
+    compiled = compile_bounded_concept(
+        title=node.title,
+        node_type=node.node_type,
+        documents=documents,
+        call_map=call_concept_batch,
+        call_reduce=call_concept_reduce,
     )
+    body = compiled.body
+    coverage = compiled.coverage
 
     meta = {
         "kind": "concept",
@@ -811,10 +919,23 @@ def compile_concept_page(
         "node_type": node.node_type,
         "concept_origin": node_origin(node),
         "tags": list(node.tags or []),
-        "source_paper_ids": [pid for pid, _ in snippets],
+        "source_paper_ids": [paper.id for paper in papers],
         "compiled_at": _now_iso(),
         "compile_model": model,
+        "compiler_policy": CONCEPT_SOURCE_POLICY,
         "source_signature": signature,
+        "source_documents": coverage["source_documents"],
+        "source_characters": coverage["source_characters"],
+        "source_chunks": coverage["source_chunks"],
+        "source_compile_batches": coverage["source_batches"],
+        "source_map_calls": coverage["map_calls"],
+        "source_reduce_calls": coverage["reduce_calls"],
+        "source_compile_calls": int(coverage["map_calls"]) + int(coverage["reduce_calls"]),
+        "source_prompt_character_limit": coverage["prompt_character_limit"],
+        "source_input_scope": coverage["source_input_scope"],
+        "text_coverage": coverage["text_coverage"],
+        "semantic_completeness": coverage["semantic_completeness"],
+        "visual_coverage": coverage["visual_coverage"],
     }
     page = _render_frontmatter(meta) + f"\n# {node.title}\n\n" + body.strip() + "\n"
     path.write_text(page, encoding="utf-8")
@@ -932,6 +1053,11 @@ _PASSTHROUGH_META_KEYS = (
     "concept_id", "paper_id", "node_type", "tags",
     "source_paper_ids", "authors", "source_record",
     "concept_origin", "source_signature",
+    "compiler_policy", "source_documents", "source_characters",
+    "source_chunks", "source_compile_batches", "source_compile_calls",
+    "source_map_calls", "source_reduce_calls", "source_prompt_character_limit",
+    "source_input_scope",
+    "text_coverage", "semantic_completeness", "visual_coverage",
 )
 
 
