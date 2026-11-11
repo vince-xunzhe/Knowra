@@ -52,6 +52,37 @@ export interface PaperDetail extends PaperRecord {
   extracted_text: string | null
   raw_llm_response: string | null
   extraction: Record<string, unknown> | null
+  extraction_coverage: {
+    strategy?: string
+    model_input_coverage?: string
+    source_pages?: number | null
+    attempted_pages?: number | null
+    ok_pages?: number | null
+    empty_pages?: number | null
+    failed_pages?: number | null
+    failed_page_numbers?: number[]
+    page_iteration_complete?: boolean | null
+    local_page_iteration_complete?: boolean | null
+    source_characters?: number | null
+    source_chunks?: number | null
+    map_batches?: number | null
+    map_batches_completed?: number | null
+    local_text_fallback_used?: boolean
+    local_audit_error_type?: string
+    limitations?: string[]
+  } | null
+  source_evidence?: {
+    manifest_id: string
+    source_pages: number
+    attempted_pages: number
+    ok_pages: number
+    empty_pages: number
+    failed_pages: number
+    source_characters: number
+    source_chunks: number
+    page_iteration_complete: boolean
+    visual_coverage: 'unsupported'
+  } | null
   // Which model produced the current raw_llm_response (e.g. "gpt-4.1",
   // "gpt-5.5"). null for legacy rows that pre-date the column.
   extraction_model: string | null
@@ -59,6 +90,31 @@ export interface PaperDetail extends PaperRecord {
   has_first_page_image: boolean
   chat: ChatState
   knowledge_nodes: { id: number; title: string; node_type: string; tags: string[] }[]
+}
+
+export interface PaperSourceEvidencePage {
+  manifest_id: string
+  paper_id: string
+  source_sha256: string
+  source_pages: number
+  page: {
+    page_number: number
+    status: 'ok' | 'empty' | 'error'
+    text_characters: number
+    parser_used: string | null
+    error_type: string | null
+    chunks: Array<{
+      evidence_id: string
+      page_number: number
+      page_char_start: number
+      page_char_end: number
+      section_kind: string
+      section_heading: string | null
+      text: string
+      text_hash: string
+    }>
+  }
+  limitations: string[]
 }
 
 export type NodeType =
@@ -334,6 +390,10 @@ export const listPapers = () => {
   return paperListRequest
 }
 export const getPaper = (id: number) => api.get<PaperDetail>(`/papers/${id}`).then(r => r.data)
+export const getPaperSourceEvidence = (id: number, page: number) =>
+  api
+    .get<PaperSourceEvidencePage>(`/papers/${id}/source-evidence`, { params: { page } })
+    .then(r => r.data)
 export const updatePaperResponse = (
   id: number | string,
   raw_llm_response: string,

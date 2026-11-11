@@ -9,7 +9,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, defer
@@ -27,6 +27,7 @@ from models import Paper, KnowledgeNode
 from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
 from model_gateway import get_model_entry, get_provider_entry, task_context
 from path_utils import (
+    DATA_DIR,
     portable_data_path,
     resolve_artifact_path,
     resolve_paper_path,
@@ -49,11 +50,18 @@ from services.pipeline_manifest import (
     SEARCH_INDEX_VERSION,
     WIKI_COMPILER_VERSION,
     extraction_is_reusable,
+    extraction_coverage_status,
     invalidate_from,
     manifest_status,
     record_checkpoint,
     record_extraction,
     record_layer,
+)
+from services.paper_source_compilation import (
+    load_current_evidence_manifest,
+    save_current_evidence_manifest,
+    source_evidence_summary,
+    source_page_payload,
 )
 from services.note_images_gc import gc_on_notes_update
 from services.paper_category_service import (
@@ -415,6 +423,18 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
     )
     category = effective_paper_category(p, _safe_parse(p.raw_llm_response))
     team = effective_paper_team(p, _safe_parse(p.raw_llm_response))
+    recorded_hash = str(p.file_hash or "").lower()
+    trusted_source_hash = (
+        recorded_hash
+        if len(recorded_hash) == 64 and all(char in "0123456789abcdef" for char in recorded_hash)
+        else None
+    )
+    evidence_manifest = load_current_evidence_manifest(
+        root=DATA_DIR / "paper_evidence",
+        paper_id=str(p.id),
+        library_file_hash=recorded_hash or None,
+        source_sha256=trusted_source_hash,
+    )
     return {
         "id": p.id,
         "filename": p.filename,
@@ -442,6 +462,12 @@ def _serialize_paper_detail(p: Paper, db: Session) -> dict:
         "learning_status": normalize_learning_status(p.learning_status),
         "raw_llm_response": p.raw_llm_response,
         "extraction": _safe_parse(p.raw_llm_response),
+        "extraction_coverage": extraction_coverage_status(str(p.id)),
+        "source_evidence": (
+            source_evidence_summary(evidence_manifest)
+            if evidence_manifest is not None
+            else None
+        ),
         "notes": p.notes or "",
         "error": p.error,
         "has_first_page_image": has_first_page_image,
@@ -666,6 +692,39 @@ def get_paper_manifest(paper_id: str, db: Session = Depends(get_db)):
     if db.query(Paper.id).filter(Paper.id == paper_id).first() is None:
         raise HTTPException(status_code=404, detail="Paper not found")
     return manifest_status(paper_id)
+
+
+@router.get("/papers/{paper_id}/source-evidence")
+def get_paper_source_evidence(
+    paper_id: str,
+    page: int = Query(default=1, ge=1),
+    db: Session = Depends(get_db),
+):
+    """Expose one exact extracted-text page for side-by-side verification."""
+    paper = db.query(Paper).filter(Paper.id == paper_id).first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    recorded = str(paper.file_hash or "").lower()
+    trusted_source_hash = (
+        recorded
+        if len(recorded) == 64 and all(char in "0123456789abcdef" for char in recorded)
+        else None
+    )
+    manifest = load_current_evidence_manifest(
+        root=DATA_DIR / "paper_evidence",
+        paper_id=str(paper.id),
+        library_file_hash=recorded or None,
+        source_sha256=trusted_source_hash,
+    )
+    if manifest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Source evidence is unavailable or stale; reprocess or recompile this paper first",
+        )
+    try:
+        return source_page_payload(manifest, page)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.put("/papers/{paper_id}/learning-status")
@@ -899,6 +958,8 @@ def _process_single(paper_id: str):
                         first_page_image_path=(str(resolve_artifact_path(p.first_page_image_path))
                             if cfg.get("use_first_page_image") and p.first_page_image_path else None),
                         file_hash=p.file_hash,
+                        paper_id=str(p.id),
+                        checkpoint_root=DATA_DIR / "extraction_checkpoints",
                     )
                     db.rollback()
                     with task_context("paper_extract"):
@@ -906,6 +967,8 @@ def _process_single(paper_id: str):
                 else:
                     current_result = extraction_result
                 extraction, raw, new_file_id, new_assistant_id, new_thread_id, new_vector_store_id = current_result
+                extraction_coverage = getattr(current_result, "coverage", None)
+                evidence_manifest = getattr(current_result, "evidence_manifest", None)
 
                 if not raw or not raw.strip():
                     raise PaperExtractionError(
@@ -975,6 +1038,29 @@ def _process_single(paper_id: str):
                     extraction,
                     raw,
                 )
+                if isinstance(extraction_coverage, dict):
+                    record_layer(
+                        str(p.id),
+                        "extraction_coverage",
+                        extraction_coverage,
+                    )
+                if isinstance(evidence_manifest, dict):
+                    evidence_path = save_current_evidence_manifest(
+                        evidence_manifest,
+                        root=DATA_DIR / "paper_evidence",
+                        library_file_hash=str(p.file_hash or "") or None,
+                    )
+                    record_layer(
+                        str(p.id),
+                        "source_evidence",
+                        {
+                            "manifest_id": evidence_manifest["manifest_id"],
+                            "source_sha256": evidence_manifest["source"]["file_hash_sha256"],
+                            "relative_path": str(evidence_path.relative_to(DATA_DIR)),
+                            "source_pages": evidence_manifest["coverage"]["source_pages"],
+                            "source_chunks": evidence_manifest["coverage"]["chunk_count"],
+                        },
+                    )
 
                 if prepared_embeddings is None:
                     prepared_embeddings = prepare_graph_embeddings(
