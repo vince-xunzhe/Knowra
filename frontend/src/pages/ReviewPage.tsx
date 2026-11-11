@@ -1007,11 +1007,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
               />
             ) : (
               <div
-                className={`grid items-start gap-5 ${
-                  visibleDetail.has_first_page_image
-                    ? 'xl:grid-cols-[minmax(0,1fr)_minmax(17rem,22rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(18rem,23rem)_minmax(15rem,20rem)]'
-                    : 'xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]'
-                }`}
+                className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)]"
               >
                 <div className="min-w-0">
                   {visibleDetail.error ? (
@@ -1040,8 +1036,20 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                   )}
                 </div>
 
-                {/* Personal notes — markdown, side column */}
+                {/* Follow-up, PDF reader entry and personal notes share one
+                    visible side column at ordinary laptop widths.  The old
+                    three-column layout hid this entire workflow below 2xl. */}
                 <div className="min-w-0 space-y-5 xl:sticky xl:top-6 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto xl:pr-1">
+                  <FirstPagePreview
+                    paper={visibleDetail}
+                    keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
+                    onOpenPdf={() => handleOpenPdf(visibleDetail.id)}
+                    onNoteAdded={updated => {
+                      updateVisibleDetail(updated)
+                      setPapers(prev => prev.map(p => (p.id === updated.id ? updated : p)))
+                      setActionNotice({ tone: 'success', title: tr("已存为个人笔记") })
+                    }}
+                  />
                   <NotesSection
                     key={visibleDetail.id}
                     paper={visibleDetail}
@@ -1051,21 +1059,6 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     }}
                   />
                 </div>
-
-                {visibleDetail.has_first_page_image && (
-                  <div className="hidden min-w-0 2xl:block 2xl:sticky 2xl:top-6 2xl:max-h-[calc(100vh-7rem)] 2xl:overflow-y-auto 2xl:pr-1">
-                    <FirstPagePreview
-                      paper={visibleDetail}
-                      keywords={Array.isArray(parsed?.keywords) ? parsed.keywords : []}
-                      onOpenPdf={() => handleOpenPdf(visibleDetail.id)}
-                      onNoteAdded={updated => {
-                        updateVisibleDetail(updated)
-                        setPapers(prev => prev.map(p => (p.id === updated.id ? updated : p)))
-                        setActionNotice({ tone: 'success', title: tr("已存为个人笔记") })
-                      }}
-                    />
-                  </div>
-                )}
               </div>
             )}
 
@@ -1271,11 +1264,21 @@ function FirstPagePreview({
             title={tr("点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）")}
             className="block w-full overflow-hidden rounded-lg border border-slate-800 transition-colors hover:border-emerald-500/60 focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
           >
-            <img
-              src={firstPageUrl(paper.id)}
-              alt="first page"
-              className="max-h-[44vh] w-full object-contain shadow-xl"
-            />
+            {paper.has_first_page_image ? (
+              <img
+                src={firstPageUrl(paper.id)}
+                alt={tr("原始 PDF")}
+                className="max-h-[44vh] w-full object-contain shadow-xl"
+              />
+            ) : (
+              <span className="flex min-h-44 flex-col items-center justify-center gap-2 bg-slate-950/55 px-4 py-8 text-center">
+                <FileText size={32} className="text-emerald-300/80" />
+                <span className="text-xs font-medium text-slate-200">{tr("原始 PDF")}</span>
+                <span className="text-[11px] leading-relaxed text-slate-500">
+                  {tr("点击在右侧浮窗展开 PDF（支持缩放，关闭后保留阅读位置）")}
+                </span>
+              </span>
+            )}
           </button>
           {keywords.length > 0 && (
             <div>

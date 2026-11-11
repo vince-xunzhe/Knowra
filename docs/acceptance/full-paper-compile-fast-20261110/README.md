@@ -142,3 +142,19 @@ The isolated release UI was started with Python 3.12.13, Node 24.14.1, API port
 This proves local text input coverage and a user-visible comparison path. It
 does not prove that every semantic statement survived generation, nor that
 figures, table geometry, or formula layout were visually understood.
+
+## PDF preview regression follow-up
+
+The paper follow-up and PDF entry were still implemented, but the layout hid
+the whole block below the `2xl` breakpoint and also omitted it whenever
+`has_first_page_image` was false. The public acceptance paper has a readable
+PDF but no separately rendered first-page PNG, so both conditions applied in
+the ordinary candidate window.
+
+The follow-up, PDF entry, and notes now share the ordinary-width side column.
+When a first-page PNG is absent, the UI renders an explicit local-PDF placeholder
+instead of removing the reader entry. Focused verification in the real React
+UI covered the visible placeholder, loading all 15 pages in `PdfSidePanel`,
+close, reopen from the placeholder, and Escape-to-close. Single-file ESLint and
+`git diff --check` passed. No paper/Wiki recompilation or provider/embedding
+request occurred; the durable ledger remains 11/15, all succeeded.
