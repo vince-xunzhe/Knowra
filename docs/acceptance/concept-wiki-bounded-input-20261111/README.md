@@ -35,7 +35,7 @@ python3 -m unittest \
   backend/tests/test_concept_source_compilation.py \
   backend/tests/test_wiki_compiler_reconcile.py -v
 
-Ran 8 tests in 0.004s
+Ran 9 tests
 OK
 ```
 
@@ -43,7 +43,8 @@ The tests cover:
 
 - long concept and extraction-field tails surviving chunking;
 - every planned chunk appearing exactly once across bounded prompts;
-- round-robin representation of multiple papers;
+- `paper_id` round-robin representation for two papers with multiple fields,
+  with the concept description kept as its own source group;
 - bounded map and reduce prompts;
 - hierarchical synthesis and paper citation propagation;
 - the real `compile_concept_page` path writing coverage frontmatter;
@@ -90,3 +91,5 @@ coverage, not model comprehension.
 - Unknown extraction fields outside the documented selected scope
 - Full backend/frontend/startup suite
 - Deployment or migration of existing Wiki pages
+- Promotion suggestions keep their pre-existing compact 600-character helper
+  boundary; that unrelated request path is not expanded by this change

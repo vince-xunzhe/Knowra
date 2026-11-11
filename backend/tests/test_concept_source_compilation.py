@@ -167,6 +167,26 @@ class ConceptSourceCompilationTests(unittest.TestCase):
             {chunk.chunk_id for chunk in chunks},
         )
 
+    def test_round_robin_groups_multiple_fields_by_paper(self):
+        documents = [
+            ConceptSourceDocument("concept:1:content", "description", "D" * 500),
+            ConceptSourceDocument("paper:1:method", "method", "A" * 500, paper_id="1"),
+            ConceptSourceDocument("paper:1:limits", "limitations", "B" * 500, paper_id="1"),
+            ConceptSourceDocument("paper:2:method", "method", "C" * 500, paper_id="2"),
+            ConceptSourceDocument("paper:2:limits", "limitations", "E" * 500, paper_id="2"),
+        ]
+        chunks = build_source_chunks(documents, chunk_characters=300)
+        batches = build_source_batches(
+            title="bounded concept",
+            node_type="method",
+            chunks=chunks,
+            prompt_character_limit=14_000,
+        )
+
+        order = [chunk.paper_id for chunk in batches[0].chunks]
+        self.assertEqual(order[:6], [None, "1", "2", None, "1", "2"])
+        self.assertEqual(order[6:], ["1", "2", "1", "2"])
+
     def test_compile_uses_every_map_batch_then_bounded_reduce(self):
         documents = [
             ConceptSourceDocument("concept:1:content", "description", "D" * 900),

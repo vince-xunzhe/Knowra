@@ -760,7 +760,7 @@ def _snippet_for_paper(paper: Paper) -> str:
             ):
                 val = ex.get(key)
                 if val:
-                    bits.append(f"{key}: {json.dumps(val, ensure_ascii=False)}")
+                    bits.append(f"{key}: {json.dumps(val, ensure_ascii=False)[:600]}")
             if bits:
                 return "\n".join(bits)
     return f"title: {paper.title or paper.filename}"
