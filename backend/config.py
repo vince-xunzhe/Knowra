@@ -42,6 +42,14 @@ def is_cloud_mode() -> bool:
 # Only file_search-compatible models. Reasoning models (o1/o3) removed because
 # the Assistants API + file_search pipeline does not support them.
 AVAILABLE_MODELS = [
+    {"id": "gpt-6-astra", "label": "GPT-6 Astra", "supports_vision": True, "desc": "Responses + file_search，最强主力"},
+    {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol", "supports_vision": True, "desc": "Responses + file_search，接近 Astra、成本更低"},
+    {"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra", "supports_vision": True, "desc": "Responses + file_search，擅长视觉推理"},
+    {"id": "gpt-6-luna", "label": "GPT-6 Luna", "supports_vision": True, "desc": "Responses + file_search，高效高流量"},
+    {"id": "gpt-6-sol", "label": "GPT-6 Sol", "supports_vision": True, "desc": "Responses + file_search，上一代 Sol"},
+    {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "supports_vision": True, "desc": "Responses + file_search，5.6 旗舰"},
+    {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "supports_vision": True, "desc": "Responses + file_search，5.6 均衡"},
+    {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "supports_vision": True, "desc": "Responses + file_search，5.6 高性价比"},
     {"id": "gpt-5.5", "label": "GPT-5.5", "supports_vision": True, "desc": "最强主力，复杂推理与专业工作"},
     {"id": "gpt-5.4", "label": "GPT-5.4", "supports_vision": True, "desc": "高性能主力，适合深度论文抽取"},
     {"id": "gpt-5.4-mini", "label": "GPT-5.4-mini", "supports_vision": True, "desc": "更快更省，仍支持 file_search"},
@@ -68,6 +76,14 @@ AVAILABLE_WIKI_COMPILE_MODELS = [
     {"id": "gpt-5.4-mini", "label": "GPT-5.4-mini", "desc": "Responses API 通道"},
     {"id": "gpt-5.4", "label": "GPT-5.4", "desc": "Responses API 通道，写作更细"},
     {"id": "gpt-5.5", "label": "GPT-5.5", "desc": "Responses API 通道，最强"},
+    {"id": "gpt-5.6-luna", "label": "GPT-5.6 Luna", "desc": "Responses API 通道，5.6 高性价比"},
+    {"id": "gpt-5.6-terra", "label": "GPT-5.6 Terra", "desc": "Responses API 通道，5.6 均衡"},
+    {"id": "gpt-5.6-sol", "label": "GPT-5.6 Sol", "desc": "Responses API 通道，5.6 旗舰"},
+    {"id": "gpt-6-sol", "label": "GPT-6 Sol", "desc": "Responses API 通道，上一代 Sol"},
+    {"id": "gpt-6-luna", "label": "GPT-6 Luna", "desc": "Responses API 通道，高效高流量"},
+    {"id": "gpt-6.1-terra", "label": "GPT-6.1 Terra", "desc": "Responses API 通道，擅长视觉推理"},
+    {"id": "gpt-6.1-sol", "label": "GPT-6.1 Sol", "desc": "Responses API 通道，接近 Astra、成本更低"},
+    {"id": "gpt-6-astra", "label": "GPT-6 Astra", "desc": "Responses API 通道，最强主力"},
 ]
 
 MODEL_GATEWAY_MODEL_OPTIONS = [

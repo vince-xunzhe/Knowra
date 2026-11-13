@@ -13,6 +13,14 @@ from .catalog import (
 
 
 LEGACY_TO_MODEL_ID = {
+    "gpt-6-astra": "openai/gpt-6-astra",
+    "gpt-6.1-sol": "openai/gpt-6.1-sol",
+    "gpt-6.1-terra": "openai/gpt-6.1-terra",
+    "gpt-6-luna": "openai/gpt-6-luna",
+    "gpt-6-sol": "openai/gpt-6-sol",
+    "gpt-5.6-sol": "openai/gpt-5.6-sol",
+    "gpt-5.6-terra": "openai/gpt-5.6-terra",
+    "gpt-5.6-luna": "openai/gpt-5.6-luna",
     "gpt-5.5": "openai/gpt-5.5",
     "gpt-5.4": "openai/gpt-5.4",
     "gpt-5.4-mini": "openai/gpt-5.4-mini",

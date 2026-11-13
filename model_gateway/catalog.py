@@ -3,6 +3,35 @@ from __future__ import annotations
 from copy import deepcopy
 
 
+# Official OpenAI API models that do not support the Assistants API and must
+# use Responses + file_search for retrieval. Model IDs and capabilities were
+# verified from https://developers.openai.com/api/docs/models on 2026-11-13.
+# Do not treat Codex CLI catalog entries as evidence that the same upstream
+# name is available on the OpenAI API, or vice versa.
+OPENAI_RESPONSES_ONLY_MODELS = frozenset({
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.5",
+    "gpt-5.6-luna",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+})
+
+
+def openai_upstream_model_name(model: str) -> str:
+    text = str(model or "").strip()
+    return text.split("/")[-1] if text else ""
+
+
+def openai_model_uses_responses_api(model: str) -> bool:
+    return openai_upstream_model_name(model) in OPENAI_RESPONSES_ONLY_MODELS
+
+
 TASK_SPECS = [
     {
         "id": "paper_extract",
@@ -248,6 +277,86 @@ _OPENAPI_LLM_TASKS = [
 
 
 BUILTIN_MODEL_REGISTRY = [
+    {
+        "id": "openai/gpt-6-astra",
+        "label": "OpenAI / GPT-6 Astra",
+        "provider_id": "openai",
+        "upstream_model": "gpt-6-astra",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-6.1-sol",
+        "label": "OpenAI / GPT-6.1 Sol",
+        "provider_id": "openai",
+        "upstream_model": "gpt-6.1-sol",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-6.1-terra",
+        "label": "OpenAI / GPT-6.1 Terra",
+        "provider_id": "openai",
+        "upstream_model": "gpt-6.1-terra",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-6-luna",
+        "label": "OpenAI / GPT-6 Luna",
+        "provider_id": "openai",
+        "upstream_model": "gpt-6-luna",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-6-sol",
+        "label": "OpenAI / GPT-6 Sol",
+        "provider_id": "openai",
+        "upstream_model": "gpt-6-sol",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-5.6-sol",
+        "label": "OpenAI / GPT-5.6 Sol",
+        "provider_id": "openai",
+        "upstream_model": "gpt-5.6-sol",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-5.6-terra",
+        "label": "OpenAI / GPT-5.6 Terra",
+        "provider_id": "openai",
+        "upstream_model": "gpt-5.6-terra",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
+    {
+        "id": "openai/gpt-5.6-luna",
+        "label": "OpenAI / GPT-5.6 Luna",
+        "provider_id": "openai",
+        "upstream_model": "gpt-5.6-luna",
+        "model_kind": "chat",
+        "supports_vision": True,
+        "supported_tasks": deepcopy(_OPENAI_CHAT_TASKS),
+        "builtin": True,
+    },
     {
         "id": "openai/gpt-5.5",
         "label": "OpenAI / GPT-5.5",
