@@ -196,6 +196,12 @@ def import_paper(paper_id):
                 sync_record_from_paper(paper, event="roadmap_import")
             except Exception:
                 logger.exception("Could not export the committed roadmap library record")
+            try:
+                from services.paper_preview_service import attach_first_page_preview
+                if attach_first_page_preview(paper):
+                    db.commit()
+            except Exception:
+                db.rollback()
         return {"status": "imported" if created else "skipped", "libraryPaperId": paper_id}
 
 

@@ -141,6 +141,13 @@ def scan_directory(
         except Exception:
             pass
 
+    if added_papers:
+        try:
+            from services.paper_preview_service import attach_first_page_previews
+            attach_first_page_previews(added_papers, db)
+        except Exception:
+            pass
+
     total = db.query(Paper).count()
     return {
         "new_found": added,

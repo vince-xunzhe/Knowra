@@ -19,7 +19,7 @@ import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
-import { inferPaperProcessMeta, summarizePaperError } from '../components/paperProcessMeta'
+import { inferPaperProcessMeta, paperCardProcessAction, summarizePaperError } from '../components/paperProcessMeta'
 
 interface ProcStatus {
   running: boolean
@@ -215,6 +215,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setPendingIds(prev => new Set(prev).add(p.id))
     try {
       await processPaper(p.id, confirmation)
+      await load()
       setActionNotice({
         tone: 'info',
         title: tr("已提交处理：{0}", { 0: p.filename }),
@@ -238,6 +239,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setPendingIds(prev => new Set(prev).add(p.id))
     try {
       await retryPaper(p.id, confirmation)
+      await load()
       setActionNotice({
         tone: 'info',
         title: tr("已提交重试：{0}", { 0: p.filename }),
@@ -717,6 +719,11 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   active={selected?.id === p.id}
                   pending={isPending(p)}
                   onClick={() => handlePaperClick(p)}
+                  onProcessAction={() => {
+                    const action = paperCardProcessAction(p)
+                    if (action?.kind === 'retry') void handleRetry(p)
+                    else void handleProcessOne(p)
+                  }}
                   categoryOptions={categoryOptions}
                   categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
                   categorySaving={categorySavingIds.has(p.id)}
@@ -733,6 +740,11 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   active={selected?.id === p.id}
                   pending={isPending(p)}
                   onClick={() => handlePaperClick(p)}
+                  onProcessAction={() => {
+                    const action = paperCardProcessAction(p)
+                    if (action?.kind === 'retry') void handleRetry(p)
+                    else void handleProcessOne(p)
+                  }}
                   categoryOptions={categoryOptions}
                   categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
                   categorySaving={categorySavingIds.has(p.id)}
@@ -866,16 +878,7 @@ function PaperDetailStrip({
       <div className="flex items-start gap-4">
         {/* Thumbnail */}
         <div className="w-14 h-[4.5rem] shrink-0 bg-[var(--surface-0b0d12)] rounded border border-slate-800 flex items-center justify-center overflow-hidden">
-          {paper.processed ? (
-            <img
-              src={firstPageUrl(paper.id)}
-              alt=""
-              className="max-w-full max-h-full object-contain"
-              onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          ) : (
-            <FileText size={18} className="text-slate-700" />
-          )}
+          <PaperCover key={paper.id} paper={paper} iconSize={18} />
         </div>
 
         {/* Info */}
@@ -938,7 +941,7 @@ function PaperDetailStrip({
                 disabled={pending}
                 className="inline-flex items-center gap-1 text-xs bg-amber-500 hover:bg-amber-400 text-white px-2.5 py-1 rounded-md transition-colors disabled:bg-slate-700 disabled:text-slate-400"
               >
-                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} {tr("重试")}</button>
+                {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} {tr("重试处理")}</button>
             )}
             {paper.processed && (
               <button
@@ -955,13 +958,60 @@ function PaperDetailStrip({
   )
 }
 
+function PaperCover({ paper, iconSize }: { paper: PaperRecord; iconSize: number }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    return <FileText size={iconSize} className="text-slate-700" data-testid="paper-cover-fallback" />
+  }
+  return (
+    <img
+      src={firstPageUrl(paper.id)}
+      alt={paper.filename}
+      data-testid="paper-cover-image"
+      className="max-w-full max-h-full object-contain"
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
+function PaperProcessButton({
+  paper, pending, onProcessAction,
+}: {
+  paper: PaperRecord
+  pending: boolean
+  onProcessAction: () => void
+}) {
+  const action = paperCardProcessAction(paper)
+  if (!action) return null
+  return (
+    <button
+      type="button"
+      data-testid="paper-card-process"
+      aria-label={action.label}
+      disabled={pending}
+      aria-busy={pending}
+      onClick={event => {
+        event.preventDefault()
+        event.stopPropagation()
+        onProcessAction()
+      }}
+      onKeyDown={event => event.stopPropagation()}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md bg-indigo-500 px-2.5 py-1 text-[11px] font-medium text-white transition-colors hover:bg-indigo-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+    >
+      {pending ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+      {action.label}
+    </button>
+  )
+}
+
 function PaperGridCard({
-  paper, active, pending, onClick, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+  paper, active, pending, onClick, onProcessAction, categoryOptions, categoryValue, categorySaving, onCategoryChange,
 }: {
   paper: PaperRecord
   active: boolean
   pending: boolean
   onClick: () => void
+  onProcessAction: () => void
   categoryOptions: string[]
   categoryValue: string
   categorySaving: boolean
@@ -972,6 +1022,7 @@ function PaperGridCard({
     <article
       role="button"
       tabIndex={0}
+      data-testid="paper-grid-card"
       onClick={onClick}
       onKeyDown={event => {
         if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
@@ -987,21 +1038,12 @@ function PaperGridCard({
       }`}
     >
       <div className="relative aspect-[3/4] bg-[var(--surface-0b0d12)] flex items-center justify-center overflow-hidden">
-        {paper.processed ? (
-          <img
-            src={firstPageUrl(paper.id)}
-            alt={paper.filename}
-            className="max-w-full max-h-full object-contain"
-            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
-          />
-        ) : (
-          <FileText size={40} className="text-slate-700" />
-        )}
+        <PaperCover key={paper.id} paper={paper} iconSize={40} />
         <div className="absolute top-2 right-2">
           <StatusDot pending={pending} paper={paper} />
         </div>
       </div>
-      <div className="p-3.5">
+      <div className="min-w-0 overflow-hidden p-3.5">
         <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-3 min-h-[4rem] group-hover:text-foreground transition-colors text-safe-wrap">
           {paper.title || paper.filename}
         </p>
@@ -1010,8 +1052,11 @@ function PaperGridCard({
             {paper.authors.slice(0, 3).join(', ')}
           </p>
         )}
-        <div className="mt-2.5 flex min-h-7 items-center justify-between gap-2 text-xs text-slate-600">
-          <span className="tabular-nums">{paper.num_pages ? tr("{0} 页", { 0: paper.num_pages }) : ''}</span>
+        <div className="mt-2.5 flex min-w-0 items-center justify-between gap-2 text-xs text-slate-600">
+          <span className="tabular-nums shrink-0">{paper.num_pages ? tr("{0} 页", { 0: paper.num_pages }) : ''}</span>
+          <PaperProcessButton paper={paper} pending={pending} onProcessAction={onProcessAction} />
+        </div>
+        <div className="mt-2 min-w-0 w-full max-w-full">
           <InlinePaperCategoryEditor
             paper={paper}
             options={categoryOptions}
@@ -1027,12 +1072,13 @@ function PaperGridCard({
 }
 
 function PaperListRow({
-  paper, active, pending, onClick, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+  paper, active, pending, onClick, onProcessAction, categoryOptions, categoryValue, categorySaving, onCategoryChange,
 }: {
   paper: PaperRecord
   active: boolean
   pending: boolean
   onClick: () => void
+  onProcessAction: () => void
   categoryOptions: string[]
   categoryValue: string
   categorySaving: boolean
@@ -1044,6 +1090,7 @@ function PaperListRow({
     <article
       role="button"
       tabIndex={0}
+      data-testid="paper-list-row"
       onClick={onClick}
       onKeyDown={event => {
         if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
@@ -1052,49 +1099,49 @@ function PaperListRow({
         }
       }}
       title={paper.processed ? tr("在回顾中查看论文详情") : tr("查看处理状态与操作")}
-      className={`w-full flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+      className={`w-full min-w-0 flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'bg-indigo-500/5 border-indigo-500/40'
           : 'bg-slate-900/40 border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
       }`}
     >
       <div className="w-10 h-12 shrink-0 bg-[var(--surface-0b0d12)] rounded flex items-center justify-center overflow-hidden">
-        {paper.processed ? (
-          <img
-            src={firstPageUrl(paper.id)}
-            alt=""
-            className="max-w-full max-h-full object-contain"
-            onError={e => { (e.target as HTMLImageElement).style.display = 'none' }}
+        <PaperCover key={paper.id} paper={paper} iconSize={16} />
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-start">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
+            {paper.title || paper.filename}
+          </p>
+          <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed mt-1 text-safe-wrap">
+            {paper.authors.length > 0 ? paper.authors.slice(0, 3).join(', ') : paper.filename}
+            {paper.num_pages && <span className="text-slate-600"> · {paper.num_pages}p</span>}
+          </p>
+          <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${stage.stage === 'failed' ? 'text-rose-300' : 'text-slate-500'}`}>
+            {stage.stage === 'failed' ? (stage.errorSummary || stage.summary) : stage.summary}
+          </p>
+        </div>
+        <div className="flex min-w-0 w-full flex-col items-stretch gap-2 sm:max-w-[16rem]">
+          <InlinePaperCategoryEditor
+            paper={paper}
+            options={categoryOptions}
+            value={categoryValue}
+            saving={categorySaving}
+            onChange={onCategoryChange}
+            variant="list"
           />
-        ) : (
-          <FileText size={16} className="text-slate-700" />
-        )}
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
-          {paper.title || paper.filename}
-        </p>
-        <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed mt-1 text-safe-wrap">
-          {paper.authors.length > 0 ? paper.authors.slice(0, 3).join(', ') : paper.filename}
-          {paper.num_pages && <span className="text-slate-600"> · {paper.num_pages}p</span>}
-        </p>
-        <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${stage.stage === 'failed' ? 'text-rose-300' : 'text-slate-500'}`}>
-          {stage.stage === 'failed' ? (stage.errorSummary || stage.summary) : stage.summary}
-        </p>
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <InlinePaperCategoryEditor
-          paper={paper}
-          options={categoryOptions}
-          value={categoryValue}
-          saving={categorySaving}
-          onChange={onCategoryChange}
-          variant="list"
-        />
-        <PaperProcessBadge paper={paper} pending={pending} />
+          <div className="flex flex-wrap items-center gap-2">
+            <PaperProcessButton paper={paper} pending={pending} onProcessAction={onProcessAction} />
+            <PaperProcessBadge paper={paper} pending={pending} />
+          </div>
+        </div>
       </div>
     </article>
   )
+}
+
+function inheritedCategoryOptionLabel(paper: PaperRecord): string {
+  return `${tr("跟随 ·")} ${paper.paper_category_model || tr("未设置")}`
 }
 
 function InlinePaperCategoryEditor({
@@ -1109,32 +1156,40 @@ function InlinePaperCategoryEditor({
 }) {
   useLocale()
   const selectId = `paper-category-${variant}-${paper.id}`
-  const effectiveCategory = value === CATEGORY_INHERIT
-    ? (paper.paper_category_model || paper.paper_category || tr("未设置"))
+  const selectedLabel = value === CATEGORY_INHERIT
+    ? inheritedCategoryOptionLabel(paper)
     : value
-  const dotColor = categoryDotColor(effectiveCategory)
+  const sourceHint = paper.paper_category_source === 'manual' ? tr('（人工）') : tr('（跟随模型）')
   return (
     <div
-      className="relative min-w-0"
+      className="relative w-full min-w-0 max-w-full overflow-hidden"
+      data-testid="paper-card-category"
       onClick={event => event.stopPropagation()}
       onKeyDown={event => event.stopPropagation()}
     >
       <label htmlFor={selectId} className="sr-only">{tr("论文大类")}</label>
       <span
-        className={`pointer-events-none absolute left-2 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full ${dotColor}`}
+        className={`pointer-events-none absolute left-2 top-1.5 h-1.5 w-1.5 rounded-full ${categoryDotColor(selectedLabel === inheritedCategoryOptionLabel(paper) ? (paper.paper_category_model || paper.paper_category || tr("未设置")) : selectedLabel)}`}
         aria-hidden="true"
       />
+      <p
+        data-testid="paper-card-category-label"
+        className="break-words whitespace-normal pl-5 pr-1 text-[10px] font-medium leading-snug text-slate-300"
+      >
+        {selectedLabel}
+        <span className="text-slate-500">{sourceHint}</span>
+      </p>
       <select
         id={selectId}
         aria-label={tr("{0}的论文大类", { 0: paper.title || paper.filename })}
         value={value}
         disabled={saving}
         onChange={event => onChange(event.target.value)}
-        title={tr("论文大类：{0}{1}", { 0: effectiveCategory, 1: paper.paper_category_source === 'manual' ? tr('（人工）') : tr('（跟随模型）') })}
-        className={`${variant === 'grid' ? 'max-w-32' : 'max-w-36'} cursor-pointer truncate rounded-md border border-slate-700/70 bg-transparent py-1 pl-5 pr-6 text-[10px] font-medium text-slate-300 focus:border-slate-500 focus:outline-none disabled:cursor-wait disabled:opacity-60`}
+        title={tr("论文大类：{0}{1}", { 0: value === CATEGORY_INHERIT ? (paper.paper_category_model || paper.paper_category || tr("未设置")) : value, 1: sourceHint })}
+        className="mt-1 w-full min-w-0 max-w-full cursor-pointer rounded-md border border-slate-700/70 bg-transparent py-1 pl-5 pr-6 text-[10px] font-medium text-slate-300 focus:border-slate-500 focus:outline-none disabled:cursor-wait disabled:opacity-60"
       >
         <option value={CATEGORY_INHERIT}>
-          {tr("跟随 ·")}{' '}{paper.paper_category_model || tr("未设置")}
+          {inheritedCategoryOptionLabel(paper)}
         </option>
         {options.map(option => (
           <option key={option} value={option}>{option}</option>

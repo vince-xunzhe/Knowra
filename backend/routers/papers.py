@@ -34,7 +34,11 @@ from path_utils import (
     resolve_papers_directory,
 )
 from services.scanner_service import scan_directory
-from services.pdf_service import extract_text, render_first_page
+from services.pdf_service import extract_text
+from services.paper_preview_service import (
+    attach_first_page_preview,
+    paper_has_first_page_image,
+)
 from services.vlm_service import (
     extract_knowledge_from_paper,
     extraction_has_critical_issues,
@@ -428,10 +432,7 @@ def _chat_state(p: Paper) -> dict:
 
 def _serialize_paper_detail(p: Paper, db: Session) -> dict:
     nodes = _nodes_for_paper(db, p.id)
-    has_first_page_image = bool(
-        p.first_page_image_path
-        and resolve_artifact_path(p.first_page_image_path).exists()
-    )
+    has_first_page_image = paper_has_first_page_image(p)
     category = effective_paper_category(p, _safe_parse(p.raw_llm_response))
     team = effective_paper_team(p, _safe_parse(p.raw_llm_response))
     recorded_hash = str(p.file_hash or "").lower()
@@ -698,6 +699,7 @@ def _serialize_paper_list_item(p: Paper) -> dict:
             "learning_status": normalize_learning_status(p.learning_status),
             "year": _paper_pub_year(p, extraction),
             "error": p.error,
+            "has_first_page_image": paper_has_first_page_image(p),
             "created_at": p.created_at.isoformat() if p.created_at else None,
         }
 
@@ -804,11 +806,17 @@ def serve_paper_record(paper_id: str, db: Session = Depends(get_db)):
 @router.get("/papers/{paper_id}/first_page")
 def serve_first_page(paper_id: str, db: Session = Depends(get_db)):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
-    if not p or not p.first_page_image_path:
+    if not p:
+        raise HTTPException(status_code=404, detail="First page image not found")
+    if not paper_has_first_page_image(p):
+        if attach_first_page_preview(p):
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+    if not paper_has_first_page_image(p):
         raise HTTPException(status_code=404, detail="First page image not found")
     image_path = resolve_artifact_path(p.first_page_image_path)
-    if not image_path.exists():
-        raise HTTPException(status_code=404, detail="First page image not found")
     db.close()
     return FileResponse(str(image_path), media_type="image/png")
 
@@ -946,11 +954,8 @@ def _process_single(paper_id: str):
                     except Exception:
                         db.rollback()
 
-                if not p.first_page_image_path:
-                    img_path = render_first_page(str(pdf_path), p.file_hash)
-                    if img_path:
-                        p.first_page_image_path = img_path
-                        db.commit()
+                if attach_first_page_preview(p):
+                    db.commit()
 
                 stage = PIPELINE_STATUS_EXTRACTING
                 _set_pipeline_state(
@@ -2180,6 +2185,11 @@ def import_recommendation(body: RecImportInput, db: Session = Depends(get_db)):
             paper = db.query(Paper).filter_by(filepath=portable_data_path(path)).first()
             if paper is None:
                 raise HTTPException(409, "论文入库冲突，请刷新后重试")
+    try:
+        if attach_first_page_preview(paper):
+            db.commit()
+    except Exception:
+        db.rollback()
     return {"status": "imported", "paper_id": paper.id, "arxiv_id": aid}
 
 

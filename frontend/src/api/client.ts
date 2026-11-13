@@ -30,6 +30,7 @@ export interface PaperRecord {
   learning_status: PaperLearningStatus
   year: number | null
   error: string | null
+  has_first_page_image?: boolean
   created_at: string | null
 }
 
