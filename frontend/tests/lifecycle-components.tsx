@@ -2,6 +2,7 @@ import { useState } from 'react'
 import AskDrawer from '../src/components/AskDrawer'
 import RejectedRescueModal from '../src/components/RejectedRescueModal'
 import BackgroundTasks from '../src/components/BackgroundTasks'
+import PapersPage from '../src/pages/PapersPage'
 import { FileSearchConfirmationProvider } from '../src/hooks/useFileSearchConfirmation'
 
 export function AskHarness() {
@@ -32,6 +33,18 @@ export function BackgroundTasksHarness() {
           </div>
         </nav>
         <main className="flex-1 p-8" data-testid="tasks-outside">页面其他区域</main>
+      </div>
+    </FileSearchConfirmationProvider>
+  )
+}
+
+export function LibraryPapersHarness() {
+  const [opened, setOpened] = useState<number | null>(null)
+  return (
+    <FileSearchConfirmationProvider>
+      <div className="flex min-h-screen flex-col bg-slate-950 text-slate-100" data-testid="library-page">
+        <PapersPage onOpenReview={id => setOpened(id)} />
+        <output data-testid="opened-review">{opened ?? ''}</output>
       </div>
     </FileSearchConfirmationProvider>
   )

@@ -65,3 +65,21 @@ export function inferPaperProcessMeta(
     errorSummary: null,
   }
 }
+
+export type PaperCardProcessKind = 'process' | 'retry'
+
+export interface PaperCardProcessAction {
+  kind: PaperCardProcessKind
+  label: string
+}
+
+/** Visible process entry for unfinished library cards. Processed papers have none. */
+export function paperCardProcessAction(paper: PaperRecord): PaperCardProcessAction | null {
+  if (paper.processed) return null
+  if (paper.error) {
+    return { kind: 'retry', label: tr("重试处理") }
+  }
+  // "处理" is already a catalog key for the "processed at" suffix ("Processed").
+  // Use the existing verb form so English/Spanish stay correct; Chinese is 立即处理.
+  return { kind: 'process', label: tr("立即处理") }
+}

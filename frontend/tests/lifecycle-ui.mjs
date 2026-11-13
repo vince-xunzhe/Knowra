@@ -618,6 +618,170 @@ try {
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
+
+  await test('Library cards show first page, process actions and full categories', async () => {
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const openaiRoute = {
+      provider_id: 'openai', provider_type: 'openai', provider_label: 'OpenAI',
+      model_id: 'openai/gpt-4o', model_label: 'GPT-4o', upstream_model: 'gpt-4o',
+      runtime_model_name: 'gpt-4o', surface: 'openai_file_search', file_search_api: 'assistants',
+      requires_file_search_confirmation: true, supported: true, unsupported_reason: null,
+      route_fingerprint: 'fp-openai-fixture', has_custom_base_url: false,
+      pricing_url: '/tests/lifecycle-harness.html', file_search_guide_url: '/tests/lifecycle-harness.html',
+    }
+    const codexRoute = {
+      ...openaiRoute,
+      provider_id: 'codex-cli', provider_type: 'codex_cli', provider_label: 'Codex',
+      model_id: 'codex-cli/gpt-6-astra', model_label: 'Codex', surface: 'codex_cli_hierarchy',
+      file_search_api: null, requires_file_search_confirmation: false,
+      route_fingerprint: 'fp-codex-fixture',
+    }
+    const longCategory = '三维重建-静态'
+    const englishCategory = 'Foundation-Model Evaluation Benchmarks'
+    const records = [
+      {
+        id: 11, filename: '2604.18484v2(1).pdf', filepath: 'fixture/unprocessed.pdf',
+        title: 'Pending library fixture', authors: ['Synthetic Author'], num_pages: 48,
+        processed: false, processed_at: null, processing_status: 'scanning', error: null,
+        paper_category: null, paper_category_model: longCategory, paper_category_override: null,
+        paper_category_source: 'model', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: false,
+      },
+      {
+        id: 12, filename: 'failed.pdf', filepath: 'fixture/failed.pdf',
+        title: 'Failed library fixture', authors: [], num_pages: 2,
+        processed: false, processed_at: null, processing_status: 'failed', error: 'Synthetic extract failure',
+        paper_category: null, paper_category_model: null, paper_category_override: englishCategory,
+        paper_category_source: 'manual', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: false,
+      },
+      {
+        id: 13, filename: 'done.pdf', filepath: 'fixture/done.pdf',
+        title: 'Completed library fixture', authors: ['Done Author'], num_pages: 6,
+        processed: true, processed_at: '2026-01-02T00:00:00', processing_status: 'completed', error: null,
+        paper_category: 'LLM', paper_category_model: 'LLM', paper_category_override: 'LLM',
+        paper_category_source: 'manual', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: true,
+      },
+      {
+        id: 14, filename: 'missing-cover.pdf', filepath: 'fixture/missing-cover.pdf',
+        title: 'Cover-missing library fixture', authors: [], num_pages: 1,
+        processed: false, processed_at: null, processing_status: 'scanning', error: null,
+        paper_category: null, paper_category_model: '未设置', paper_category_override: null,
+        paper_category_source: 'none', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: false,
+      },
+    ]
+    const processPosts = []
+    let extractRoute = openaiRoute
+    const firstPageHits = []
+    const page = await newPage('library', async (route, path, request) => {
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
+      if (path === '/api/paper-categories') { await json(route, { categories: ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] }); return true }
+      if (path === '/api/status') {
+        await json(route, { running: false, total: 0, done: 0, errors: 0, current: '' })
+        return true
+      }
+      if (path === '/api/papers/extract-route') { await json(route, extractRoute); return true }
+      const firstPage = path.match(/^\/api\/papers\/(\d+)\/first_page$/)
+      if (firstPage) {
+        firstPageHits.push(firstPage[1])
+        const id = Number(firstPage[1])
+        if (id === 14) { await route.fulfill({ status: 404, body: 'missing' }); return true }
+        await route.fulfill({ status: 200, contentType: 'image/png', body: tinyPng })
+        const row = records.find(item => item.id === id)
+        if (row) row.has_first_page_image = true
+        return true
+      }
+      const process = path.match(/^\/api\/papers\/(\d+)\/(process|retry)$/)
+      if (process && request.method() === 'POST') {
+        processPosts.push({ id: Number(process[1]), action: process[2], body: request.postData() || '' })
+        const row = records.find(item => item.id === Number(process[1]))
+        if (row) row.processing_status = 'queued'
+        await json(route, { running: true, total: 1, done: 0, errors: 0, current: row?.filename || '' })
+        return true
+      }
+      return false
+    })
+
+    const pendingCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Pending library fixture' })
+    const failedCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Failed library fixture' })
+    const doneCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Completed library fixture' })
+    const missingCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Cover-missing library fixture' })
+
+    await expect(pendingCard.getByTestId('paper-cover-image')).toBeVisible()
+    await expect(failedCard.getByTestId('paper-cover-image')).toBeVisible()
+    await expect(doneCard.getByTestId('paper-cover-image')).toBeVisible()
+    await expect(missingCard.getByTestId('paper-cover-fallback')).toBeVisible()
+    assert.ok(firstPageHits.includes('11'), 'unprocessed papers must request a first-page image')
+    assert.ok(firstPageHits.includes('13'), 'processed papers still request a first-page image')
+
+    await expect(pendingCard.getByTestId('paper-card-process')).toHaveText(/立即处理/)
+    await expect(failedCard.getByTestId('paper-card-process')).toHaveText(/重试处理/)
+    await expect(doneCard.getByTestId('paper-card-process')).toHaveCount(0)
+
+    const pendingCategory = pendingCard.getByTestId('paper-card-category-label')
+    await expect(pendingCategory).toContainText('跟随 ·')
+    await expect(pendingCategory).toContainText(longCategory)
+    const failedCategory = failedCard.getByTestId('paper-card-category-label')
+    await expect(failedCategory).toContainText(englishCategory)
+    const noOverflow = async (locator, label) => {
+      const box = await locator.evaluate(node => {
+        const card = node.closest('[data-testid="paper-grid-card"]')
+        if (!card) return { ok: false, reason: 'no card' }
+        const cardBox = card.getBoundingClientRect()
+        const nodeBox = node.getBoundingClientRect()
+        return {
+          ok: node.scrollWidth <= node.clientWidth + 1 && nodeBox.right <= cardBox.right + 1 && card.scrollWidth <= card.clientWidth + 1,
+          scrollWidth: node.scrollWidth, clientWidth: node.clientWidth, cardScroll: card.scrollWidth, cardClient: card.clientWidth,
+        }
+      })
+      assert.ok(box.ok, `${label} overflow ${JSON.stringify(box)}`)
+    }
+    await noOverflow(pendingCategory, 'long Chinese category')
+    await noOverflow(failedCategory, 'long English category')
+
+    await pendingCard.getByTestId('paper-card-process').click()
+    await expect(page.getByRole('dialog', { name: /将通过 OpenAI API 进行论文抽取/ })).toBeVisible()
+    await page.getByRole('dialog').locator('footer').getByRole('button', { name: '取消' }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    assert.equal(processPosts.length, 0)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await pendingCard.getByTestId('paper-card-process').click()
+    await page.getByRole('button', { name: '继续抽取' }).click()
+    await expect.poll(() => processPosts.length).toBe(1)
+    assert.equal(processPosts[0].id, 11)
+    assert.equal(processPosts[0].action, 'process')
+    assert.match(processPosts[0].body, /fp-openai-fixture/)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    extractRoute = codexRoute
+    await failedCard.getByTestId('paper-card-process').click()
+    await expect.poll(() => processPosts.length).toBe(2)
+    assert.equal(processPosts[1].id, 12)
+    assert.equal(processPosts[1].action, 'retry')
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await page.setViewportSize({ width: 390, height: 800 })
+    await expect(pendingCategory).toContainText(longCategory)
+    await noOverflow(pendingCategory, 'narrow long Chinese category')
+    await noOverflow(failedCategory, 'narrow long English category')
+
+    await page.getByTitle('列表视图').click()
+    await expect(page.getByTestId('paper-list-row')).toHaveCount(4)
+    const pendingRow = page.getByTestId('paper-list-row').filter({ hasText: 'Pending library fixture' })
+    const doneRow = page.getByTestId('paper-list-row').filter({ hasText: 'Completed library fixture' })
+    await expect(pendingRow.getByTestId('paper-card-process')).toBeVisible()
+    await expect(doneRow.getByTestId('paper-card-process')).toHaveCount(0)
+    await expect(pendingRow.getByTestId('paper-card-category-label')).toContainText(longCategory)
+  })
+
   await test('Rescue recall survives close/reopen and cannot be submitted twice', async () => {
     const pending = deferred()
     let loads = 0, recalls = 0
@@ -655,5 +819,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 10 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 11 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }
