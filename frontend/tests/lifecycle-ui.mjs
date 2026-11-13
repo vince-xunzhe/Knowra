@@ -339,6 +339,13 @@ try {
       await json(route, item); return true
     })
     await expect(page.getByRole('heading', { name: 'Fixture Alpha', exact: true })).toBeVisible()
+    await expect(page.getByText('Synthetic abstract', { exact: true })).toBeVisible()
+    const extractDetails = page.getByTestId('review-extract-details-toggle')
+    await expect(extractDetails).toBeVisible()
+    await expect(extractDetails).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByText('原文覆盖', { exact: true })).toHaveCount(0)
+    await extractDetails.click()
+    await expect(extractDetails).toHaveAttribute('aria-expanded', 'true')
     await expect(page.getByText('原文覆盖', { exact: true })).toBeVisible()
     await expect(page.getByText(/已遍历全部 18 页；42 个可抽取文本块分 7 批/)).toBeVisible()
     await page.getByTitle('编辑', { exact: true }).click()
@@ -369,6 +376,75 @@ try {
     await expect(page.getByText('Fixture Beta original content', { exact: true })).toBeVisible()
     await expect(page.getByText('User note draft survives refresh', { exact: true })).toHaveCount(0)
   })
+
+  await test('Review hides extraction details until expanded and resets on paper switch', async () => {
+    const alpha = paper(101, 'Fixture Alpha', 'LLM')
+    alpha.extraction = { title: 'Fixture Alpha', abstract_summary: 'Synthetic abstract', core_contribution: 'Visible core contribution' }
+    alpha.raw_llm_response = JSON.stringify(alpha.extraction)
+    alpha.source_evidence = {
+      manifest_id: 'fix-101', source_pages: 18, attempted_pages: 18, ok_pages: 17, empty_pages: 1,
+      failed_pages: 0, source_characters: 1000, source_chunks: 42, page_iteration_complete: true, visual_coverage: 'unsupported',
+    }
+    const beta = paper(102, 'Fixture Beta', 'VLM')
+    beta.extraction_coverage = {
+      ...beta.extraction_coverage,
+      page_iteration_complete: false, attempted_pages: 10, failed_pages: 2, failed_page_numbers: [4, 9], ok_pages: 8,
+    }
+    const papers = [alpha, beta]
+    const page = await newPage('review', async (route, path) => {
+      if (path === '/api/papers') { await json(route, papers); return true }
+      if (path === '/api/paper-categories') { await json(route, { categories: [] }); return true }
+      if (path === '/api/status') { await json(route, { running: false, current: null }); return true }
+      if (path === '/api/papers/101/source-evidence') {
+        await json(route, {
+          manifest_id: 'fix-101', paper_id: '101', source_sha256: 'fixture', source_pages: 18,
+          page: {
+            page_number: 1, status: 'ok', text_characters: 19, parser_used: 'fixture', error_type: null,
+            chunks: [{ evidence_id: 'e1', page_number: 1, page_char_start: 0, page_char_end: 19, section_heading: 'Intro', section_kind: 'body', text: 'Fixture source text' }],
+          },
+        })
+        return true
+      }
+      const match = path.match(/^\/api\/papers\/(101|102)(\/first_page)?$/)
+      if (!match) return false
+      if (match[2]) await route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>' })
+      else await json(route, papers.find(item => item.id === Number(match[1])))
+      return true
+    })
+    await expect(page.getByRole('heading', { name: 'Fixture Alpha', exact: true })).toBeVisible()
+    await expect(page.getByText('Visible core contribution', { exact: true })).toBeVisible()
+    await expect(page.getByText('Synthetic abstract', { exact: true })).toBeVisible()
+    const toggle = page.getByTestId('review-extract-details-toggle')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByTestId('review-extract-details-panel')).toHaveCount(0)
+    await expect(page.getByText('原文覆盖', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('原文对照', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('逐页核对原文', { exact: true })).toHaveCount(0)
+    await expect(page.getByTestId('review-extract-details-hint')).toHaveCount(0)
+    await toggle.click()
+    const panel = page.getByTestId('review-extract-details-panel')
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText(/处理阶段：/)).toBeVisible()
+    await expect(panel.getByText('原文覆盖', { exact: true })).toBeVisible()
+    await expect(panel.getByText('原文对照', { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '逐页核对原文' })).toBeVisible()
+    await page.getByRole('button', { name: '逐页核对原文' }).click()
+    await expect(page.getByText('Fixture source text', { exact: true })).toBeVisible()
+    await expect(page.getByText('Visible core contribution', { exact: true })).toBeVisible()
+    await toggle.click()
+    await expect(page.getByTestId('review-extract-details-panel')).toHaveCount(0)
+    await expect(page.getByText('Fixture source text', { exact: true })).toHaveCount(0)
+    await toggle.click()
+    await expect(page.getByTestId('review-extract-details-panel')).toBeVisible()
+    await page.getByTestId('review-paper-list').getByRole('button', { name: /Fixture Beta/ }).click()
+    await expect(page.getByRole('heading', { name: 'Fixture Beta', exact: true })).toBeVisible()
+    await expect(page.getByTestId('review-extract-details-toggle')).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByTestId('review-extract-details-panel')).toHaveCount(0)
+    await expect(page.getByTestId('review-extract-details-hint')).toContainText('原文覆盖不完整')
+    await expect(page.getByTestId('review-extract-details-hint')).toContainText('失败页 4, 9')
+    await expect(page.getByText('Synthetic abstract', { exact: true })).toBeVisible()
+  })
+
   await test('Review paper switch ignores an older chat response', async () => {
     const pending = deferred()
     const papers = [paper(101, 'Fixture Alpha', 'LLM'), paper(102, 'Fixture Beta', 'VLM')]
@@ -510,5 +586,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 8 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 9 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

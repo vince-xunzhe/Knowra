@@ -1,7 +1,7 @@
 import { getFormattingLocale } from '../i18n/store'
 import { t as tr } from '../i18n/catalog'
 import { useLocale } from '../i18n/preferences'
-import { useEffect, useState, useMemo, useRef, useCallback, createContext, useContext } from 'react'
+import { useEffect, useState, useMemo, useRef, useCallback, createContext, useContext, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import katex from 'katex'
@@ -38,6 +38,7 @@ import {
 } from '../components/paperProcessMeta'
 import PdfSidePanel, { type PdfViewState } from '../components/PdfSidePanel'
 import { normalizeFormula } from '../services/formulaNormalizer'
+import { collectExtractDetailHints } from './extractDetailsHints'
 
 type Filter = 'all' | 'processed' | 'pending' | 'failed'
 type Technique = { name?: string; aliases?: string[]; role?: string; builds_on?: string[] }
@@ -215,6 +216,61 @@ function SourceEvidencePanel({ paperId, sourcePages }: { paperId: number; source
               </p>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ExtractDetailsSection({
+  paperId,
+  hints,
+  children,
+}: {
+  paperId: number
+  hints: string[]
+  children: ReactNode
+}) {
+  useLocale()
+  // Default closed. The parent remounts this block with key={paperId} so
+  // switching papers starts collapsed again without a reset effect.
+  const [open, setOpen] = useState(false)
+
+  const panelId = `review-extract-details-${paperId}`
+  const hintId = `${panelId}-hint`
+
+  return (
+    <div className="mt-3" data-testid="review-extract-details">
+      <button
+        type="button"
+        data-testid="review-extract-details-toggle"
+        className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-300 transition-colors hover:text-slate-100"
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-describedby={hints.length ? hintId : undefined}
+        onClick={() => setOpen(value => !value)}
+      >
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        {tr("抽取详情")}
+      </button>
+      {hints.length > 0 && (
+        <p
+          id={hintId}
+          data-testid="review-extract-details-hint"
+          className="mt-1 text-[11px] leading-relaxed text-safe-wrap text-rose-300"
+        >
+          {hints.join(' · ')}
+        </p>
+      )}
+      {open && (
+        <div
+          id={panelId}
+          role="region"
+          aria-label={tr("抽取详情")}
+          data-testid="review-extract-details-panel"
+          className="mt-2 space-y-3"
+        >
+          {children}
         </div>
       )}
     </div>
@@ -929,8 +985,19 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                 )}
               </div>
 
+              {(visibleProcessMeta || visibleDetail.extraction_coverage || visibleDetail.source_evidence) && (
+                <ExtractDetailsSection
+                  key={visibleDetail.id}
+                  paperId={visibleDetail.id}
+                  hints={collectExtractDetailHints({
+                    processStage: visibleProcessMeta?.stage,
+                    processError: visibleErrorSummary || visibleProcessMeta?.errorSummary,
+                    coverage: visibleDetail.extraction_coverage,
+                    sourceEvidence: visibleDetail.source_evidence,
+                  })}
+                >
               {visibleProcessMeta && (
-                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                <div className="rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
                   <p className="text-[11px] font-medium text-slate-200">
                     {tr("处理阶段：")}{' '}{visibleProcessMeta.label}
                   </p>
@@ -943,7 +1010,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
               )}
 
               {visibleDetail.extraction_coverage && (
-                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                <div className="rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
                   <p className="text-[11px] font-medium text-slate-200">{tr("原文覆盖")}</p>
                   {visibleDetail.extraction_coverage.strategy === 'full-page-hierarchy-v1' ? (
                     <p className={`mt-1 text-[11px] leading-relaxed text-safe-wrap ${visibleDetail.extraction_coverage.page_iteration_complete ? 'text-emerald-300' : 'text-rose-300'}`}>
@@ -979,7 +1046,7 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
               )}
 
               {visibleDetail.source_evidence && (
-                <div className="mt-3 rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
+                <div className="rounded-xl border border-slate-800/70 bg-slate-900/55 px-3 py-2.5">
                   <p className="text-[11px] font-medium text-slate-200">{tr("原文对照")}</p>
                   <p className={`mt-1 text-[11px] leading-relaxed ${visibleDetail.source_evidence.page_iteration_complete ? 'text-emerald-300' : 'text-rose-300'}`}>
                     {tr("本地文本层：{0} 页、{1} 个可定位文本块；空白页 {2}，失败页 {3}。", {
@@ -995,6 +1062,8 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
                     sourcePages={visibleDetail.source_evidence.source_pages}
                   />
                 </div>
+              )}
+                </ExtractDetailsSection>
               )}
 
               {actionNotice && (
