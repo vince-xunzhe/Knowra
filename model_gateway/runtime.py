@@ -16,11 +16,11 @@ from .attempt_budget import (
     ProviderAttemptBudgetError,
     request_identity,
 )
+from .catalog import openai_model_uses_responses_api
 from .config import get_model_entry, get_provider_entry
 from .telemetry import log_codex_cli_call, track_call
 
 
-RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -334,7 +334,7 @@ def _call_text_model_unbudgeted(
     if model_entry is None:
         client, upstream_model, provider_blob, _ = create_openai_client_for_model(cfg, model_id)
         provider_id = str(provider_blob.get("id") or "openai")
-        if upstream_model in RESPONSES_ONLY_MODELS:
+        if openai_model_uses_responses_api(upstream_model):
             kwargs: dict[str, Any] = {
                 "model": upstream_model,
                 "instructions": system,
@@ -391,7 +391,7 @@ def _call_text_model_unbudgeted(
         )
 
     client = _create_openai_client(cfg, provider)
-    if provider_type == "openai" and upstream_model in RESPONSES_ONLY_MODELS:
+    if provider_type == "openai" and openai_model_uses_responses_api(upstream_model):
         kwargs = {
             "model": upstream_model,
             "instructions": system,

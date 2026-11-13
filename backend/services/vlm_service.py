@@ -49,6 +49,7 @@ from model_gateway import (
     get_model_entry,
     get_provider_entry,
 )
+from model_gateway.catalog import openai_model_uses_responses_api
 from model_gateway.runtime import ProviderConfigurationError
 
 
@@ -114,7 +115,6 @@ LOCAL_EXTRACTION_NOTES_INSTRUCTIONS = (
 )
 
 ASSISTANT_NAME = "knowledge-tree-paper-extractor"
-RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 LOCAL_TEXT_FALLBACK_MAX_CHARS = 32000
 LOCAL_CHAT_CONTEXT_MAX_CHARS = 24000
 LOCAL_EXTRACTION_CHUNK_TIMEOUT_S = 150
@@ -124,7 +124,7 @@ RUNTIME_CATEGORY_MARKER = "═══════════ 运行时可选论�
 
 
 def model_uses_responses_api(model: str) -> bool:
-    return model in RESPONSES_ONLY_MODELS
+    return openai_model_uses_responses_api(model)
 
 
 def _resolve_model_gateway_context(model: str) -> tuple[dict, str]:

@@ -2,8 +2,10 @@ from .catalog import (
     AVAILABLE_PROVIDER_TYPES,
     BUILTIN_MODEL_REGISTRY,
     DEFAULT_PROVIDER_REGISTRY,
+    OPENAI_RESPONSES_ONLY_MODELS,
     TASK_BINDING_DEFAULTS,
     TASK_SPECS,
+    openai_model_uses_responses_api,
 )
 from .config import (
     ensure_model_gateway_config,
@@ -28,6 +30,7 @@ __all__ = [
     "AVAILABLE_PROVIDER_TYPES",
     "BUILTIN_MODEL_REGISTRY",
     "DEFAULT_PROVIDER_REGISTRY",
+    "OPENAI_RESPONSES_ONLY_MODELS",
     "TASK_BINDING_DEFAULTS",
     "TASK_SPECS",
     "ModelGatewayError",
@@ -41,6 +44,7 @@ __all__ = [
     "get_model_entry",
     "get_provider_entry",
     "mask_model_gateway_config",
+    "openai_model_uses_responses_api",
     "run_provider_healthcheck",
     "sync_legacy_fields",
     "task_context",

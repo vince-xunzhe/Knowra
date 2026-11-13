@@ -15,11 +15,11 @@ from pydantic import BaseModel, Field
 
 from config import load_config, task_model_id, task_model_name
 from model_gateway import get_model_entry, get_provider_entry, get_task_binding
+from model_gateway.catalog import openai_model_uses_responses_api
 
 
 FILE_SEARCH_PRICING_URL = "https://platform.openai.com/docs/pricing"
 FILE_SEARCH_GUIDE_URL = "https://platform.openai.com/docs/guides/tools-file-search"
-RESPONSES_ONLY_MODELS = {"gpt-5.5", "gpt-5.4", "gpt-5.4-mini"}
 
 CONFIRMATION_REQUIRED_CODE = "file_search_confirmation_required"
 ROUTE_CHANGED_CODE = "file_search_route_changed"
@@ -101,7 +101,7 @@ def _normalized_base_url(raw: Any) -> str:
 
 
 def _file_search_api(upstream_model: str) -> str:
-    return "responses" if upstream_model in RESPONSES_ONLY_MODELS else "assistants"
+    return "responses" if openai_model_uses_responses_api(upstream_model) else "assistants"
 
 
 def public_route_view(route: Mapping[str, Any]) -> dict[str, Any]:
