@@ -549,6 +549,75 @@ try {
     const dark = await Promise.all(names.map(name => metrics(title(name))))
     for (const result of dark) assert.ok(result.contrast >= 4.5, `Dark title contrast ${result.contrast.toFixed(2)} must be at least 4.5`)
   })
+
+  await test('Background tasks panel closes on outside press and keeps inner actions', async () => {
+    const jobs = [
+      { job_id: 'compile-1', kind: 'compile', channel: 'compile', status: 'failed', progress: { label: 'Wiki 编译失败' }, error: 'Synthetic compile failure', result: null, worker_online: true },
+      { job_id: 'scan-1', kind: 'scan', channel: 'scan', status: 'completed', progress: { label: '扫描完成' }, error: null, result: null, worker_online: true },
+    ]
+    let resumes = 0
+    const page = await newPage('tasks', async (route, path, request) => {
+      if (path === '/api/jobs') { await json(route, jobs); return true }
+      if (path === '/api/jobs/compile-1/resume' && request.method() === 'POST') {
+        resumes++
+        jobs[0] = { ...jobs[0], status: 'queued', error: null, progress: { label: '已恢复' } }
+        await json(route, jobs[0])
+        return true
+      }
+      return false
+    })
+    const toggle = page.getByRole('button', { name: /后台任务/ })
+    const panel = page.getByTestId('background-tasks-panel')
+    const outside = page.getByTestId('tasks-outside')
+    await expect(page.getByTestId('background-tasks')).toBeVisible()
+    await expect(panel).toHaveCount(0)
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    await toggle.click()
+    await expect(panel).toBeVisible()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await panel.getByText('Wiki 编译失败', { exact: true }).click()
+    await expect(panel).toBeVisible()
+    await panel.locator('div.max-h-72').evaluate(element => { element.scrollTop = 24 })
+    await expect(panel).toBeVisible()
+    await panel.getByRole('button', { name: '从检查点恢复' }).click()
+    await expect.poll(() => resumes).toBe(1)
+    await expect(panel).toBeVisible()
+    await expect(panel.getByText('已恢复', { exact: true })).toBeVisible()
+
+    await toggle.click()
+    await expect(panel).toHaveCount(0)
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+
+    await toggle.click()
+    await expect(panel).toBeVisible()
+    await outside.click()
+    await expect(panel).toHaveCount(0)
+
+    for (let index = 0; index < 5; index++) {
+      await toggle.click()
+      await expect(panel).toBeVisible()
+      await toggle.click()
+      await expect(panel).toHaveCount(0)
+    }
+
+    await toggle.click()
+    await expect(panel).toBeVisible()
+    await outside.dispatchEvent('pointerdown', { pointerType: 'touch', bubbles: true, cancelable: true, composed: true })
+    await expect(panel).toHaveCount(0)
+
+    await toggle.click()
+    await expect(panel).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(panel).toHaveCount(0)
+
+    await toggle.click()
+    await expect(panel).toBeVisible()
+    await outside.click()
+    await expect(panel).toHaveCount(0)
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
   await test('Rescue recall survives close/reopen and cannot be submitted twice', async () => {
     const pending = deferred()
     let loads = 0, recalls = 0
@@ -586,5 +655,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 9 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 10 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }
