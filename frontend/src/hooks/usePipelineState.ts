@@ -1,4 +1,5 @@
 import { useLocale } from '../i18n/preferences'
+import { useFileSearchConfirmation } from './useFileSearchConfirmation'
 import { readWithRetry } from '../api/polling'
 import { t as tr } from '../i18n/catalog'
 // Central polling + action surface for the [知识] page pipeline.
@@ -169,6 +170,7 @@ export function usePipelineState({
   onOpenLint,
 }: UsePipelineStateOptions = {}): PipelineState & PipelineActions {
   const locale = useLocale()
+  const { confirmIfNeeded } = useFileSearchConfirmation()
   const [freshness, setFreshness] = useState<WikiFreshnessSummary | null>(null)
   const [promotion, setPromotion] = useState<PromotionSummary | null>(null)
   const [promotionRunStatus, setPromotionRunStatus] = useState<PromotionRunStatus | null>(null)
@@ -522,8 +524,16 @@ export function usePipelineState({
   }, [refresh])
 
   const submitProcessing = useCallback(async (retry: boolean) => {
+    const decision = await confirmIfNeeded()
+    if (decision.status === 'cancelled') {
+      return
+    }
+    if (decision.status === 'blocked') {
+      throw new Error(decision.message)
+    }
+    const confirmation = decision.status === 'confirmed' ? decision.confirmation : undefined
     await wrap(async () => {
-      const started = await (retry ? retryFailedPapers() : processAll())
+      const started = await (retry ? retryFailedPapers(confirmation) : processAll(confirmation))
       const next: ProcessingStatus = {
         running: !!started.running,
         total: started.total ?? 0,
@@ -554,7 +564,7 @@ export function usePipelineState({
         throw new Error(started.message || tr("没有可提交的论文任务"))
       }
     })
-  }, [wrap])
+  }, [wrap, confirmIfNeeded])
 
   const process = useCallback(() => submitProcessing(false), [submitProcessing])
   const retryFailed = useCallback(() => submitProcessing(true), [submitProcessing])

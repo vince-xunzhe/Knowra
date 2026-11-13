@@ -14,6 +14,7 @@ import BackgroundTasks from './components/BackgroundTasks'
 import WikiCompileStatus from './components/WikiCompileStatus'
 import WikiLintStatus from './components/WikiLintStatus'
 import { WikiLintProvider } from './hooks/useWikiLint'
+import { FileSearchConfirmationProvider } from './hooks/useFileSearchConfirmation'
 import knowraLogo from './assets/knowra-logo.jpeg'
 
 type Page = 'graph' | 'domain' | 'roadmap' | 'papers' | 'review' | 'recommend' | 'dashboard' | 'settings'
@@ -47,7 +48,7 @@ const NAV: NavItem[] = [
 
 export default function App() {
   useLocale()
-  return <WikiLintProvider><AppContent /></WikiLintProvider>
+  return <WikiLintProvider><FileSearchConfirmationProvider><AppContent /></FileSearchConfirmationProvider></WikiLintProvider>
 }
 
 function AppContent() {

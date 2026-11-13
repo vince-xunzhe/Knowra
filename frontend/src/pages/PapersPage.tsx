@@ -11,8 +11,11 @@ import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
   uploadPapers, listPaperCategories, updatePaperCategory,
   getCachedPapers,
+  type FileSearchConfirmation,
   type PaperRecord,
 } from '../api/client'
+import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
+import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
@@ -70,6 +73,7 @@ interface PapersPageProps {
 
 export default function PapersPage({ onOpenReview }: PapersPageProps) {
   useLocale()
+  const { confirmIfNeeded } = useFileSearchConfirmation()
   const [papers, setPapers] = useState<PaperRecord[]>(() => getCachedPapers() ?? [])
   const [loading, setLoading] = useState(() => getCachedPapers() === null)
   const [selected, setSelected] = useState<PaperRecord | null>(null)
@@ -93,6 +97,19 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   // edit the extraction prompt every visit; surface it on demand.
   const [promptOpen, setPromptOpen] = useState(false)
   const wasRunningRef = useRef(false)
+
+  const requestExtractConfirmation = useCallback(async (): Promise<FileSearchConfirmation | false | undefined> => {
+    const decision = await confirmIfNeeded()
+    if (decision.status === 'cancelled') {
+      setActionNotice({ tone: 'info', title: tr(CANCELLED_EXTRACTION_NOTICE) })
+      return false
+    }
+    if (decision.status === 'blocked') {
+      setActionNotice({ tone: 'error', title: tr("处理启动失败"), detail: decision.message })
+      return false
+    }
+    return decision.status === 'confirmed' ? decision.confirmation : undefined
+  }, [confirmIfNeeded])
 
   const load = useCallback(async () => {
     try {
@@ -192,10 +209,12 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   }, [load])
 
   const handleProcessOne = async (p: PaperRecord) => {
-    setPendingIds(prev => new Set(prev).add(p.id))
     setActionNotice(null)
+    const confirmation = await requestExtractConfirmation()
+    if (confirmation === false) return
+    setPendingIds(prev => new Set(prev).add(p.id))
     try {
-      await processPaper(p.id)
+      await processPaper(p.id, confirmation)
       setActionNotice({
         tone: 'info',
         title: tr("已提交处理：{0}", { 0: p.filename }),
@@ -213,10 +232,12 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   }
 
   const handleRetry = async (p: PaperRecord) => {
-    setPendingIds(prev => new Set(prev).add(p.id))
     setActionNotice(null)
+    const confirmation = await requestExtractConfirmation()
+    if (confirmation === false) return
+    setPendingIds(prev => new Set(prev).add(p.id))
     try {
-      await retryPaper(p.id)
+      await retryPaper(p.id, confirmation)
       setActionNotice({
         tone: 'info',
         title: tr("已提交重试：{0}", { 0: p.filename }),
@@ -234,13 +255,15 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   }
 
   const handleReprocess = async (p: PaperRecord) => {
+    setActionNotice(null)
+    const confirmation = await requestExtractConfirmation()
+    if (confirmation === false) return
     const ok = confirm(tr("确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。"))
     if (!ok) return
 
     setPendingIds(prev => new Set(prev).add(p.id))
-    setActionNotice(null)
     try {
-      await reprocessPaper(p.id)
+      await reprocessPaper(p.id, confirmation)
       setActionNotice({
         tone: 'info',
         title: tr("已提交重新处理：{0}", { 0: p.filename }),
@@ -267,6 +290,8 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       return
     }
 
+    const confirmation = await requestExtractConfirmation()
+    if (confirmation === false) return
     const ok = confirm(
       tr("确认重试全部 {0} 篇失败论文？这会清空它们当前的错误状态和 OpenAI 缓存，并重新调用大模型。", { 0: failedPapers.length }),
     )
@@ -277,7 +302,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setPendingIds(prev => new Set([...prev, ...failedIds]))
     setActionNotice(null)
     try {
-      const result = await retryFailedPapers()
+      const result = await retryFailedPapers(confirmation)
       if ((result.retried || 0) > 0) {
         setActionNotice({
           tone: 'info',
@@ -321,6 +346,8 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       return
     }
 
+    const confirmation = await requestExtractConfirmation()
+    if (confirmation === false) return
     const ok = confirm(tr("确认处理全部 {0} 篇待处理论文？", { 0: pendingPapers.length }))
     if (!ok) return
 
@@ -329,7 +356,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setPendingIds(prev => new Set([...prev, ...pendingPaperIds]))
     setActionNotice(null)
     try {
-      await processAll()
+      await processAll(confirmation)
       setActionNotice({
         tone: 'info',
         title: tr("已提交批量处理：{0} 篇待处理论文", { 0: pendingPapers.length }),
@@ -1153,7 +1180,14 @@ function fmtSize(bytes: number): string {
 }
 
 function getErrorMessage(error: unknown): string {
-  const apiError = error as { response?: { data?: { detail?: string } }; message?: string; code?: string }
+  const apiError = error as {
+    response?: { data?: { detail?: string | { message?: string } } }
+    message?: string
+    code?: string
+  }
   if (apiError.code === 'ECONNABORTED') return tr("请求超时，后端没有在 30 秒内响应。")
-  return apiError.response?.data?.detail || apiError.message || tr("未知错误")
+  const detail = apiError.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message
+  return apiError.message || tr("未知错误")
 }

@@ -42,6 +42,7 @@ ensure_project_root_on_path()
 from model_gateway import (
     ModelGatewayError,
     call_text_model,
+    create_openai_client_for_model,
     embed_text,
     task_context,
     track_call,
@@ -959,7 +960,27 @@ def extract_knowledge_from_paper(
             parsed, raw, "", "", synthetic_thread_id, "", coverage, manifest
         )
 
-    client = OpenAI(api_key=api_key)
+    from services.paper_extract_route import (
+        PaperExtractRouteError,
+        ensure_file_search_execution_allowed,
+    )
+
+    try:
+        route = ensure_file_search_execution_allowed(cfg)
+    except PaperExtractRouteError as exc:
+        raise ProviderConfigurationError(exc.message) from exc
+    if route["provider_type"] != "openai":
+        raise ProviderConfigurationError(
+            route.get("unsupported_reason")
+            or "当前论文抽取绑定不是 OpenAI 原生 API，无法使用 file_search。"
+        )
+    # Use the settings-bound provider (API key and optional base URL).
+    # Do not let a leftover positional api_key override a configured provider.
+    client, upstream_model, _provider, _model_entry = create_openai_client_for_model(
+        cfg,
+        route["model_id"],
+    )
+    model = route.get("upstream_model") or route.get("runtime_model_name") or upstream_model or model
     file_id = _ensure_file(client, cached_file_id, pdf_filepath)
     assistant_id = ""
     vector_store_id = cached_vector_store_id or ""

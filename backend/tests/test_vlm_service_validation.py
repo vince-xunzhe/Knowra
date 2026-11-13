@@ -178,10 +178,25 @@ class ExtractionValidationTests(unittest.TestCase):
 
     @patch("services.vlm_service._run_extraction_once")
     @patch("services.vlm_service._ensure_file", return_value="file-123")
-    @patch("services.vlm_service.OpenAI")
+    @patch("services.vlm_service.create_openai_client_for_model")
+    @patch(
+        "services.vlm_service._resolve_model_gateway_context",
+        return_value=({"prompt_locale": "zh"}, "openai"),
+    )
+    @patch(
+        "services.paper_extract_route.ensure_file_search_execution_allowed",
+        return_value={
+            "provider_type": "openai",
+            "model_id": "openai/gpt-5.4",
+            "upstream_model": "gpt-5.4",
+            "runtime_model_name": "gpt-5.4",
+        },
+    )
     def test_extract_retries_with_local_text_fallback(
         self,
-        mock_openai,
+        mock_ensure_route,
+        mock_gateway_context,
+        mock_create_client,
         mock_ensure_file,
         mock_run_once,
     ):
@@ -207,7 +222,7 @@ class ExtractionValidationTests(unittest.TestCase):
             "baselines": ["CLIP"],
             "key_findings": [{"short": "更强", "detail": "top-1 从 76 提升到 80。"}],
         }
-        mock_openai.return_value = MagicMock()
+        mock_create_client.return_value = (MagicMock(), "gpt-5.4", {}, {})
         mock_run_once.side_effect = [
             (empty_shell, '{"title":""}', "", "resp-empty", "vs-1"),
             (recovered, '{"title":"Example Paper"}', "", "resp-good", "vs-1"),

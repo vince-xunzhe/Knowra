@@ -333,6 +333,37 @@ export const revealScannedFile = (path: string) =>
     )
     .then(r => r.data)
 
+export interface PaperExtractRoute {
+  provider_id: string
+  provider_type: string
+  provider_label: string
+  model_id: string
+  model_label: string
+  upstream_model: string
+  runtime_model_name: string
+  surface: string
+  file_search_api: 'responses' | 'assistants' | null
+  requires_file_search_confirmation: boolean
+  supported: boolean
+  unsupported_reason: string | null
+  route_fingerprint: string
+  has_custom_base_url: boolean
+  pricing_url: string
+  file_search_guide_url: string
+}
+
+export interface FileSearchConfirmation {
+  acknowledged: true
+  route_fingerprint: string
+}
+
+export const getPaperExtractRoute = () =>
+  api.get<PaperExtractRoute>('/papers/extract-route').then(r => r.data)
+
+function withFileSearchConfirmation(confirmation?: FileSearchConfirmation) {
+  return confirmation ? { file_search_confirmation: confirmation } : {}
+}
+
 export interface ProcessStartResponse {
   accepted?: boolean
   failed_count?: number
@@ -371,12 +402,19 @@ export const uploadPapers = (files: File[]) => {
   for (const f of files) fd.append('files', f)
   return api.post<UploadResult>('/papers/upload', fd, { timeout: 180000 }).then(r => r.data)
 }
-export const processAll = () => api.post<ProcessStartResponse>('/process').then(r => r.data)
-export const processPaper = (id: number) => api.post(`/papers/${id}/process`).then(r => r.data)
-export const retryPaper = (id: number) => api.post(`/papers/${id}/retry`).then(r => r.data)
-export const retryFailedPapers = () =>
-  api.post<ProcessStartResponse & { retried: number }>('/papers/retry_failed').then(r => r.data)
-export const reprocessPaper = (id: number) => api.post(`/papers/${id}/reprocess`).then(r => r.data)
+export const processAll = (confirmation?: FileSearchConfirmation) =>
+  api.post<ProcessStartResponse>('/process', withFileSearchConfirmation(confirmation)).then(r => r.data)
+export const processPaper = (id: number | string, confirmation?: FileSearchConfirmation) =>
+  api.post(`/papers/${id}/process`, withFileSearchConfirmation(confirmation)).then(r => r.data)
+export const retryPaper = (id: number | string, confirmation?: FileSearchConfirmation) =>
+  api.post(`/papers/${id}/retry`, withFileSearchConfirmation(confirmation)).then(r => r.data)
+export const retryFailedPapers = (confirmation?: FileSearchConfirmation) =>
+  api.post<ProcessStartResponse & { retried: number }>(
+    '/papers/retry_failed',
+    withFileSearchConfirmation(confirmation),
+  ).then(r => r.data)
+export const reprocessPaper = (id: number | string, confirmation?: FileSearchConfirmation) =>
+  api.post(`/papers/${id}/reprocess`, withFileSearchConfirmation(confirmation)).then(r => r.data)
 let paperListRequest: Promise<PaperRecord[]> | null = null
 let cachedPapers: PaperRecord[] | null = null
 export const getCachedPapers = () => cachedPapers

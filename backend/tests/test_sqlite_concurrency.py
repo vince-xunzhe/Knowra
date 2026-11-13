@@ -100,10 +100,11 @@ class SQLiteConcurrencyTests(unittest.TestCase):
             db.commit()
             with patch.object(papers, "_reconcile_failed_papers", return_value=[failed]), \
                  patch.object(papers, "_prepare_reprocess") as prepare, \
-                 patch.object(papers, "_start_processing_worker") as start:
+                 patch.object(papers, "_start_processing_worker") as start, \
+                 patch("routers.papers._require_extract_confirmation"):
                 result = papers.retry_failed_papers(db)
                 prepare.assert_not_called()
-                start.assert_called_once_with(["p"], force=True)
+                start.assert_called_once_with(["p"], force=True, file_search_confirmation=None)
                 self.assertEqual(result["retried"], 1)
 
     def test_real_write_lock_is_recoverable_and_rollback_allows_retry(self):
@@ -201,6 +202,11 @@ class SQLiteConcurrencyTests(unittest.TestCase):
                 "derive_model_paper_team": "Other", "extraction_has_critical_issues": False,
                 "parse_extraction_response": self.extraction, "_run_wiki_compile_phase": None,
                 "_sync_processing_record": None,
+                "ensure_file_search_execution_allowed": {
+                    "provider_type": "openai",
+                    "supported": True,
+                    "model_id": "test",
+                },
             }.items():
                 stack.enter_context(patch.object(papers, name, return_value=value))
             stack.enter_context(patch("database.SessionLocal", self.sessions))

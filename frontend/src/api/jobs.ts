@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { readWithRetry } from './polling'
+import type { FileSearchConfirmation } from './client'
 
 const api = axios.create({ baseURL: '/api', timeout: 8000 })
 export interface BackgroundJob {
@@ -15,8 +16,12 @@ export interface BackgroundJob {
 export const getJob = (id: string) => api.get<BackgroundJob>(`/jobs/${id}`).then(r => r.data)
 export const latestJob = (channel: string) => api.get<BackgroundJob | null>('/jobs/latest', { params: { channel } }).then(r => r.data)
 export const listJobs = () => api.get<BackgroundJob[]>('/jobs').then(r => r.data)
-export const resumeJob = (id: string) => api.post<BackgroundJob>(`/jobs/${id}/resume`).then(r => r.data)
-export const startPipeline = (requestKey: string) => api.post<BackgroundJob>('/pipeline/run', { use_llm: true }, {
+export const resumeJob = (id: string, confirmation?: FileSearchConfirmation) =>
+  api.post<BackgroundJob>(`/jobs/${id}/resume`, confirmation ? { file_search_confirmation: confirmation } : {}).then(r => r.data)
+export const startPipeline = (requestKey: string, confirmation?: FileSearchConfirmation) => api.post<BackgroundJob>('/pipeline/run', {
+  use_llm: true,
+  ...(confirmation ? { file_search_confirmation: confirmation } : {}),
+}, {
   headers: { 'Idempotency-Key': requestKey },
 }).then(r => r.data)
 

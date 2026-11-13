@@ -33,6 +33,8 @@ class TaskExecutorTests(unittest.TestCase):
                      patch('database.assert_processing_schema',
                            side_effect=lambda: assert_processing_schema(engine)),
                      patch('config.load_config', return_value={}),
+                     patch('services.paper_extract_route.require_paper_extract_route',
+                           return_value={'requires_file_search_confirmation': False, 'supported': True, 'provider_type': 'codex_cli'}),
                      patch.dict(os.environ, {'KNOWRA_TASK_EXECUTOR': '1'})]:
             mock.start()
             self.addCleanup(mock.stop)

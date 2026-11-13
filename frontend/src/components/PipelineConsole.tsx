@@ -1,5 +1,7 @@
 import { t as tr } from '../i18n/catalog'
 import { latestJob, startPipeline, waitForJob } from '../api/jobs'
+import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
+import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import { useLocale } from '../i18n/preferences'
 // Left-rail control panel for the [知识] page. Replaces the previous
 // PipelineStatusBar (top) + CandidatePanel (bottom-left floating). All
@@ -96,6 +98,7 @@ export default function PipelineConsole({
   onOpenAsk,
 }: Props) {
   useLocale()
+  const { confirmIfNeeded } = useFileSearchConfirmation()
   const auth = useCloudAuth()
   const [collapsed, setCollapsed] = useState(false)
   const [expandedStages, setExpandedStages] = useState<Set<ConsoleStageId>>(() => new Set())
@@ -259,11 +262,21 @@ export default function PipelineConsole({
       state.compileStatus?.running ||
       state.promotionRunStatus?.running
     ) return
-    runAllInFlightRef.current = true
     setError(null)
+    const decision = await confirmIfNeeded()
+    if (decision.status === 'cancelled') {
+      setError(tr(CANCELLED_EXTRACTION_NOTICE))
+      return
+    }
+    if (decision.status === 'blocked') {
+      setError(decision.message)
+      return
+    }
+    const confirmation = decision.status === 'confirmed' ? decision.confirmation : undefined
+    runAllInFlightRef.current = true
     setRunAllStep(tr("扫描论文目录"))
     try {
-      const job = await startPipeline(crypto.randomUUID())
+      const job = await startPipeline(crypto.randomUUID(), confirmation)
       await waitForJob(job, current => {
         setRunAllStep(
           current.progress.label || tr("后台全流程编排"),

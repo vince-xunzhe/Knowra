@@ -46,74 +46,94 @@ def process_papers(ctx, payload):
     from database import SessionLocal, assert_processing_schema
     from models import Paper
     from routers import papers
+    from services.paper_extract_route import (
+        PaperExtractRouteError,
+        ensure_file_search_execution_allowed,
+        require_paper_extract_route,
+        reset_active_file_search_confirmation,
+        set_active_file_search_confirmation,
+    )
     ids = payload['paper_ids']
     # Fail before model calls or graph mutations when an older local database
     # is missing a column required by the currently-running code.
     assert_processing_schema()
-    papers._mark_processing_started(ids)
-    ctx.watch('papers', papers.processing_state)
-    if any('paper:' + str(pid) not in ctx.checkpoints for pid in ids):
-        from config import load_config, task_model_name
-        from model_gateway.runtime import preflight_task_runtime
-        from services.pipeline_manifest import extraction_is_reusable
-        cfg = load_config()
-        model = task_model_name(cfg, 'paper_extract')
-        with SessionLocal() as db:
-            remaining = db.query(Paper).filter(Paper.id.in_(ids)).all()
-            requires_model = any(
-                not extraction_is_reusable(paper, cfg, model)
-                for paper in remaining
-                if 'paper:' + str(paper.id) not in ctx.checkpoints
-            )
-        if requires_model:
-            preflight_task_runtime(cfg, 'paper_extract')
-    for pid in ids:
-        key = 'paper:' + str(pid)
-        if key in ctx.checkpoints:
-            papers.processing_state['done'] += 1
-            papers.processing_state['succeeded'] += 1
-            continue
-        def run_one():
+    confirmation = payload.get('file_search_confirmation')
+    confirm_token = set_active_file_search_confirmation(confirmation)
+    try:
+        # Re-check the live route at execution time so a queued job cannot
+        # reuse an older confirmation after the settings binding changes.
+        require_paper_extract_route(None, confirmation, stage="execute")
+    except PaperExtractRouteError:
+        reset_active_file_search_confirmation(confirm_token)
+        raise
+    try:
+        papers._mark_processing_started(ids)
+        ctx.watch('papers', papers.processing_state)
+        if any('paper:' + str(pid) not in ctx.checkpoints for pid in ids):
+            from config import load_config, task_model_name
+            from model_gateway.runtime import preflight_task_runtime
+            from services.pipeline_manifest import extraction_is_reusable
+            cfg = load_config()
+            model = task_model_name(cfg, 'paper_extract')
             with SessionLocal() as db:
-                paper = db.query(Paper).filter(Paper.id == pid).first()
-                if not paper:
-                    raise ValueError('Paper no longer exists: ' + str(pid))
-                if payload.get('force') and 'prepared:' + str(pid) not in ctx.checkpoints:
-                    papers._prepare_reprocess(
-                        db,
-                        paper,
-                        reset_extraction=payload.get('reset_extraction', False),
-                    )
-                    ctx.step('prepared:' + str(pid), lambda: True)
-                elif paper.processed:
-                    papers.processing_state['done'] += 1
-                    papers.processing_state['succeeded'] += 1
-                    return True
-            before = papers.processing_state['errors']
-            papers._process_single(pid)
-            if papers.processing_state['errors'] > before:
-                raise RuntimeError(papers.processing_state['failed_papers'][-1]['reason'])
-            return True
-        try:
-            ctx.step(key, run_one)
-        except Exception as exc:
-            if not any(str(x['id']) == str(pid) for x in papers.processing_state['failed_papers']):
-                papers._record_unhandled_processing_failure(pid, exc)
+                remaining = db.query(Paper).filter(Paper.id.in_(ids)).all()
+                requires_model = any(
+                    not extraction_is_reusable(paper, cfg, model)
+                    for paper in remaining
+                    if 'paper:' + str(paper.id) not in ctx.checkpoints
+                )
+            if requires_model:
+                ensure_file_search_execution_allowed(cfg)
+                preflight_task_runtime(cfg, 'paper_extract')
+        for pid in ids:
+            key = 'paper:' + str(pid)
+            if key in ctx.checkpoints:
+                papers.processing_state['done'] += 1
+                papers.processing_state['succeeded'] += 1
+                continue
+            def run_one():
+                with SessionLocal() as db:
+                    paper = db.query(Paper).filter(Paper.id == pid).first()
+                    if not paper:
+                        raise ValueError('Paper no longer exists: ' + str(pid))
+                    if payload.get('force') and 'prepared:' + str(pid) not in ctx.checkpoints:
+                        papers._prepare_reprocess(
+                            db,
+                            paper,
+                            reset_extraction=payload.get('reset_extraction', False),
+                        )
+                        ctx.step('prepared:' + str(pid), lambda: True)
+                    elif paper.processed:
+                        papers.processing_state['done'] += 1
+                        papers.processing_state['succeeded'] += 1
+                        return True
+                before = papers.processing_state['errors']
+                papers._process_single(pid)
+                if papers.processing_state['errors'] > before:
+                    raise RuntimeError(papers.processing_state['failed_papers'][-1]['reason'])
+                return True
+            try:
+                ctx.step(key, run_one)
+            except Exception as exc:
+                if not any(str(x['id']) == str(pid) for x in papers.processing_state['failed_papers']):
+                    papers._record_unhandled_processing_failure(pid, exc)
+            ctx.flush()
+        state = papers.processing_state
+        state.update(running=False, current='', finished_at=now(),
+                     last_message=f"处理完成：{state['succeeded']} 篇成功，{state['errors']} 篇失败")
         ctx.flush()
-    state = papers.processing_state
-    state.update(running=False, current='', finished_at=now(),
-                 last_message=f"处理完成：{state['succeeded']} 篇成功，{state['errors']} 篇失败")
-    ctx.flush()
-    if state['succeeded']:
-        try:
-            from path_utils import DATA_DIR
-            from services.ask_generation_refresh import mark_and_enqueue_refresh
-            mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="papers_processed")
-        except Exception as refresh_error:
-            state["generation_refresh_warning"] = type(refresh_error).__name__
-    if state['errors']:
-        raise RuntimeError(state['last_message'])
-    return dict(state)
+        if state['succeeded']:
+            try:
+                from path_utils import DATA_DIR
+                from services.ask_generation_refresh import mark_and_enqueue_refresh
+                mark_and_enqueue_refresh(live_data_root=DATA_DIR, reason="papers_processed")
+            except Exception as refresh_error:
+                state["generation_refresh_warning"] = type(refresh_error).__name__
+        if state['errors']:
+            raise RuntimeError(state['last_message'])
+        return dict(state)
+    finally:
+        reset_active_file_search_confirmation(confirm_token)
 
 
 def compile_items(ctx, payload):
@@ -284,7 +304,7 @@ def pipeline(ctx, payload):
             return [r[0] for r in db.query(Paper.id).filter(Paper.processed.is_(False), Paper.error.is_(None)).all()]
     ids = ctx.step('pending', pending)
     ctx.phase('处理论文')
-    ctx.step('extract', lambda: process_papers(ctx, {'paper_ids': ids}))
+    ctx.step('extract', lambda: process_papers(ctx, {'paper_ids': ids, 'file_search_confirmation': payload.get('file_search_confirmation')}))
     with SessionLocal() as db:
         if papers.paper_work_counts(db)['failed_count']:
             raise RuntimeError('有失败论文，请先重试失败论文，再恢复全流程。')

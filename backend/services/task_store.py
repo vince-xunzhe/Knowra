@@ -138,10 +138,10 @@ class TaskStore:
             return [self.decode(row) for row in db.execute("SELECT * FROM jobs WHERE status IN ('queued','running')")]
 
     def update(self, job_id, **changes):
-        allowed = {'status', 'progress', 'checkpoints', 'result', 'error'}
+        allowed = {'status', 'progress', 'checkpoints', 'result', 'error', 'payload'}
         if not changes or not set(changes).issubset(allowed):
             raise ValueError('Invalid job update')
-        values = [json.dumps(v, ensure_ascii=False) if k in {'progress', 'checkpoints', 'result'} else v
+        values = [json.dumps(v, ensure_ascii=False) if k in {'progress', 'checkpoints', 'result', 'payload'} else v
                   for k, v in changes.items()]
         with self.connect() as db:
             db.execute('UPDATE jobs SET ' + ','.join(k + '=?' for k in changes) + ', updated=? WHERE id=?',

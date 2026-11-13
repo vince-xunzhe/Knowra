@@ -1519,5 +1519,15 @@
   "本地流程已完成": "Local workflow complete",
   "扫描、处理、筛选、编译与健检已完成": "Scanning, processing, curation, compilation and health checks are complete",
   "按顺序执行：扫描、处理、筛选、编译、健检": "Run scanning, processing, curation, compilation and health checks in order",
-  "论文原文": "Original paper text"
+  "论文原文": "Original paper text",
+  "将通过 OpenAI API 进行论文抽取": "This extraction will use the OpenAI API",
+  "当前论文抽取绑定的是 OpenAI API 的 file_search，按量付费，费用不包含在 ChatGPT 或 Codex 订阅额度中。": "Paper extraction is currently bound to OpenAI API file_search. This is billed usage-based and is not included in a ChatGPT or Codex subscription.",
+  "继续后，系统可能上传 PDF 到该 API 提供方，并产生模型 token、检索调用和向量存储等费用。": "If you continue, the system may upload the PDF to this API provider and may incur charges for model tokens, retrieval calls, and vector storage.",
+  "具体价格请查看 OpenAI 官方定价（会随官方更新）。": "See OpenAI's official pricing for current rates, which may change.",
+  "查看官方定价": "View official pricing",
+  "查看 file_search 说明": "View file_search documentation",
+  "继续抽取": "Continue extraction",
+  "已取消此次抽取，未上传文件，也未创建抽取任务。": "This extraction was cancelled. No file was uploaded and no extraction job was created.",
+  "当前论文抽取路径不受支持。": "The current paper extraction route is not supported.",
+  "{0} · {1} · {2}": "{0} · {1} · {2}"
 }
