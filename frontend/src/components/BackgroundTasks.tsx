@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Activity, RotateCcw } from 'lucide-react'
 import { listJobs, resumeJob, type BackgroundJob } from '../api/jobs'
 import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
 import { t as tr } from '../i18n/catalog'
 import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
+import { useDismissOnOutside } from '../hooks/useDismissOnOutside'
 
 const names: Record<string, string> = { domain: '索骥代连', roadmap: '识途调研', roadmap_import: '识途论文入库', scan: '扫描目录', papers: '论文处理', compile: 'Wiki 编译', promotion: '概念筛选', lint: '健康检查', pipeline: '全流程编排' }
 const labels = { cancelled: '已取消', queued: '排队中', running: '执行中', completed: '已完成', failed: '失败，可恢复', interrupted: '已中断，可恢复' }
@@ -14,6 +15,9 @@ export default function BackgroundTasks() {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const rootRef = useRef<HTMLElement>(null)
+  const dismiss = useCallback(() => setOpen(false), [])
+  useDismissOnOutside(open, dismiss, rootRef)
   useEffect(() => {
     let stopped = false
     let timer: ReturnType<typeof setTimeout>
@@ -58,8 +62,8 @@ export default function BackgroundTasks() {
       else setError(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
   }
-  return <aside className="relative z-40 mt-auto w-[5.75rem] text-xs" data-testid="background-tasks">
-    {open && <div className="absolute bottom-0 left-[calc(100%+0.75rem)] w-80 max-w-[calc(100vw-8rem)] rounded-xl border border-slate-700 bg-slate-950 p-3 text-left shadow-xl" data-testid="background-tasks-panel">
+  return <aside ref={rootRef} className="relative z-40 mt-auto w-[5.75rem] text-xs" data-testid="background-tasks">
+    {open && <div id="background-tasks-panel" role="region" aria-label="后台任务" className="absolute bottom-0 left-[calc(100%+0.75rem)] w-80 max-w-[calc(100vw-8rem)] rounded-xl border border-slate-700 bg-slate-950 p-3 text-left shadow-xl" data-testid="background-tasks-panel">
       <p className="mb-2 font-semibold">后台任务 · 页面关闭后仍继续执行</p>
       {error && <p role="status" className="mb-2 text-amber-300">{error}</p>}
       <div className="max-h-72 overflow-y-auto space-y-3">
@@ -76,8 +80,11 @@ export default function BackgroundTasks() {
       </div>
     </div>}
     <button
-      onClick={() => setOpen(!open)}
+      type="button"
+      onClick={() => setOpen(value => !value)}
       aria-expanded={open}
+      aria-controls="background-tasks-panel"
+      aria-haspopup="true"
       title={active ? `后台任务 · ${active} 个执行/排队中` : '后台任务'}
       className={`group relative flex h-14 w-full flex-col items-center justify-center gap-1 rounded-2xl px-1 transition-all ${open ? 'bg-indigo-500/15 text-indigo-100 shadow-inner shadow-indigo-500/10' : 'text-slate-600 hover:bg-slate-800/50 hover:text-slate-100'}`}
     >
