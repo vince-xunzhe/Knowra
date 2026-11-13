@@ -44,6 +44,17 @@ from services.vlm_service import (
     run_chat_turn,
     PaperExtractionError,
 )
+from services.paper_extract_route import (
+    FileSearchConfirmationBody,
+    PaperExtractRouteError,
+    confirmation_as_dict,
+    ensure_file_search_execution_allowed,
+    public_route_view,
+    require_paper_extract_route,
+    reset_active_file_search_confirmation,
+    resolve_paper_extract_route,
+    set_active_file_search_confirmation,
+)
 from services.graph_service import add_nodes_from_paper_extraction, prepare_graph_embeddings
 from services.pipeline_manifest import (
     GRAPH_BUILDER_VERSION,
@@ -487,6 +498,17 @@ def _sync_paper_from_record_if_needed(db: Session, p: Paper):
         db.refresh(p)
 
 
+def _raise_extract_route_error(exc: PaperExtractRouteError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=exc.http_detail())
+
+
+def _require_extract_confirmation(confirmation=None, *, cfg=None, stage: str = "submit"):
+    try:
+        return require_paper_extract_route(cfg, confirmation, stage=stage)
+    except PaperExtractRouteError as exc:
+        _raise_extract_route_error(exc)
+
+
 @router.post("/scan")
 def scan_papers(db: Session = Depends(get_db)):
     from services.task_runtime import in_worker
@@ -614,6 +636,13 @@ async def upload_papers(
         "rejected": rejected,
         **scan_result,
     }
+
+
+@router.get("/papers/extract-route")
+def get_paper_extract_route():
+    """Describe the live paper_extract route. Never returns secrets."""
+    return public_route_view(resolve_paper_extract_route())
+
 
 
 @router.get("/papers")
@@ -872,6 +901,7 @@ def _process_single(paper_id: str):
                 from model_gateway.runtime import preflight_task_runtime
                 extraction_model = task_model_name(cfg, "paper_extract")
                 if not extraction_is_reusable(p, cfg, extraction_model):
+                    ensure_file_search_execution_allowed(cfg)
                     preflight_task_runtime(cfg, 'paper_extract')
                 _set_pipeline_state(
                     db,
@@ -1342,18 +1372,23 @@ def _start_processing_worker(
     force: bool = False,
     *,
     reset_extraction: bool = False,
+    file_search_confirmation=None,
 ) -> None:
     if not paper_ids:
         return
     from routers.jobs import submit_job
+    payload = {
+        'paper_ids': list(paper_ids),
+        'force': force,
+        'reset_extraction': reset_extraction,
+    }
+    confirmation = confirmation_as_dict(file_search_confirmation)
+    if confirmation is not None:
+        payload['file_search_confirmation'] = confirmation
     submit_job(
         'papers',
         'papers',
-        {
-            'paper_ids': list(paper_ids),
-            'force': force,
-            'reset_extraction': reset_extraction,
-        },
+        payload,
     )
 
 
@@ -1421,7 +1456,10 @@ def _reconcile_failed_papers(db: Session) -> list[Paper]:
 
 @router.post("/process")
 @_serialize_processing_submission
-def process_all(db: Session = Depends(get_db)):
+def process_all(
+    db: Session = Depends(get_db),
+    body: FileSearchConfirmationBody = FileSearchConfirmationBody(),
+):
     if _processing_snapshot()["running"]:
         return {"message": "Processing already running", **_processing_snapshot()}
     pending = db.query(Paper).filter(
@@ -1434,28 +1472,40 @@ def process_all(db: Session = Depends(get_db)):
                    if counts["failed_count"] else "没有待处理论文，请先扫描目录。")
         return {**_processing_snapshot(), **counts, "accepted": False,
                 "message": message, "last_message": message}
+    confirmation = body.file_search_confirmation
+    _require_extract_confirmation(confirmation)
     db.close()
-    _start_processing_worker(ids)
+    _start_processing_worker(ids, file_search_confirmation=confirmation)
     return {"message": "Processing started", "accepted": True, **_processing_snapshot()}
 
 
 @router.post("/papers/{paper_id}/process")
 @_serialize_processing_submission
-def process_one(paper_id: str, db: Session = Depends(get_db)):
+def process_one(
+    paper_id: str,
+    db: Session = Depends(get_db),
+    body: FileSearchConfirmationBody = FileSearchConfirmationBody(),
+):
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Paper not found")
     if _processing_snapshot()["running"]:
         return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
+    confirmation = body.file_search_confirmation
+    _require_extract_confirmation(confirmation)
     db.close()
-    _start_processing_worker([paper_id])
+    _start_processing_worker([paper_id], file_search_confirmation=confirmation)
     return {"message": f"Processing started for {filename}", **_processing_snapshot()}
 
 
 @router.post("/papers/{paper_id}/retry")
 @_serialize_processing_submission
-def retry_paper(paper_id: str, db: Session = Depends(get_db)):
+def retry_paper(
+    paper_id: str,
+    db: Session = Depends(get_db),
+    body: FileSearchConfirmationBody = FileSearchConfirmationBody(),
+):
     """Clear error and retry processing."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -1463,14 +1513,19 @@ def retry_paper(paper_id: str, db: Session = Depends(get_db)):
     if _processing_snapshot()["running"]:
         return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
+    confirmation = body.file_search_confirmation
+    _require_extract_confirmation(confirmation)
     db.close()
-    _start_processing_worker([paper_id], force=True)
+    _start_processing_worker([paper_id], force=True, file_search_confirmation=confirmation)
     return {"message": f"Retry started for {filename}", **_processing_snapshot()}
 
 
 @router.post("/papers/retry_failed")
 @_serialize_processing_submission
-def retry_failed_papers(db: Session = Depends(get_db)):
+def retry_failed_papers(
+    db: Session = Depends(get_db),
+    body: FileSearchConfirmationBody = FileSearchConfirmationBody(),
+):
     """Retry all failed papers in one batch."""
     if _processing_snapshot()["running"]:
         return {"message": "Processing already running", **_processing_snapshot()}
@@ -1492,8 +1547,10 @@ def retry_failed_papers(db: Session = Depends(get_db)):
         failed_items.append(_paper_failure_item(paper))
         ids.append(paper.id)
 
+    confirmation = body.file_search_confirmation
+    _require_extract_confirmation(confirmation)
     db.close()
-    _start_processing_worker(ids, force=True)
+    _start_processing_worker(ids, force=True, file_search_confirmation=confirmation)
     return {
         "message": f"Retry started for {len(ids)} failed papers",
         "retried": len(ids),
@@ -1504,7 +1561,11 @@ def retry_failed_papers(db: Session = Depends(get_db)):
 
 @router.post("/papers/{paper_id}/reprocess")
 @_serialize_processing_submission
-def reprocess_paper(paper_id: str, db: Session = Depends(get_db)):
+def reprocess_paper(
+    paper_id: str,
+    db: Session = Depends(get_db),
+    body: FileSearchConfirmationBody = FileSearchConfirmationBody(),
+):
     """Clear this paper's extracted graph and run LLM extraction again."""
     p = db.query(Paper).filter(Paper.id == paper_id).first()
     if not p:
@@ -1512,8 +1573,15 @@ def reprocess_paper(paper_id: str, db: Session = Depends(get_db)):
     if _processing_snapshot()["running"]:
         return {"message": "Processing already running", **_processing_snapshot()}
     filename = p.filename
+    confirmation = body.file_search_confirmation
+    _require_extract_confirmation(confirmation)
     db.close()
-    _start_processing_worker([paper_id], force=True, reset_extraction=True)
+    _start_processing_worker(
+        [paper_id],
+        force=True,
+        reset_extraction=True,
+        file_search_confirmation=confirmation,
+    )
     return {"message": f"Reprocessing started for {filename}"}
 
 

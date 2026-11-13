@@ -27,6 +27,8 @@ import {
   type PaperLearningStatus,
   type ChatState, type ChatMessage, type PaperSourceEvidencePage,
 } from '../api/client'
+import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
+import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
 import {
@@ -221,6 +223,7 @@ function SourceEvidencePanel({ paperId, sourcePages }: { paperId: number; source
 
 export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   useLocale()
+  const { confirmIfNeeded } = useFileSearchConfirmation()
   const [papers, setPapers] = useState<PaperRecord[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [detail, setDetail] = useState<PaperDetail | null>(null)
@@ -528,13 +531,23 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
 
   const handleReprocess = async () => {
     if (!visibleDetail) return
+    setActionNotice(null)
+    const decision = await confirmIfNeeded()
+    if (decision.status === 'cancelled') {
+      setActionNotice({ tone: 'info', title: tr(CANCELLED_EXTRACTION_NOTICE) })
+      return
+    }
+    if (decision.status === 'blocked') {
+      setActionNotice({ tone: 'error', title: tr("重新处理启动失败"), detail: decision.message })
+      return
+    }
+    const confirmation = decision.status === 'confirmed' ? decision.confirmation : undefined
     const ok = confirm(tr("确认重新处理这篇论文？现有抽取结果和图谱节点会被清空，并重新调用大模型。"))
     if (!ok) return
 
     setReprocessing(true)
-    setActionNotice(null)
     try {
-      await reprocessPaper(visibleDetail.id)
+      await reprocessPaper(visibleDetail.id, confirmation)
       const updated: PaperDetail = {
         ...visibleDetail,
         processed: false,
@@ -3043,6 +3056,9 @@ function MarkdownView({ source }: { source: string }) {
 }
 
 function getApiErrorMessage(error: unknown): string {
-  const apiError = error as { response?: { data?: { detail?: string } }; message?: string }
-  return apiError.response?.data?.detail || apiError.message || tr("操作失败")
+  const apiError = error as { response?: { data?: { detail?: string | { message?: string } } }; message?: string }
+  const detail = apiError.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object' && typeof detail.message === 'string') return detail.message
+  return apiError.message || tr("操作失败")
 }

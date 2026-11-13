@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react'
 import { Activity, RotateCcw } from 'lucide-react'
 import { listJobs, resumeJob, type BackgroundJob } from '../api/jobs'
+import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
+import { t as tr } from '../i18n/catalog'
+import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 
 const names: Record<string, string> = { domain: '索骥代连', roadmap: '识途调研', roadmap_import: '识途论文入库', scan: '扫描目录', papers: '论文处理', compile: 'Wiki 编译', promotion: '概念筛选', lint: '健康检查', pipeline: '全流程编排' }
 const labels = { cancelled: '已取消', queued: '排队中', running: '执行中', completed: '已完成', failed: '失败，可恢复', interrupted: '已中断，可恢复' }
 
 export default function BackgroundTasks() {
+  const { confirmIfNeeded } = useFileSearchConfirmation()
   const [jobs, setJobs] = useState<BackgroundJob[]>([])
   const [open, setOpen] = useState(false)
   const [error, setError] = useState('')
@@ -27,14 +31,31 @@ export default function BackgroundTasks() {
   }, [])
   if (!jobs.length) return null
   const active = jobs.filter(job => ['queued', 'running'].includes(job.status)).length
-  const recover = async (id: string) => {
+  const recover = async (job: BackgroundJob) => {
     setBusy(true)
     try {
-      await resumeJob(id)
+      let confirmation
+      if (job.kind === 'papers' || job.kind === 'pipeline') {
+        const decision = await confirmIfNeeded()
+        if (decision.status === 'cancelled') {
+          setError(tr(CANCELLED_EXTRACTION_NOTICE))
+          return
+        }
+        if (decision.status === 'blocked') {
+          setError(decision.message)
+          return
+        }
+        confirmation = decision.status === 'confirmed' ? decision.confirmation : undefined
+      }
+      await resumeJob(job.job_id, confirmation)
       setJobs(await listJobs())
       setError('')
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const err = e as { response?: { data?: { detail?: string | { message?: string } } }; message?: string }
+      const detail = err.response?.data?.detail
+      if (typeof detail === 'string') setError(detail)
+      else if (detail && typeof detail === 'object' && typeof detail.message === 'string') setError(detail.message)
+      else setError(e instanceof Error ? e.message : String(e))
     } finally { setBusy(false) }
   }
   return <aside className="relative z-40 mt-auto w-[5.75rem] text-xs" data-testid="background-tasks">
@@ -50,7 +71,7 @@ export default function BackgroundTasks() {
           {job.kind === 'domain' && ['failed', 'interrupted'].includes(job.status) && <p>请在索骥重新生成</p>}
           {job.kind === 'roadmap' && ['failed', 'interrupted'].includes(job.status) && <p>请在识途重新调研</p>}
           {job.kind === 'roadmap_import' && ['failed', 'interrupted'].includes(job.status) && <p>请在识途重试未入库论文</p>}
-          {!['domain', 'roadmap', 'roadmap_import'].includes(job.kind) && ['failed', 'interrupted'].includes(job.status) && <button disabled={busy || active > 0} onClick={() => { void recover(job.job_id) }} className="mt-2 inline-flex items-center gap-1 rounded border border-slate-600 px-2 py-1 disabled:opacity-50"><RotateCcw size={12} />从检查点恢复</button>}
+          {!['domain', 'roadmap', 'roadmap_import'].includes(job.kind) && ['failed', 'interrupted'].includes(job.status) && <button disabled={busy || active > 0} onClick={() => { void recover(job) }} className="mt-2 inline-flex items-center gap-1 rounded border border-slate-600 px-2 py-1 disabled:opacity-50"><RotateCcw size={12} />从检查点恢复</button>}
         </div>)}
       </div>
     </div>}

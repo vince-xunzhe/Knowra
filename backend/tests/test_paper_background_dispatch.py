@@ -23,7 +23,9 @@ class PaperBackgroundDispatchTests(unittest.TestCase):
         self.queue.initialize()
         for mock in [patch.object(task_runtime, '_store', self.queue),
                      patch.object(task_runtime, 'ensure_worker'),
-                     patch.object(task_runtime, 'in_worker', return_value=False)]:
+                     patch.object(task_runtime, 'in_worker', return_value=False),
+                     patch.object(papers, 'require_paper_extract_route',
+                                  return_value={'requires_file_search_confirmation': False, 'supported': True, 'provider_type': 'codex_cli'})]:
             mock.start()
             self.addCleanup(mock.stop)
 

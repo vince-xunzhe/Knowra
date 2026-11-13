@@ -23,6 +23,7 @@ TESTS = (
     "tests.test_task_queue",
     "tests.test_task_executor",
     "tests.test_paper_background_dispatch",
+    "tests.test_paper_extract_file_search_confirm",
     "tests.test_postgres_safety",
     "tests.test_cloud_freeze",
     "tests.test_sync_local_router",
