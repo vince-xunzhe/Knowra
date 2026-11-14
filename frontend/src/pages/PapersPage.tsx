@@ -5,7 +5,7 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
-  PanelRightOpen, PanelRightClose, Pencil, Upload,
+  PanelRightOpen, PanelRightClose, Pencil, Upload, ChevronDown,
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
@@ -16,6 +16,7 @@ import {
 } from '../api/client'
 import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
 import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
+import { useDismissOnOutside } from '../hooks/useDismissOnOutside'
 import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
@@ -1004,6 +1005,26 @@ function PaperProcessButton({
   )
 }
 
+function paperDisplayName(paper: PaperRecord): string {
+  return paper.title || paper.filename
+}
+
+function PaperTitle({ paper, lines }: { paper: PaperRecord; lines: 2 | 3 }) {
+  const name = paperDisplayName(paper)
+  return (
+    <p
+      data-testid="paper-card-title"
+      title={name}
+      aria-label={name}
+      className={`min-w-0 max-w-full overflow-hidden text-sm font-medium leading-snug text-slate-200 text-safe-wrap group-hover:text-foreground transition-colors ${
+        lines === 3 ? 'line-clamp-3 min-h-[calc(1.375em*3)]' : 'line-clamp-2 min-h-[calc(1.375em*2)]'
+      }`}
+    >
+      {name}
+    </p>
+  )
+}
+
 function PaperGridCard({
   paper, active, pending, onClick, onProcessAction, categoryOptions, categoryValue, categorySaving, onCategoryChange,
 }: {
@@ -1030,25 +1051,22 @@ function PaperGridCard({
           onClick()
         }
       }}
-      title={paper.processed ? tr("在回顾中查看论文详情") : tr("查看处理状态与操作")}
-      className={`text-left group bg-slate-900/40 rounded-2xl overflow-hidden border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
+      className={`text-left group bg-slate-900/40 rounded-2xl border transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'border-indigo-500/60 shadow-lg shadow-indigo-500/10'
           : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
       }`}
     >
-      <div className="relative aspect-[3/4] bg-[var(--surface-0b0d12)] flex items-center justify-center overflow-hidden">
+      <div className="relative aspect-[3/4] overflow-hidden rounded-t-2xl bg-[var(--surface-0b0d12)] flex items-center justify-center">
         <PaperCover key={paper.id} paper={paper} iconSize={40} />
         <div className="absolute top-2 right-2">
           <StatusDot pending={pending} paper={paper} />
         </div>
       </div>
       <div className="min-w-0 overflow-hidden p-3.5">
-        <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-3 min-h-[4rem] group-hover:text-foreground transition-colors text-safe-wrap">
-          {paper.title || paper.filename}
-        </p>
+        <PaperTitle paper={paper} lines={3} />
         {paper.authors.length > 0 && (
-          <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed mt-1.5 text-safe-wrap min-h-[2.5rem]">
+          <p className="mt-1.5 min-h-[2.5rem] text-xs leading-relaxed text-slate-500 line-clamp-2 text-safe-wrap">
             {paper.authors.slice(0, 3).join(', ')}
           </p>
         )}
@@ -1056,7 +1074,7 @@ function PaperGridCard({
           <span className="tabular-nums shrink-0">{paper.num_pages ? tr("{0} 页", { 0: paper.num_pages }) : ''}</span>
           <PaperProcessButton paper={paper} pending={pending} onProcessAction={onProcessAction} />
         </div>
-        <div className="mt-2 min-w-0 w-full max-w-full">
+        <div className="mt-1.5 min-w-0 w-full max-w-full">
           <InlinePaperCategoryEditor
             paper={paper}
             options={categoryOptions}
@@ -1098,7 +1116,6 @@ function PaperListRow({
           onClick()
         }
       }}
-      title={paper.processed ? tr("在回顾中查看论文详情") : tr("查看处理状态与操作")}
       className={`w-full min-w-0 flex items-start gap-4 px-4 py-3.5 rounded-xl border text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 ${
         active
           ? 'bg-indigo-500/5 border-indigo-500/40'
@@ -1110,10 +1127,8 @@ function PaperListRow({
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-start">
         <div className="min-w-0 flex-1">
-          <p className="text-sm text-slate-200 font-medium leading-snug line-clamp-2 text-safe-wrap">
-            {paper.title || paper.filename}
-          </p>
-          <p className="text-xs text-slate-500 line-clamp-2 leading-relaxed mt-1 text-safe-wrap">
+          <PaperTitle paper={paper} lines={2} />
+          <p className="mt-1 text-xs leading-relaxed text-slate-500 line-clamp-2 text-safe-wrap">
             {paper.authors.length > 0 ? paper.authors.slice(0, 3).join(', ') : paper.filename}
             {paper.num_pages && <span className="text-slate-600"> · {paper.num_pages}p</span>}
           </p>
@@ -1144,6 +1159,14 @@ function inheritedCategoryOptionLabel(paper: PaperRecord): string {
   return `${tr("跟随 ·")} ${paper.paper_category_model || tr("未设置")}`
 }
 
+function visibleCategoryLabel(paper: PaperRecord, value: string): string {
+  return value === CATEGORY_INHERIT ? inheritedCategoryOptionLabel(paper) : value
+}
+
+function categorySourceHint(value: string): string {
+  return value === CATEGORY_INHERIT ? tr("跟随模型") : tr("人工")
+}
+
 function InlinePaperCategoryEditor({
   paper, options, value, saving, onChange, variant,
 }: {
@@ -1155,50 +1178,92 @@ function InlinePaperCategoryEditor({
   variant: 'grid' | 'list'
 }) {
   useLocale()
-  const selectId = `paper-category-${variant}-${paper.id}`
-  const selectedLabel = value === CATEGORY_INHERIT
-    ? inheritedCategoryOptionLabel(paper)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const dismiss = useCallback(() => setOpen(false), [])
+  useDismissOnOutside(open, dismiss, rootRef)
+  const label = visibleCategoryLabel(paper, value)
+  const sourceHint = categorySourceHint(value)
+  const triggerId = `paper-category-${variant}-${paper.id}`
+  const menuId = `${triggerId}-menu`
+  const effectiveSwatch = value === CATEGORY_INHERIT
+    ? (paper.paper_category_model || paper.paper_category || tr("未设置"))
     : value
-  const sourceHint = paper.paper_category_source === 'manual' ? tr('（人工）') : tr('（跟随模型）')
+  const choose = (next: string) => {
+    setOpen(false)
+    onChange(next)
+  }
   return (
     <div
-      className="relative w-full min-w-0 max-w-full overflow-hidden"
+      ref={rootRef}
+      className="paper-card-category-control relative w-full min-w-0 max-w-full"
       data-testid="paper-card-category"
       onClick={event => event.stopPropagation()}
       onKeyDown={event => event.stopPropagation()}
     >
-      <label htmlFor={selectId} className="sr-only">{tr("论文大类")}</label>
-      <span
-        className={`pointer-events-none absolute left-2 top-1.5 h-1.5 w-1.5 rounded-full ${categoryDotColor(selectedLabel === inheritedCategoryOptionLabel(paper) ? (paper.paper_category_model || paper.paper_category || tr("未设置")) : selectedLabel)}`}
-        aria-hidden="true"
-      />
-      <p
+      <button
+        type="button"
+        id={triggerId}
         data-testid="paper-card-category-label"
-        className="break-words whitespace-normal pl-5 pr-1 text-[10px] font-medium leading-snug text-slate-300"
-      >
-        {selectedLabel}
-        <span className="text-slate-500">{sourceHint}</span>
-      </p>
-      <select
-        id={selectId}
-        aria-label={tr("{0}的论文大类", { 0: paper.title || paper.filename })}
-        value={value}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={menuId}
+        aria-label={tr("{0}的论文大类", { 0: paperDisplayName(paper) })}
+        title={`${label}（${sourceHint}）`}
         disabled={saving}
-        onChange={event => onChange(event.target.value)}
-        title={tr("论文大类：{0}{1}", { 0: value === CATEGORY_INHERIT ? (paper.paper_category_model || paper.paper_category || tr("未设置")) : value, 1: sourceHint })}
-        className="mt-1 w-full min-w-0 max-w-full cursor-pointer rounded-md border border-slate-700/70 bg-transparent py-1 pl-5 pr-6 text-[10px] font-medium text-slate-300 focus:border-slate-500 focus:outline-none disabled:cursor-wait disabled:opacity-60"
+        onClick={event => {
+          event.preventDefault()
+          event.stopPropagation()
+          setOpen(current => !current)
+        }}
+        className="flex w-full min-w-0 max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[11px] leading-snug text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-slate-500 disabled:cursor-wait disabled:opacity-60"
       >
-        <option value={CATEGORY_INHERIT}>
-          {inheritedCategoryOptionLabel(paper)}
-        </option>
-        {options.map(option => (
-          <option key={option} value={option}>{option}</option>
-        ))}
-      </select>
-      {saving && (
-        <span className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center">
-          <Loader2 size={10} className="animate-spin text-current" aria-label={tr("保存中")} />
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${categoryDotColor(effectiveSwatch)}`}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 flex-1 line-clamp-2 break-words whitespace-normal">
+          {label}
         </span>
+        {saving ? (
+          <Loader2 size={10} className="shrink-0 animate-spin text-current" aria-label={tr("保存中")} />
+        ) : (
+          <ChevronDown size={10} className={`shrink-0 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+        )}
+      </button>
+      {open && (
+        <ul
+          id={menuId}
+          role="listbox"
+          data-testid="paper-card-category-menu"
+          aria-labelledby={triggerId}
+          className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-md border border-slate-700 bg-slate-900 py-1 text-[11px] leading-snug text-slate-200 shadow-lg shadow-black/40"
+        >
+          <li role="presentation">
+            <button
+              type="button"
+              role="option"
+              aria-selected={value === CATEGORY_INHERIT}
+              onClick={() => choose(CATEGORY_INHERIT)}
+              className={`flex w-full px-2 py-1 text-left hover:bg-slate-800 ${value === CATEGORY_INHERIT ? 'bg-slate-800/80 text-slate-50' : ''}`}
+            >
+              {inheritedCategoryOptionLabel(paper)}
+            </button>
+          </li>
+          {options.map(option => (
+            <li key={option} role="presentation">
+              <button
+                type="button"
+                role="option"
+                aria-selected={value === option}
+                onClick={() => choose(option)}
+                className={`flex w-full px-2 py-1 text-left hover:bg-slate-800 ${value === option ? 'bg-slate-800/80 text-slate-50' : ''}`}
+              >
+                {option}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

@@ -32,16 +32,36 @@ describe('library cards preview, process action and category', () => {
     assert.match(source, /disabled=\{pending\}/)
   })
 
-  it('renders long category names in full width without card truncate classes', () => {
+  it('clamps titles to a fixed line count and exposes the original name', () => {
+    const source = read('src/pages/PapersPage.tsx')
+    const title = source.slice(source.indexOf('function PaperTitle'))
+    assert.match(title, /data-testid="paper-card-title"/)
+    assert.match(title, /title=\{name\}/)
+    assert.match(title, /aria-label=\{name\}/)
+    assert.match(title, /line-clamp-3/)
+    assert.match(title, /line-clamp-2/)
+    assert.match(source, /<PaperTitle paper=\{paper\} lines=\{3\} \/>/)
+    assert.match(source, /<PaperTitle paper=\{paper\} lines=\{2\} \/>/)
+  })
+
+  it('renders one compact category control without a duplicate static label', () => {
     const source = read('src/pages/PapersPage.tsx')
     const start = source.indexOf('function inheritedCategoryOptionLabel')
     const editor = source.slice(start >= 0 ? start : source.indexOf('function InlinePaperCategoryEditor'))
     assert.match(editor, /data-testid="paper-card-category-label"/)
-    assert.match(editor, /break-words/)
-    assert.match(editor, /whitespace-normal/)
-    assert.match(editor, /w-full min-w-0 max-w-full/)
+    assert.match(editor, /data-testid="paper-card-category-menu"/)
     assert.match(editor, /跟随 ·/)
+    assert.match(editor, /text-\[11px\]/)
+    assert.match(editor, /aria-haspopup="listbox"/)
+    assert.doesNotMatch(editor, /<select/)
     assert.doesNotMatch(editor, /max-w-32/)
     assert.doesNotMatch(editor, /max-w-36/)
+    // The visible control shows the category once; the inherit prefix is not
+    // repeated as a static paragraph above a second native select.
+    const staticCopy = editor.includes('paper-card-category-label') && editor.includes('<p') && editor.includes('<select')
+    assert.equal(staticCopy, false)
+    assert.match(editor, /paper-card-category-control/)
+    const css = read('src/index.css')
+    assert.match(css, /\.paper-card-category-control[\s\S]*font-size:\s*11px/)
   })
 })

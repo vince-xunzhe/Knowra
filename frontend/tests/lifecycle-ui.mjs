@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { join, resolve, extname, sep } from 'node:path'
 import { chromium, expect } from '@playwright/test'
 
@@ -641,7 +641,7 @@ try {
     const records = [
       {
         id: 11, filename: '2604.18484v2(1).pdf', filepath: 'fixture/unprocessed.pdf',
-        title: 'Pending library fixture', authors: ['Synthetic Author'], num_pages: 48,
+        title: 'Pending library fixture：开放世界具身智能中的长程规划与多模态对齐研究以及额外补充使标题超过三行 FoundationModelEvaluationWithoutAnySpacesToForceWrap', authors: ['Synthetic Author'], num_pages: 48,
         processed: false, processed_at: null, processing_status: 'scanning', error: null,
         paper_category: null, paper_category_model: longCategory, paper_category_override: null,
         paper_category_source: 'model', paper_team: null, paper_team_model: null, paper_team_override: null,
@@ -677,11 +677,12 @@ try {
       },
     ]
     const processPosts = []
+    const categoryPuts = []
     let extractRoute = openaiRoute
     const firstPageHits = []
     const page = await newPage('library', async (route, path, request) => {
       if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
-      if (path === '/api/paper-categories') { await json(route, { categories: ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'] }); return true }
+      if (path === '/api/paper-categories') { await json(route, { categories: ['LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他'].map(name => ({ name, builtin: true, removable: false, count: 1 })) }); return true }
       if (path === '/api/status') {
         await json(route, { running: false, total: 0, done: 0, errors: 0, current: '' })
         return true
@@ -695,6 +696,26 @@ try {
         await route.fulfill({ status: 200, contentType: 'image/png', body: tinyPng })
         const row = records.find(item => item.id === id)
         if (row) row.has_first_page_image = true
+        return true
+      }
+      const category = path.match(/^\/api\/papers\/(\d+)\/category$/)
+      if (category && request.method() === 'PUT') {
+        const id = Number(category[1])
+        const body = JSON.parse(request.postData() || '{}')
+        const row = records.find(item => item.id === id)
+        categoryPuts.push({ id, category: body.category ?? null })
+        if (row) {
+          if (body.category == null) {
+            row.paper_category_override = null
+            row.paper_category_source = row.paper_category_model ? 'model' : 'none'
+            row.paper_category = row.paper_category_model
+          } else {
+            row.paper_category_override = body.category
+            row.paper_category_source = 'manual'
+            row.paper_category = body.category
+          }
+        }
+        await json(route, row || { id, ...body })
         return true
       }
       const process = path.match(/^\/api\/papers\/(\d+)\/(process|retry)$/)
@@ -724,14 +745,51 @@ try {
     await expect(failedCard.getByTestId('paper-card-process')).toHaveText(/重试处理/)
     await expect(doneCard.getByTestId('paper-card-process')).toHaveCount(0)
 
+    const longTitle = records[0].title
+    const pendingTitle = pendingCard.getByTestId('paper-card-title')
+    const shortTitle = doneCard.getByTestId('paper-card-title')
+    await expect(pendingTitle).toHaveAttribute('title', longTitle)
+    await expect(pendingTitle).toHaveAttribute('aria-label', longTitle)
+    await expect(pendingTitle).toContainText('Pending library fixture')
+    await expect(shortTitle).toHaveAttribute('title', 'Completed library fixture')
+    const titleMetrics = await pendingTitle.evaluate(node => {
+      const style = getComputedStyle(node)
+      const lineHeight = parseFloat(style.lineHeight)
+      return {
+        webkitLineClamp: style.webkitLineClamp,
+        overflow: style.overflow,
+        clientHeight: node.clientHeight,
+        scrollHeight: node.scrollHeight,
+        lineHeight,
+        maxLines: lineHeight ? node.clientHeight / lineHeight : 0,
+      }
+    })
+    assert.equal(titleMetrics.webkitLineClamp, '3', `expected 3-line clamp, got ${JSON.stringify(titleMetrics)}`)
+    assert.ok(titleMetrics.scrollHeight > titleMetrics.clientHeight + 1, `long title should ellipsis, got ${JSON.stringify(titleMetrics)}`)
+    assert.ok(titleMetrics.maxLines <= 3.2, `title block taller than 3 lines: ${JSON.stringify(titleMetrics)}`)
+    const shortMetrics = await shortTitle.evaluate(node => ({ clientHeight: node.clientHeight, scrollHeight: node.scrollHeight }))
+    assert.ok(shortMetrics.scrollHeight <= shortMetrics.clientHeight + 1, `short title should not clip, got ${JSON.stringify(shortMetrics)}`)
+    const titleBottom = await pendingTitle.evaluate(node => node.getBoundingClientRect().bottom)
+    const authorsTop = await pendingCard.locator('p', { hasText: 'Synthetic Author' }).evaluate(node => node.getBoundingClientRect().top)
+    assert.ok(authorsTop >= titleBottom - 0.5, `title overlaps authors: titleBottom=${titleBottom} authorsTop=${authorsTop}`)
+
     const pendingCategory = pendingCard.getByTestId('paper-card-category-label')
-    await expect(pendingCategory).toContainText('跟随 ·')
-    await expect(pendingCategory).toContainText(longCategory)
     const failedCategory = failedCard.getByTestId('paper-card-category-label')
-    await expect(failedCategory).toContainText(englishCategory)
+    await expect(pendingCategory).toHaveText(new RegExp(`跟随 ·\\s*${longCategory}`))
+    await expect(failedCategory).toHaveText(englishCategory)
+    await expect(pendingCard.locator('select')).toHaveCount(0)
+    await expect(failedCard.locator('select')).toHaveCount(0)
+    const inheritCopies = await pendingCard.evaluate((card, phrase) => {
+      const visible = card.innerText.replace(/\s+/g, ' ')
+      return visible.split(phrase).length - 1
+    }, `跟随 · ${longCategory}`)
+    assert.equal(inheritCopies, 1, 'inherited category text must appear once, not as a label plus a second control')
+    const categoryFont = await pendingCategory.evaluate(node => parseFloat(getComputedStyle(node).fontSize))
+    assert.ok(categoryFont <= 12.5, `category font should match card meta, got ${categoryFont}px`)
+
     const noOverflow = async (locator, label) => {
       const box = await locator.evaluate(node => {
-        const card = node.closest('[data-testid="paper-grid-card"]')
+        const card = node.closest('[data-testid="paper-grid-card"], [data-testid="paper-list-row"]')
         if (!card) return { ok: false, reason: 'no card' }
         const cardBox = card.getBoundingClientRect()
         const nodeBox = node.getBoundingClientRect()
@@ -742,8 +800,14 @@ try {
       })
       assert.ok(box.ok, `${label} overflow ${JSON.stringify(box)}`)
     }
+    await noOverflow(pendingTitle, 'long title')
     await noOverflow(pendingCategory, 'long Chinese category')
     await noOverflow(failedCategory, 'long English category')
+
+    const shotDir = process.env.KNOWRA_LIBRARY_CARD_EVIDENCE_DIR || join(root, 'tmp', 'library-card-visual')
+    await mkdir(shotDir, { recursive: true })
+    await pendingCard.screenshot({ path: join(shotDir, 'grid-long-title-compact-category.png'), animations: 'disabled' })
+
 
     await pendingCard.getByTestId('paper-card-process').click()
     await expect(page.getByRole('dialog', { name: /将通过 OpenAI API 进行论文抽取/ })).toBeVisible()
@@ -768,10 +832,38 @@ try {
     await expect(page.getByRole('dialog')).toHaveCount(0)
     await expect(page.getByTestId('opened-review')).toHaveText('')
 
+    await pendingCategory.click()
+    const menu = page.getByTestId('paper-card-category-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole('option', { name: `跟随 · ${longCategory}` })).toBeVisible()
+    await menu.getByRole('option', { name: 'LLM', exact: true }).click()
+    await expect.poll(() => categoryPuts.length).toBe(1)
+    assert.equal(categoryPuts[0].id, 11)
+    assert.equal(categoryPuts[0].category, 'LLM')
+    await expect(menu).toHaveCount(0)
+    await expect(pendingCategory).toHaveText('LLM')
+    await expect(pendingCategory).not.toHaveText(/跟随/)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+    await pendingCategory.click()
+    await page.getByTestId('paper-card-category-menu').getByRole('option', { name: `跟随 · ${longCategory}` }).click()
+    await expect.poll(() => categoryPuts.length).toBe(2)
+    assert.equal(categoryPuts[1].category, null)
+    await expect(pendingCategory).toHaveText(new RegExp(`跟随 ·\\s*${longCategory}`))
+    await pendingCard.screenshot({ path: join(shotDir, 'grid-category-inherited.png'), animations: 'disabled' })
+
     await page.setViewportSize({ width: 390, height: 800 })
+    await expect(pendingTitle).toHaveAttribute('title', longTitle)
     await expect(pendingCategory).toContainText(longCategory)
+    await noOverflow(pendingTitle, 'narrow long title')
     await noOverflow(pendingCategory, 'narrow long Chinese category')
     await noOverflow(failedCategory, 'narrow long English category')
+    // A 390x800 window can clip a tall cover card during element screenshots
+    // because the app root is viewport-sized with overflow hidden. Use a taller
+    // frame only for the full-card evidence image; overflow was already checked at 800.
+    await page.setViewportSize({ width: 390, height: 1400 })
+    await pendingCard.scrollIntoViewIfNeeded()
+    await pendingCard.screenshot({ path: join(shotDir, 'grid-narrow-390.png'), animations: 'disabled' })
+    await page.setViewportSize({ width: 390, height: 800 })
 
     await page.getByTitle('列表视图').click()
     await expect(page.getByTestId('paper-list-row')).toHaveCount(4)
@@ -780,6 +872,18 @@ try {
     await expect(pendingRow.getByTestId('paper-card-process')).toBeVisible()
     await expect(doneRow.getByTestId('paper-card-process')).toHaveCount(0)
     await expect(pendingRow.getByTestId('paper-card-category-label')).toContainText(longCategory)
+    await expect(pendingRow.getByTestId('paper-card-title')).toHaveAttribute('title', longTitle)
+    const listTitleMetrics = await pendingRow.getByTestId('paper-card-title').evaluate(node => ({
+      webkitLineClamp: getComputedStyle(node).webkitLineClamp,
+      clientHeight: node.clientHeight,
+      scrollHeight: node.scrollHeight,
+      lineHeight: parseFloat(getComputedStyle(node).lineHeight),
+    }))
+    assert.equal(listTitleMetrics.webkitLineClamp, '2')
+    assert.ok(listTitleMetrics.scrollHeight > listTitleMetrics.clientHeight + 1, `list title should ellipsis, got ${JSON.stringify(listTitleMetrics)}`)
+    await noOverflow(pendingRow.getByTestId('paper-card-title'), 'list long title')
+    await noOverflow(pendingRow.getByTestId('paper-card-category-label'), 'list long category')
+    await pendingRow.screenshot({ path: join(shotDir, 'list-long-title-compact-category.png'), animations: 'disabled' })
   })
 
   await test('Rescue recall survives close/reopen and cannot be submitted twice', async () => {
