@@ -310,14 +310,14 @@ def _cancel_jobs(jobs: list[dict], store=None) -> list[str]:
 
 
 def _delete_exclusive_assets(asset_ids: list[str], data_root: Path) -> dict[str, Any]:
+    """Attempt unlinks one-by-one. Never raise mid-loop after a successful unlink."""
     deleted: list[str] = []
     skipped: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
     asset_root = Path(data_root) / "roadmap_assets"
     for asset_id in asset_ids:
         try:
             path = asset_root / f"{asset_id}.png"
-            # Reuse the official path constructor when the default asset root
-            # matches, but still honor an isolated test data_root.
             if data_root == Path(DATA_DIR) or data_root == Path(ASSET_DIR).parent:
                 try:
                     path = asset_path(asset_id)
@@ -331,31 +331,107 @@ def _delete_exclusive_assets(asset_ids: list[str], data_root: Path) -> dict[str,
                 skipped.append({"id": asset_id, "reason": "unmanaged_path"})
                 continue
             result = safe_unlink(path, data_root)
-            if result == "deleted" or result == "missing":
-                if result == "deleted":
-                    deleted.append(asset_id)
+            if result == "deleted":
+                deleted.append(asset_id)
+            elif result == "missing":
+                deleted.append(asset_id)
             else:
                 skipped.append({"id": asset_id, "reason": result})
         except Exception as exc:
-            raise RoadmapCleanupError(
-                f"无法删除识途报告插图：{exc}",
-                code="file_delete_failed",
-                details={"asset_id": asset_id, "error": str(exc)},
-            ) from exc
-    return {"deleted": deleted, "skipped": skipped}
+            failed.append({"id": asset_id, "reason": str(exc)})
+    return {"deleted": deleted, "skipped": skipped, "failed": failed}
 
 
-def cleanup_category_research(
+_PENDING_DIRNAME = "pending_category_cleanups"
+
+
+def pending_cleanup_dir(data_root: Optional[Path] = None) -> Path:
+    return cleanup_data_root(data_root) / _PENDING_DIRNAME
+
+
+def pending_cleanup_path(cleanup_id: str, data_root: Optional[Path] = None) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(cleanup_id))
+    return pending_cleanup_dir(data_root) / f"{safe}.json"
+
+
+def write_pending_cleanup(record: dict, data_root: Optional[Path] = None) -> Path:
+    path = pending_cleanup_path(record["id"], data_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(record)
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def load_pending_cleanup(cleanup_id: str, data_root: Optional[Path] = None) -> Optional[dict]:
+    path = pending_cleanup_path(cleanup_id, data_root)
+    try:
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def find_pending_cleanup_for_category(name: str, data_root: Optional[Path] = None) -> Optional[dict]:
+    root = pending_cleanup_dir(data_root)
+    if not root.is_dir():
+        return None
+    matches = []
+    for path in root.glob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and data.get("category") == name and data.get("status") in {
+            "pending",
+            "incomplete",
+        }:
+            matches.append(data)
+    if not matches:
+        return None
+    matches.sort(key=lambda item: item.get("updated_at") or item.get("created_at") or "")
+    return matches[-1]
+
+
+def remove_pending_cleanup(cleanup_id: str, data_root: Optional[Path] = None) -> None:
+    path = pending_cleanup_path(cleanup_id, data_root)
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
+def reserved_asset_ids(db, exclude_board_ids: Optional[set[str]] = None) -> set[str]:
+    """Assets still referenced by remaining 识途 boards or runs."""
+    excluded = {str(item) for item in (exclude_board_ids or set()) if item}
+    reserved: set[str] = set()
+    for board in _workspace_boards(db):
+        board_id = str(board.get("id") or "")
+        if board_id and board_id in excluded:
+            continue
+        reserved |= _asset_ids_from_value(board)
+    runs = db.query(RoadmapRun).all()
+    for run in runs:
+        if str(getattr(run, "board_id", "") or "") in excluded:
+            continue
+        _papers, assets = _run_references(run)
+        reserved |= assets
+    return reserved
+
+
+def plan_category_research_cleanup(
     db,
     name: str,
     *,
     confirm: bool,
     fingerprint: Optional[str],
     store=None,
-    data_root: Optional[Path] = None,
     require_confirm_if_present: bool = True,
 ) -> dict[str, Any]:
-    """Delete confirmed 识途 research for one category, or refuse safely."""
+    """Validate confirmation and compute the research cleanup plan. No mutations."""
     preview = collect_category_research(db, name, store=store)
     if preview["count"] == 0:
         return {
@@ -363,6 +439,12 @@ def cleanup_category_research(
             "already_clean": True,
             "fingerprint": preview["fingerprint"],
             "deleted_boards": preview.get("placeholder_board_ids") or [],
+            "placeholder_board_ids": preview.get("placeholder_board_ids") or [],
+            "exclusive_assets": [],
+            "exclusive_catalog": [],
+            "run_ids": [],
+            "jobs": [],
+            "board_ids": preview.get("placeholder_board_ids") or [],
             "warnings": [],
             "retained": ["资料库已入库论文及其原始 PDF"],
         }
@@ -379,47 +461,186 @@ def cleanup_category_research(
             details={"preview": preview},
         )
 
-    root = cleanup_data_root(data_root)
     exclusive_assets: list[str] = []
     exclusive_catalog: list[str] = []
     run_ids: list[str] = []
     jobs: list[dict] = []
+    board_ids: list[str] = []
     for item in preview["items"]:
         exclusive_assets.extend(item["exclusive_asset_ids"])
         exclusive_catalog.extend(item["exclusive_catalog_ids"])
         run_ids.extend(run["id"] for run in item["runs"])
         jobs.extend(item["jobs"])
         if item["board_id"]:
-            write_board_tombstone(item["board_id"], {"category": name}, data_root=root)
-    for board_id in preview.get("placeholder_board_ids") or []:
-        write_board_tombstone(board_id, {"category": name, "placeholder": True}, data_root=root)
+            board_ids.append(item["board_id"])
+    placeholders = list(preview.get("placeholder_board_ids") or [])
+    board_ids = list(dict.fromkeys(board_ids + placeholders))
+    return {
+        "cleaned": preview["count"],
+        "already_clean": False,
+        "fingerprint": preview["fingerprint"],
+        "deleted_boards": board_ids,
+        "placeholder_board_ids": placeholders,
+        "exclusive_assets": sorted(set(exclusive_assets)),
+        "exclusive_catalog": list(dict.fromkeys(exclusive_catalog)),
+        "run_ids": list(dict.fromkeys(run_ids)),
+        "jobs": jobs,
+        "board_ids": board_ids,
+        "warnings": [],
+        "retained": ["资料库已入库论文及其原始 PDF", "其他识途方向的调研"],
+        "category": name,
+    }
 
-    cancelled_jobs = _cancel_jobs(jobs, store=store)
+
+def write_research_barriers(plan: dict[str, Any], data_root: Optional[Path] = None) -> list[Path]:
+    """Write tombstones before commit so late jobs cannot persist, and remember new files."""
+    root = cleanup_data_root(data_root)
+    created: list[Path] = []
+    category = plan.get("category") or ""
+    for board_id in plan.get("board_ids") or []:
+        path = tombstone_path(board_id, data_root=root)
+        existed = path.is_file()
+        write_board_tombstone(board_id, {"category": category}, data_root=root)
+        if not existed:
+            created.append(path)
+    return created
+
+
+def revert_research_barriers(paths: list[Path]) -> None:
+    """Remove only tombstones created by a failed, rolled-back delete."""
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            continue
+
+
+def apply_category_research_db(db, plan: dict[str, Any]) -> None:
+    """Session-only research cleanup. No files, tombstones, or job-store writes."""
+    if plan.get("already_clean"):
+        return
+    run_ids = plan.get("run_ids") or []
+    exclusive_catalog = plan.get("exclusive_catalog") or []
     for run in db.query(RoadmapRun).filter(RoadmapRun.id.in_(run_ids or ["__none__"])).all():
         if run.status in ("pending", "preview"):
             run.status = "cancelled"
             run.error = "技术方向已删除，调研已取消。"
-
-    file_result = _delete_exclusive_assets(sorted(set(exclusive_assets)), root)
-
     if run_ids:
         db.query(RoadmapRun).filter(RoadmapRun.id.in_(run_ids)).delete(synchronize_session=False)
     if exclusive_catalog:
         db.query(RoadmapPaper).filter(RoadmapPaper.id.in_(exclusive_catalog)).delete(synchronize_session=False)
 
+
+def build_pending_cleanup_record(plan: dict[str, Any], *, category: str) -> Optional[dict[str, Any]]:
+    assets = list(plan.get("exclusive_assets") or [])
+    jobs = list(plan.get("jobs") or [])
+    boards = list(plan.get("board_ids") or [])
+    if not assets and not jobs and not boards:
+        return None
+    import uuid
+
     return {
-        "cleaned": preview["count"],
-        "already_clean": False,
-        "fingerprint": preview["fingerprint"],
-        "deleted_boards": [item["board_id"] for item in preview["items"]] + list(preview.get("placeholder_board_ids") or []),
-        "deleted_runs": run_ids,
-        "deleted_catalog": exclusive_catalog,
-        "deleted_assets": file_result["deleted"],
-        "skipped_assets": file_result["skipped"],
-        "cancelled_jobs": cancelled_jobs,
-        "warnings": [
-            f"保留无法确认归属或仍被共享的资源：{item['id']}（{item['reason']}）"
-            for item in file_result["skipped"]
-        ],
-        "retained": ["资料库已入库论文及其原始 PDF", "其他识途方向的调研"],
+        "id": str(uuid.uuid4()),
+        "category": category,
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "board_ids": boards,
+        "exclusive_assets": assets,
+        "remaining_assets": assets,
+        "jobs": jobs,
+        "deleted_assets": [],
+        "skipped_assets": [],
+        "failed_assets": [],
+        "cancelled_jobs": [],
     }
+
+
+def finish_pending_file_cleanup(
+    db,
+    record: dict[str, Any],
+    *,
+    store=None,
+    data_root: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Idempotent post-commit file/job cleanup with a fresh ownership check."""
+    root = cleanup_data_root(data_root)
+    category = record.get("category") or ""
+    board_ids = [str(item) for item in (record.get("board_ids") or []) if item]
+    for board_id in board_ids:
+        write_board_tombstone(board_id, {"category": category}, data_root=root)
+    cancelled_jobs = _cancel_jobs(record.get("jobs") or [], store=store)
+    reserved = reserved_asset_ids(db, set(board_ids))
+    remaining = []
+    skipped_now: list[dict[str, str]] = []
+    for asset_id in record.get("remaining_assets") or record.get("exclusive_assets") or []:
+        if asset_id in reserved:
+            skipped_now.append({"id": asset_id, "reason": "shared_or_reused"})
+        else:
+            remaining.append(asset_id)
+    file_result = _delete_exclusive_assets(remaining, root)
+    file_result["skipped"] = list(file_result.get("skipped") or []) + skipped_now
+    deleted = list(dict.fromkeys(list(record.get("deleted_assets") or []) + file_result["deleted"]))
+    skipped = list(record.get("skipped_assets") or [])
+    seen_skip = {(item.get("id"), item.get("reason")) for item in skipped}
+    for item in file_result["skipped"]:
+        key = (item.get("id"), item.get("reason"))
+        if key not in seen_skip:
+            skipped.append(item)
+            seen_skip.add(key)
+    failed = file_result.get("failed") or []
+    still_remaining = [item["id"] for item in failed]
+    updated = dict(record)
+    updated.update({
+        "status": "incomplete" if failed else "complete",
+        "remaining_assets": still_remaining,
+        "deleted_assets": deleted,
+        "skipped_assets": skipped,
+        "failed_assets": failed,
+        "cancelled_jobs": list(dict.fromkeys(list(record.get("cancelled_jobs") or []) + cancelled_jobs)),
+    })
+    if failed:
+        write_pending_cleanup(updated, data_root=root)
+    else:
+        remove_pending_cleanup(str(record.get("id") or ""), data_root=root)
+    warnings = [
+        f"保留无法确认归属或仍被共享的资源：{item['id']}（{item['reason']}）"
+        for item in skipped
+    ]
+    if failed:
+        warnings.append(
+            "大类删除已提交成功，但部分本地识途文件尚未清理。这次没有回滚数据库。请重试文件清理。"
+        )
+    return {
+        "cleanup_status": "incomplete" if failed else "complete",
+        "pending_cleanup": updated if failed else None,
+        "deleted_assets": deleted,
+        "skipped_assets": skipped,
+        "failed_assets": failed,
+        "cancelled_jobs": updated["cancelled_jobs"],
+        "warnings": warnings,
+        "retryable": bool(failed),
+    }
+
+
+def cleanup_category_research(
+    db,
+    name: str,
+    *,
+    confirm: bool,
+    fingerprint: Optional[str],
+    store=None,
+    data_root: Optional[Path] = None,
+    require_confirm_if_present: bool = True,
+) -> dict[str, Any]:
+    """Plan and apply session-only 识途 cleanup. File unlinks happen after commit."""
+    plan = plan_category_research_cleanup(
+        db,
+        name,
+        confirm=confirm,
+        fingerprint=fingerprint,
+        store=store,
+        require_confirm_if_present=require_confirm_if_present,
+    )
+    apply_category_research_db(db, plan)
+    return plan

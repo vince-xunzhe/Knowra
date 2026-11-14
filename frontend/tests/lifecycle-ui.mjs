@@ -1068,6 +1068,7 @@ try {
           fingerprint,
           papers: { count: paperCount },
           research: { count: 0, fingerprint, items: [] },
+          canvases: { count: 0, contentfulCount: 0, items: [] },
         })
         return true
       }
@@ -1237,6 +1238,7 @@ try {
           fingerprint,
           papers: { count: paperCount },
           research: { ...entry, fingerprint },
+          canvases: { count: 0, contentfulCount: 0, items: [] },
         })
         return true
       }
@@ -1273,6 +1275,7 @@ try {
                 fingerprint: nextFingerprint,
                 papers: { count: paperCount },
                 research: { ...current, fingerprint: nextFingerprint },
+                canvases: { count: 0, contentfulCount: 0, items: [] },
               },
             },
           }, 409)
@@ -1324,6 +1327,95 @@ try {
     await expect(page.getByTestId('paper-category-row-具身智能数据')).toHaveCount(0)
     await expect(page.getByTestId('paper-category-row-LLM')).toBeVisible()
   })
+
+  await test('Category delete lists contentful 索骥 canvases and requires confirmation', async () => {
+    const categories = [
+      { name: 'LLM', builtin: true, removable: true, count: 0 },
+      { name: '具身智能数据', builtin: false, removable: true, count: 0 },
+      { name: '其他', builtin: true, removable: false, count: 0 },
+    ]
+    const canvases = {
+      '具身智能数据': {
+        count: 1,
+        contentfulCount: 1,
+        items: [{
+          boardId: 'd-ego',
+          name: '具身智能数据',
+          nodes: 2,
+          edges: 1,
+          contentful: true,
+          placeholder: false,
+          willDelete: ['索骥画布「具身智能数据」及其 2 个节点、1 条连线（含手工连线）'],
+        }],
+      },
+    }
+    const deletes = []
+    const page = await newPage('category-editor', async (route, path, request) => {
+      if (path === '/api/paper-categories' && request.method() === 'GET') {
+        await json(route, { categories })
+        return true
+      }
+      const previewPath = path.match(/^\/api\/paper-categories\/(.+)\/deletion-preview$/)
+      if (previewPath && request.method() === 'GET') {
+        const name = decodeURIComponent(previewPath[1])
+        const item = categories.find(entry => entry.name === name)
+        const paperCount = item?.count || 0
+        const canvas = canvases[name] || { count: 0, contentfulCount: 0, items: [] }
+        const fingerprint = `fp:${name}:${paperCount}:${canvas.count}:${canvas.contentfulCount}`
+        await json(route, {
+          name,
+          exists: Boolean(item),
+          fingerprint,
+          papers: { count: paperCount },
+          research: { count: 0, fingerprint, items: [] },
+          canvases: canvas,
+        })
+        return true
+      }
+      const renamed = path.match(/^\/api\/paper-categories\/(.+)$/)
+      if (renamed && request.method() === 'DELETE') {
+        const url = new URL(request.url())
+        const from = decodeURIComponent(renamed[1])
+        deletes.push({
+          name: from,
+          confirm_canvases: url.searchParams.get('confirm_canvases'),
+          research_fingerprint: url.searchParams.get('research_fingerprint'),
+        })
+        const canvas = canvases[from]
+        if (canvas?.contentfulCount && url.searchParams.get('confirm_canvases') !== 'true') {
+          await json(route, { detail: { message: '请确认删除索骥画布', code: 'canvas_confirmation_required' } }, 409)
+          return true
+        }
+        const index = categories.findIndex(entry => entry.name === from)
+        if (index >= 0) categories.splice(index, 1)
+        await json(route, { categories, migrated: 0, cleanup_status: 'complete' })
+        return true
+      }
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, []); return true }
+      return false
+    })
+
+    await page.getByTestId('paper-category-editor').click()
+    await page.getByTestId('paper-category-delete-具身智能数据').click()
+    const dialog = page.getByTestId('paper-category-delete-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).not.toContainText('只删除这个大类')
+    await expect(page.getByTestId('paper-category-delete-canvases')).toBeVisible()
+    await expect(page.getByTestId('paper-category-delete-canvas-d-ego')).toContainText('手工连线')
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeDisabled()
+    await page.getByTestId('paper-category-delete-cancel').click()
+    await expect(dialog).toHaveCount(0)
+    assert.equal(deletes.length, 0)
+    await expect(page.getByTestId('paper-category-row-具身智能数据')).toBeVisible()
+
+    await page.getByTestId('paper-category-delete-具身智能数据').click()
+    await page.getByTestId('paper-category-delete-canvas-confirm').check()
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
+    await page.getByTestId('paper-category-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(1)
+    assert.equal(deletes[0].confirm_canvases, 'true')
+    await expect(page.getByTestId('paper-category-row-具身智能数据')).toHaveCount(0)
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
@@ -1334,5 +1426,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 14 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 15 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

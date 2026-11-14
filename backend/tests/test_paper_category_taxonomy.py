@@ -88,10 +88,14 @@ class PaperCategoryTaxonomyTests(unittest.TestCase):
         return paper
 
     def _delete(self, name, target=None, delete_canvas=None, **kwargs):
-        if "research_fingerprint" not in kwargs:
+        if "research_fingerprint" not in kwargs or "confirm_canvases" not in kwargs:
             preview = category_deletion_preview(self.db, name)
-            if preview["papers"]["count"] or preview["research"]["count"]:
+            if "research_fingerprint" not in kwargs and (
+                preview["papers"]["count"] or preview["research"]["count"] or (preview.get("canvases") or {}).get("count")
+            ):
                 kwargs["research_fingerprint"] = preview["fingerprint"]
+            if "confirm_canvases" not in kwargs and (preview.get("canvases") or {}).get("contentful_count"):
+                kwargs["confirm_canvases"] = True
         return delete_taxonomy_category(
             self.db,
             name,

@@ -102,6 +102,7 @@ from services.paper_category_service import (
     delete_taxonomy_category,
     papers_assigned_to_category,
     category_deletion_preview,
+    retry_pending_category_cleanup,
 )
 from services.paper_team_service import (
     TEAM_OTHER,
@@ -1860,6 +1861,8 @@ def rename_paper_category(
 def serialize_category_deletion_preview(preview: dict) -> dict:
     research = preview.get("research") or {}
     items = research.get("items") or []
+    canvases = preview.get("canvases") or {}
+    canvas_items = canvases.get("items") or []
     return {
         "name": preview.get("name"),
         "exists": preview.get("exists"),
@@ -1882,6 +1885,22 @@ def serialize_category_deletion_preview(preview: dict) -> dict:
                 for item in items
             ],
         },
+        "canvases": {
+            "count": canvases.get("count") or 0,
+            "contentfulCount": canvases.get("contentfulCount", canvases.get("contentful_count") or 0),
+            "items": [
+                {
+                    "boardId": item.get("boardId") or item.get("board_id"),
+                    "name": item.get("name"),
+                    "nodes": item.get("nodes") or 0,
+                    "edges": item.get("edges") or 0,
+                    "contentful": bool(item.get("contentful")),
+                    "placeholder": bool(item.get("placeholder")),
+                    "willDelete": item.get("willDelete") or item.get("will_delete") or [],
+                }
+                for item in canvas_items
+            ],
+        },
     }
 
 
@@ -1897,6 +1916,7 @@ def delete_paper_category(
     name: str,
     target: Optional[str] = Query(None),
     confirm_research: bool = Query(False),
+    confirm_canvases: bool = Query(False),
     research_fingerprint: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -1908,6 +1928,7 @@ def delete_paper_category(
             delete_canvas=delete_category_canvas,
             sync_record=sync_record_from_paper,
             confirm_research=confirm_research,
+            confirm_canvases=confirm_canvases,
             research_fingerprint=research_fingerprint,
         )
     except PaperCategoryEditError as error:
@@ -1919,6 +1940,14 @@ def delete_paper_category(
             payload = {"message": error.detail, **details}
         raise HTTPException(status_code=error.status_code, detail=payload) from error
     return {**_category_payload(db), **result}
+
+
+@router.post("/paper-categories/pending-cleanups/{cleanup_id}/retry")
+def retry_paper_category_pending_cleanup(cleanup_id: str, db: Session = Depends(get_db)):
+    try:
+        return retry_pending_category_cleanup(db, cleanup_id)
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.post("/papers/bulk-category")

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import {
   listPaperCategories, addPaperCategory, renamePaperCategory, deletePaperCategory,
-  previewPaperCategoryDeletion, bulkSetPaperCategory, listPapers,
+  previewPaperCategoryDeletion, retryPaperCategoryCleanup, bulkSetPaperCategory, listPapers,
   type PaperCategoryItem, type PaperRecord, type CategoryDeletionPreview,
 } from '../api/client'
 
@@ -63,6 +63,9 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   const [deleteTarget, setDeleteTarget] = useState('')
   const [deletePreview, setDeletePreview] = useState<CategoryDeletionPreview | null>(null)
   const [confirmResearch, setConfirmResearch] = useState(false)
+  const [confirmCanvases, setConfirmCanvases] = useState(false)
+  const [cleanupWarning, setCleanupWarning] = useState<string | null>(null)
+  const [pendingCleanupId, setPendingCleanupId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     const [c, p] = await Promise.all([listPaperCategories(), listPapers()])
@@ -251,6 +254,33 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
           {error}
         </div>
       )}
+      {cleanupWarning && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-5 py-2 text-[12px] text-amber-100" data-testid="paper-category-cleanup-warning">
+          <p>{cleanupWarning}</p>
+          {pendingCleanupId && (
+            <button
+              type="button"
+              data-testid="paper-category-cleanup-retry"
+              disabled={busy === 'cleanup-retry'}
+              onClick={() =>
+                void runManage('cleanup-retry', async () => {
+                  const result = await retryPaperCategoryCleanup(pendingCleanupId)
+                  if (result.cleanup_status === 'incomplete') {
+                    setCleanupWarning((result.warnings && result.warnings.join(' ')) || cleanupWarning)
+                    setPendingCleanupId(result.pending_cleanup?.id ?? pendingCleanupId)
+                    return
+                  }
+                  setCleanupWarning(null)
+                  setPendingCleanupId(null)
+                })
+              }
+              className="mt-2 rounded-md bg-amber-600 px-2 py-1 text-[11px] text-white hover:bg-amber-500 disabled:opacity-40"
+            >
+              {tr("重试未完成的本地文件清理")}
+            </button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-slate-500">
@@ -341,6 +371,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                                   const count = cat.count ?? grouped.get(cat.name)?.length ?? 0
                                   setDeleteTarget('')
                                   setConfirmResearch(false)
+                                  setConfirmCanvases(false)
                                   setDeletePreview(null)
                                   setDeleteConfirm({ name: cat.name, count })
                                   void runManage(`preview:${cat.name}`, async () => {
@@ -572,10 +603,13 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
         const alternatives = cats.filter(item => item.name !== deleteConfirm.name)
         const paperCount = deletePreview?.papers.count ?? deleteConfirm.count
         const researchCount = deletePreview?.research.count ?? 0
-        const canDeleteEmpty = paperCount === 0 && researchCount === 0
+        const canvasCount = deletePreview?.canvases?.count ?? 0
+        const contentfulCanvasCount = deletePreview?.canvases?.contentfulCount ?? 0
+        const canDeleteEmpty = paperCount === 0 && researchCount === 0 && canvasCount === 0
         const canMigrate = paperCount > 0 && alternatives.length > 0 && Boolean(deleteTarget)
         const blocked = paperCount > 0 && alternatives.length === 0
         const researchBlocked = researchCount > 0 && !confirmResearch
+        const canvasBlocked = contentfulCanvasCount > 0 && !confirmCanvases
         const previewBusy = busy === `preview:${deleteConfirm.name}`
         const rowBusy = busy === `delete:${deleteConfirm.name}` || previewBusy
         return (
@@ -587,6 +621,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                 setDeleteConfirm(null)
                 setDeletePreview(null)
                 setConfirmResearch(false)
+                setConfirmCanvases(false)
                 setDeleteTarget('')
               }
             }}
@@ -603,6 +638,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   setDeleteConfirm(null)
                   setDeletePreview(null)
                   setConfirmResearch(false)
+                  setConfirmCanvases(false)
                   setDeleteTarget('')
                 }
               }}
@@ -613,7 +649,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
               <p className="mt-2 text-sm font-medium text-slate-200">{deleteConfirm.name}</p>
               {canDeleteEmpty && !previewBusy && (
                 <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  {tr("该大类目前没有论文，也没有识途调研。确认后只删除这个大类，不会删除任何论文。")}
+                  {tr("该大类目前没有论文，也没有识途调研或索骥画布。确认后只删除这个大类，不会删除任何论文。")}
                 </p>
               )}
               {paperCount > 0 && !blocked && (
@@ -645,7 +681,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
               )}
               {previewBusy && (
                 <p className="mt-2 inline-flex items-center gap-2 text-sm text-slate-400">
-                  <Loader2 size={13} className="animate-spin" /> {tr("正在检查关联的识途调研…")}
+                  <Loader2 size={13} className="animate-spin" /> {tr("正在检查关联的识途调研和索骥画布…")}
                 </p>
               )}
               {researchCount > 0 && (
@@ -680,6 +716,36 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   </label>
                 </div>
               )}
+              {canvasCount > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2" data-testid="paper-category-delete-canvases">
+                  <p className="text-sm leading-relaxed text-amber-100">
+                    {tr("该大类还关联 {0} 个索骥画布。确认删除后这些画布（含手工连线）会一并删除；取消则保留大类和画布。", { 0: canvasCount })}
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {deletePreview?.canvases?.items.map(item => (
+                      <li key={item.boardId} className="text-[12px] leading-relaxed text-slate-200" data-testid={`paper-category-delete-canvas-${item.boardId}`}>
+                        <span className="font-medium">{item.name}</span>
+                        <span className="text-slate-400"> · {tr("节点")} {item.nodes} · {tr("连线")} {item.edges}</span>
+                        <ul className="mt-1 list-disc pl-4 text-[11px] text-slate-400">
+                          {item.willDelete.map(line => <li key={line}>{line}</li>)}
+                        </ul>
+                      </li>
+                    ))}
+                  </ul>
+                  {contentfulCanvasCount > 0 && (
+                    <label className="mt-2 flex items-start gap-2 text-[12px] text-slate-100">
+                      <input
+                        type="checkbox"
+                        data-testid="paper-category-delete-canvas-confirm"
+                        checked={confirmCanvases}
+                        onChange={e => setConfirmCanvases(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>{tr("确认删除以上索骥画布（含节点和手工连线）。不会删除资料库论文。")}</span>
+                    </label>
+                  )}
+                </div>
+              )}
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
@@ -689,6 +755,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                     setDeleteConfirm(null)
                     setDeletePreview(null)
                     setConfirmResearch(false)
+                    setConfirmCanvases(false)
                   }}
                   className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-40"
                 >
@@ -697,27 +764,37 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   data-testid="paper-category-delete-confirm"
-                  disabled={rowBusy || blocked || researchBlocked || (paperCount > 0 && !canMigrate) || !deletePreview}
+                  disabled={rowBusy || blocked || researchBlocked || canvasBlocked || (paperCount > 0 && !canMigrate) || !deletePreview}
                   onClick={() =>
                     void runManage(`delete:${deleteConfirm.name}`, async () => {
                       try {
-                        await deletePaperCategory(
+                        const result = await deletePaperCategory(
                           deleteConfirm.name,
                           paperCount > 0 ? deleteTarget : undefined,
                           {
                             confirmResearch: researchCount > 0,
+                            confirmCanvases: contentfulCanvasCount > 0,
                             researchFingerprint: deletePreview?.research.fingerprint,
                           },
                         )
                         setDeleteConfirm(null)
                         setDeleteTarget('')
                         setConfirmResearch(false)
+                        setConfirmCanvases(false)
                         setDeletePreview(null)
+                        if (result.cleanup_status === 'incomplete') {
+                          setCleanupWarning((result.warnings && result.warnings.join(' ')) || tr("大类已删除，但部分本地文件尚未清理。这次没有回滚。请重试文件清理。"))
+                          setPendingCleanupId(result.pending_cleanup?.id ?? null)
+                        } else {
+                          setCleanupWarning(null)
+                          setPendingCleanupId(null)
+                        }
                       } catch (error) {
                         const next = previewFromError(error)
                         if (next) {
                           setDeletePreview(next)
                           setConfirmResearch(false)
+                          setConfirmCanvases(false)
                         }
                         throw error
                       }

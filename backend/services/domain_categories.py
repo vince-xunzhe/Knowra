@@ -153,3 +153,54 @@ def delete_category_canvas(db: Session, name: str) -> None:
                 409, "Canvas changed during category deletion; please retry"
             )
         db.expire(row)
+
+
+def collect_category_domain_canvases(db: Session, name: str) -> dict:
+    """Preview 索骥 (Domain) canvases that delete_category_canvas would remove.
+
+    Association matches delete_category_canvas: ``board.category == name``, or a
+    legacy board with no category field whose name is exactly this taxonomy
+    category. Custom boards are left alone.
+    """
+    from services.roadmap_category_cleanup import board_belongs_to_category
+
+    items = []
+    revision = None
+    row = db.get(DomainWorkspace, 1)
+    if row is not None and isinstance(getattr(row, "state", None), dict):
+        revision = getattr(row, "revision", None)
+        for board in row.state.get("boards") or []:
+            if not isinstance(board, dict) or not board_belongs_to_category(board, name):
+                continue
+            nodes = board.get("nodes") or []
+            edges = board.get("edges") or []
+            node_count = len(nodes) if isinstance(nodes, list) else 0
+            edge_count = len(edges) if isinstance(edges, list) else 0
+            contentful = bool(node_count or edge_count)
+            will_delete = []
+            if contentful:
+                will_delete.append(
+                    f"索骥画布「{board.get('name') or name}」及其 {node_count} 个节点、{edge_count} 条连线（含手工连线）"
+                )
+            else:
+                will_delete.append(
+                    f"索骥占位画布「{board.get('name') or name}」也会被删除，并非只删除大类名称"
+                )
+            items.append({
+                "board_id": str(board.get("id") or ""),
+                "name": str(board.get("name") or name),
+                "kind": "domain",
+                "nodes": node_count,
+                "edges": edge_count,
+                "contentful": contentful,
+                "placeholder": not contentful,
+                "will_delete": will_delete,
+            })
+    return {
+        "category": name,
+        "count": len(items),
+        "contentful_count": sum(1 for item in items if item["contentful"]),
+        "revision": revision,
+        "items": items,
+        "board_ids": [item["board_id"] for item in items if item["board_id"]],
+    }

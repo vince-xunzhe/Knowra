@@ -21,7 +21,7 @@ ROOT = BACKEND.parent
 sys.path[:0] = [str(ROOT), str(BACKEND)]
 
 from database import get_db  # noqa: E402
-from models import Base, Paper, RoadmapPaper, RoadmapRun, RoadmapWorkspace  # noqa: E402
+from models import Base, DomainWorkspace, Paper, RoadmapPaper, RoadmapRun, RoadmapWorkspace  # noqa: E402
 from routers import papers as papers_router  # noqa: E402
 from services.domain_categories import delete_category_canvas  # noqa: E402
 from services.paper_category_service import (  # noqa: E402
@@ -35,6 +35,7 @@ from services.paper_category_service import (  # noqa: E402
     get_active_categories,
     persist_taxonomy,
     refresh_active_categories,
+    retry_pending_category_cleanup,
 )
 from services.roadmap_category_cleanup import (  # noqa: E402
     board_belongs_to_category,
@@ -101,12 +102,14 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
         self.store = FakeStore()
 
         self.exclusive_asset = _asset("exclusive-ego")
+        self.exclusive_asset_b = _asset("exclusive-ego-b")
         self.shared_asset = _asset("shared-figure")
         self.symlink_asset = _asset("symlink-figure")
         self.external_target = self.root / "outside" / "kept.png"
         self.external_target.parent.mkdir()
         self.external_target.write_bytes(b"external-png")
         self._write_asset(self.exclusive_asset, b"exclusive")
+        self._write_asset(self.exclusive_asset_b, b"exclusive-b")
         self._write_asset(self.shared_asset, b"shared")
         link = self.data / "roadmap_assets" / f"{self.symlink_asset}.png"
         link.symlink_to(self.external_target)
@@ -196,11 +199,41 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
     def _preview(self, name="具身智能数据"):
         return category_deletion_preview(self.db, name, store=self.store)
 
-    def _delete(self, name="具身智能数据", target=None, confirm=None, fingerprint=None, delete_canvas=None):
+    def _domain(self, boards, revision=1):
+        row = self.db.get(DomainWorkspace, 1)
+        state = {"boards": boards, "activeId": boards[0]["id"] if boards else None}
+        if row is None:
+            self.db.add(DomainWorkspace(id=1, revision=revision, state=state, admitted={}))
+        else:
+            row.state = state
+            row.revision = revision
+        self.db.commit()
+
+    def _contentful_domain_board(self, board_id="d-ego", name="具身智能数据", category="具身智能数据"):
+        return {
+            "id": board_id,
+            "name": name,
+            "category": category,
+            "nodes": [
+                {"id": f"{board_id}-n1", "kind": "paper", "paperId": str(self.library_paper.id)},
+                {"id": f"{board_id}-n2", "kind": "note", "label": "手工备注"},
+            ],
+            "edges": [
+                {"id": f"{board_id}-e1", "source": f"{board_id}-n1", "target": f"{board_id}-n2", "label": "手工连线"}
+            ],
+        }
+
+    def _delete(self, name="具身智能数据", target=None, confirm=None, confirm_canvases=None, fingerprint=None, delete_canvas=None):
         preview = self._preview(name)
         if confirm is None:
             confirm = preview["research"]["count"] > 0
-        if fingerprint is None and (preview["research"]["count"] or preview["papers"]["count"]):
+        if confirm_canvases is None:
+            confirm_canvases = bool((preview.get("canvases") or {}).get("contentful_count"))
+        if fingerprint is None and (
+            preview["research"]["count"]
+            or preview["papers"]["count"]
+            or (preview.get("canvases") or {}).get("count")
+        ):
             fingerprint = preview["fingerprint"]
         return delete_taxonomy_category(
             self.db,
@@ -209,6 +242,7 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
             delete_canvas=delete_canvas or delete_category_canvas,
             sync_record=self.sync_record,
             confirm_research=confirm,
+            confirm_canvases=confirm_canvases,
             research_fingerprint=fingerprint,
             store=self.store,
             data_root=self.data,
@@ -223,7 +257,7 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
             self._board("b-empty", "具身智能数据", "具身智能数据", [], []),
         ]
         self._workspace(boards, active="b-ego")
-        self._run("run-ego", "b-ego", assets=[self.exclusive_asset, self.symlink_asset], papers=[self.exclusive_catalog])
+        self._run("run-ego", "b-ego", assets=[self.exclusive_asset, self.exclusive_asset_b, self.symlink_asset], papers=[self.exclusive_catalog])
         self._run("run-llm", "b-llm", assets=[self.shared_asset], papers=[self.shared_catalog])
         if running:
             self.store.jobs["roadmap:b-ego"] = {
@@ -310,25 +344,180 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
         self.assertIsNotNone(self.db.get(RoadmapRun, "run-ego"))
         self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset}.png").is_file())
 
-    def test_file_delete_failure_rolls_back_and_can_retry(self):
+    def test_contentful_domain_canvas_is_listed_and_unconfirmed_delete_is_rejected(self):
+        self.library_paper.paper_category_model = PAPER_CATEGORY_VLM
+        self.db.commit()
+        custom = {
+            "id": "d-custom",
+            "name": "具身智能数据笔记",
+            "category": None,
+            "nodes": [{"id": "c1", "kind": "note", "label": "保留"}],
+            "edges": [],
+        }
+        self._domain([self._contentful_domain_board(), custom])
+        preview = self._preview()
+        self.assertEqual(preview["papers"]["count"], 0)
+        self.assertEqual(preview["research"]["count"], 0)
+        self.assertEqual(preview["canvases"]["count"], 1)
+        self.assertEqual(preview["canvases"]["contentful_count"], 1)
+        self.assertEqual(preview["canvases"]["items"][0]["name"], "具身智能数据")
+        self.assertGreater(preview["canvases"]["items"][0]["edges"], 0)
+        self.assertTrue(any("手工连线" in line for line in preview["canvases"]["items"][0]["will_delete"]))
+        with self.assertRaises(PaperCategoryEditError) as raised:
+            self._delete(confirm=False, confirm_canvases=False, fingerprint=preview["fingerprint"])
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.details["code"], "canvas_confirmation_required")
+        self.assertIn("具身智能数据", get_active_categories())
+        boards = {board["id"]: board for board in self.db.get(DomainWorkspace, 1).state["boards"]}
+        self.assertIn("d-ego", boards)
+        self.assertEqual(len(boards["d-ego"]["edges"]), 1)
+        self.assertIn("d-custom", boards)
+
+    def test_confirmed_domain_canvas_delete_keeps_unrelated_boards(self):
+        self.library_paper.paper_category_model = PAPER_CATEGORY_VLM
+        self.db.commit()
+        custom = {
+            "id": "d-custom",
+            "name": "具身智能数据笔记",
+            "category": None,
+            "nodes": [{"id": "c1", "kind": "note", "label": "保留"}],
+            "edges": [],
+        }
+        placeholder = {
+            "id": "d-empty",
+            "name": "具身智能数据",
+            "category": "具身智能数据",
+            "nodes": [],
+            "edges": [],
+        }
+        self._domain([self._contentful_domain_board(), custom])
+        # placeholder would also be listed if present; keep it on a different run below
+        result = self._delete(confirm_canvases=True)
+        self.assertEqual(result["cleanup_status"], "complete")
+        self.assertNotIn("具身智能数据", get_active_categories())
+        remaining = {board["id"] for board in self.db.get(DomainWorkspace, 1).state["boards"]}
+        self.assertEqual(remaining, {"d-custom"})
+
+    def test_placeholder_domain_canvas_is_not_described_as_only_deleting_the_category(self):
+        self.library_paper.paper_category_model = PAPER_CATEGORY_VLM
+        self.db.commit()
+        self._domain([{
+            "id": "d-empty",
+            "name": "具身智能数据",
+            "category": "具身智能数据",
+            "nodes": [],
+            "edges": [],
+        }])
+        preview = self._preview()
+        self.assertEqual(preview["canvases"]["count"], 1)
+        self.assertEqual(preview["canvases"]["contentful_count"], 0)
+        self.assertTrue(preview["canvases"]["items"][0]["placeholder"])
+        self.assertTrue(any("并非只删除大类" in line for line in preview["canvases"]["items"][0]["will_delete"]))
+        # Empty placeholders do not require the contentful checkbox, but are still listed.
+        result = self._delete(confirm_canvases=False)
+        self.assertNotIn("具身智能数据", get_active_categories())
+        self.assertEqual(self.db.get(DomainWorkspace, 1).state["boards"], [])
+
+    def test_canvas_edit_after_preview_is_rejected_and_keeps_original_data(self):
+        self._seed_standard(include_library_paper=True)
+        self._domain([self._contentful_domain_board()])
+        stale = self._preview()["fingerprint"]
+        from copy import deepcopy
+        row = self.db.get(DomainWorkspace, 1)
+        state = deepcopy(row.state)
+        state["boards"][0]["edges"].append(
+            {"id": "e-new", "source": "d-ego-n1", "target": "d-ego-n2", "label": "新增"}
+        )
+        row.state = state
+        row.revision += 1
+        self.db.commit()
+        self.db.refresh(row)
+        self.assertEqual(len(row.state["boards"][0]["edges"]), 2)
+        with self.assertRaises(PaperCategoryEditError) as raised:
+            self._delete(target=PAPER_CATEGORY_VLM, confirm=True, confirm_canvases=True, fingerprint=stale)
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.details["code"], "research_changed")
+        self.assertIn("具身智能数据", get_active_categories())
+        self.assertEqual(len(self.db.get(DomainWorkspace, 1).state["boards"][0]["edges"]), 2)
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset_b}.png").is_file())
+        self.assertTrue(self.library_pdf.is_file())
+
+    def test_canvas_conflict_or_commit_failure_does_not_delete_any_images(self):
         self._seed_standard(include_library_paper=True)
         preview = self._preview()
-        with patch(
-            "services.roadmap_category_cleanup.safe_unlink",
-            side_effect=OSError("fixture disk error"),
-        ):
-            with self.assertRaises(PaperCategoryEditError) as raised:
-                self._delete(target=PAPER_CATEGORY_VLM, confirm=True, fingerprint=preview["fingerprint"])
-        self.assertEqual(raised.exception.status_code, 409)
-        self.assertEqual(raised.exception.details["code"], "file_delete_failed")
+
+        def boom(_db, _name):
+            from fastapi import HTTPException
+            raise HTTPException(409, "Canvas changed during category deletion; please retry")
+
+        with self.assertRaises(Exception):
+            self._delete(target=PAPER_CATEGORY_VLM, confirm=True, fingerprint=preview["fingerprint"], delete_canvas=boom)
         self.assertIn("具身智能数据", get_active_categories())
-        self.db.refresh(self.library_paper)
-        self.assertEqual(self.library_paper.paper_category_model, "具身智能数据")
         self.assertIsNotNone(self.db.get(RoadmapRun, "run-ego"))
-        retry = self._delete(target=PAPER_CATEGORY_VLM, confirm=True)
-        self.assertEqual(retry["migrated"], 1)
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset_b}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.shared_asset}.png").is_file())
+
+        real_commit = self.db.commit
+
+        def fail_commit():
+            raise RuntimeError("fixture commit failure")
+
+        self.db.commit = fail_commit  # type: ignore[method-assign]
+        try:
+            with self.assertRaises(RuntimeError):
+                self._delete(target=PAPER_CATEGORY_VLM, confirm=True)
+        finally:
+            self.db.commit = real_commit  # type: ignore[method-assign]
+        self.assertIn("具身智能数据", get_active_categories())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset_b}.png").is_file())
+        self.assertFalse(list((self.data / "pending_category_cleanups").glob("*.json")) if (self.data / "pending_category_cleanups").exists() else False)
+
+    def test_second_image_unlink_failure_after_commit_is_retryable_not_a_rollback(self):
+        self._seed_standard(include_library_paper=True)
+
+        def flaky_unlink(path, data_root):
+            from services.paper_deletion_service import safe_unlink as real
+            if path and self.exclusive_asset_b in Path(path).name:
+                raise OSError("fixture disk error on second image")
+            return real(path, data_root)
+
+        with patch("services.roadmap_category_cleanup.safe_unlink", side_effect=flaky_unlink):
+            result = self._delete(target=PAPER_CATEGORY_VLM, confirm=True)
+        self.assertEqual(result["cleanup_status"], "incomplete")
+        self.assertTrue(result.get("pending_cleanup"))
         self.assertNotIn("具身智能数据", get_active_categories())
+        self.db.refresh(self.library_paper)
+        self.assertEqual(self.library_paper.paper_category_override or self.library_paper.paper_category_model, PAPER_CATEGORY_VLM)
         self.assertIsNone(self.db.get(RoadmapRun, "run-ego"))
+        self.assertFalse((self.data / "roadmap_assets" / f"{self.exclusive_asset}.png").exists())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.exclusive_asset_b}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.shared_asset}.png").is_file())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.symlink_asset}.png").is_symlink())
+        self.assertTrue(self.external_target.is_file())
+        self.assertTrue(self.library_pdf.is_file())
+        pending_id = result["pending_cleanup"]["id"]
+        from services.roadmap_category_cleanup import load_pending_cleanup
+        stored = load_pending_cleanup(pending_id, data_root=self.data)
+        self.assertIsNotNone(stored)
+        self.assertIn(self.exclusive_asset_b, stored["remaining_assets"])
+
+        # Restart: retry from the persisted record only, without repeating category deletion.
+        restarted = retry_pending_category_cleanup(self.db, pending_id, store=self.store, data_root=self.data)
+        self.assertEqual(restarted["cleanup_status"], "complete")
+        self.assertFalse((self.data / "roadmap_assets" / f"{self.exclusive_asset_b}.png").exists())
+        self.assertTrue((self.data / "roadmap_assets" / f"{self.shared_asset}.png").is_file())
+        self.assertIsNone(load_pending_cleanup(pending_id, data_root=self.data))
+
+        with self.assertRaises(PaperCategoryEditError) as missing:
+            retry_pending_category_cleanup(self.db, pending_id, store=self.store, data_root=self.data)
+        self.assertEqual(missing.exception.status_code, 404)
+        # Repeat already_deleted path must not 404 or try to re-delete papers.
+        again = self._delete(target=PAPER_CATEGORY_VLM, confirm=True)
+        self.assertTrue(again["already_deleted"] or again["migrated"] == 0)
+        self.assertEqual(again.get("cleanup_status"), "complete")
 
     def test_late_research_results_do_not_resurrect_deleted_board(self):
         self._seed_standard(running=True)
@@ -423,9 +612,48 @@ class CategoryRoadmapCleanupTests(unittest.TestCase):
             self.assertEqual(stale.status_code, 409)
             self.assertEqual(stale.json()["detail"]["code"], "research_changed")
             self.assertIn("fingerprint", stale.json()["detail"]["preview"])
+            self.assertIn("canvases", body)
             ok = client.delete(
                 "/api/paper-categories/具身智能数据",
                 params={"confirm_research": True, "research_fingerprint": body["fingerprint"]},
+            )
+            self.assertEqual(ok.status_code, 200)
+            names = [item["name"] for item in ok.json()["categories"]]
+            self.assertNotIn("具身智能数据", names)
+
+
+    def test_http_requires_canvas_confirmation(self):
+        self.library_paper.paper_category_model = PAPER_CATEGORY_VLM
+        self.db.commit()
+        self._domain([self._contentful_domain_board()])
+        app = FastAPI()
+        app.include_router(papers_router.router)
+
+        def override():
+            db = self.Session()
+            try:
+                yield db
+            finally:
+                db.close()
+
+        app.dependency_overrides[get_db] = override
+        with patch("routers.papers.sync_record_from_paper", self.sync_record), \
+             patch("routers.papers.promote_workspace_categories", side_effect=lambda db: get_active_categories()), \
+             TestClient(app) as client:
+            preview = client.get("/api/paper-categories/具身智能数据/deletion-preview")
+            self.assertEqual(preview.status_code, 200)
+            body = preview.json()
+            self.assertGreaterEqual(body["canvases"]["contentfulCount"], 1)
+            self.assertTrue(body["canvases"]["items"][0]["boardId"])
+            refused = client.delete(
+                "/api/paper-categories/具身智能数据",
+                params={"research_fingerprint": body["fingerprint"]},
+            )
+            self.assertEqual(refused.status_code, 409)
+            self.assertEqual(refused.json()["detail"]["code"], "canvas_confirmation_required")
+            ok = client.delete(
+                "/api/paper-categories/具身智能数据",
+                params={"confirm_canvases": True, "research_fingerprint": body["fingerprint"]},
             )
             self.assertEqual(ok.status_code, 200)
             names = [item["name"] for item in ok.json()["categories"]]
