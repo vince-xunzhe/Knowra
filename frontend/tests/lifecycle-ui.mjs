@@ -886,6 +886,113 @@ try {
     await pendingRow.screenshot({ path: join(shotDir, 'list-long-title-compact-category.png'), animations: 'disabled' })
   })
 
+  await test('Library cards delete a paper after confirmation and leave cancel as a no-op', async () => {
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const records = [
+      {
+        id: 21, filename: 'keep.pdf', filepath: 'fixture/keep.pdf',
+        title: 'Kept library fixture', authors: ['Keep Author'], num_pages: 3,
+        processed: true, processed_at: '2026-01-02T00:00:00', processing_status: 'completed', error: null,
+        paper_category: 'LLM', paper_category_model: 'LLM', paper_category_override: 'LLM',
+        paper_category_source: 'manual', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: true,
+      },
+      {
+        id: 22, filename: 'remove.pdf', filepath: 'fixture/remove.pdf',
+        title: 'Delete-me library fixture', authors: ['Gone Author'], num_pages: 8,
+        processed: false, processed_at: null, processing_status: 'scanning', error: null,
+        paper_category: null, paper_category_model: 'VLM', paper_category_override: null,
+        paper_category_source: 'model', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: true,
+      },
+    ]
+    const deletes = []
+    const processPosts = []
+    const page = await newPage('library', async (route, path, request) => {
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
+      if (path === '/api/paper-categories') { await json(route, { categories: ['LLM', 'VLM'].map(name => ({ name, builtin: true, removable: false, count: 1 })) }); return true }
+      if (path === '/api/status') { await json(route, { running: false, total: 0, done: 0, errors: 0, current: '' }); return true }
+      if (path === '/api/papers/extract-route') {
+        await json(route, {
+          provider_id: 'codex-cli', provider_type: 'codex_cli', provider_label: 'Codex',
+          model_id: 'codex-cli/gpt-6-astra', model_label: 'Codex', surface: 'codex_cli_hierarchy',
+          requires_file_search_confirmation: false, supported: true, unsupported_reason: null,
+          route_fingerprint: 'fp-codex-fixture', has_custom_base_url: false,
+          pricing_url: '/tests/lifecycle-harness.html', file_search_guide_url: '/tests/lifecycle-harness.html',
+          file_search_api: null,
+        })
+        return true
+      }
+      const firstPage = path.match(/^\/api\/papers\/(\d+)\/first_page$/)
+      if (firstPage) {
+        await route.fulfill({ status: 200, contentType: 'image/png', body: tinyPng })
+        return true
+      }
+      const deleted = path.match(/^\/api\/papers\/(\d+)$/)
+      if (deleted && request.method() === 'DELETE') {
+        const id = Number(deleted[1])
+        deletes.push(id)
+        const index = records.findIndex(item => item.id === id)
+        const row = index >= 0 ? records.splice(index, 1)[0] : null
+        await json(route, { status: 'deleted', paper_id: String(id), title: row?.title || null, already_deleted: false })
+        return true
+      }
+      const process = path.match(/^\/api\/papers\/(\d+)\/(process|retry)$/)
+      if (process && request.method() === 'POST') {
+        processPosts.push({ id: Number(process[1]), action: process[2] })
+        await json(route, { running: true, total: 1, done: 0, errors: 0, current: '' })
+        return true
+      }
+      return false
+    })
+
+    const target = page.getByTestId('paper-grid-card').filter({ hasText: 'Delete-me library fixture' })
+    const kept = page.getByTestId('paper-grid-card').filter({ hasText: 'Kept library fixture' })
+    await expect(target).toBeVisible()
+    await expect(kept).toBeVisible()
+    await target.getByTestId('paper-card-actions-trigger').click()
+    await expect(page.getByTestId('paper-card-actions-menu')).toBeVisible()
+    await page.getByTestId('paper-card-delete').click()
+    const dialog = page.getByTestId('paper-delete-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('Delete-me library fixture')
+    await expect(dialog).toContainText('不可恢复')
+    await expect(dialog).toContainText('原始 PDF')
+    await page.getByTestId('paper-delete-cancel').click()
+    await expect(dialog).toHaveCount(0)
+    assert.equal(deletes.length, 0)
+    await expect(target).toBeVisible()
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await target.click()
+    await expect(page.getByTestId('paper-detail-delete')).toBeVisible()
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+    await page.getByTestId('paper-detail-delete').click()
+    await expect(page.getByTestId('paper-delete-dialog')).toBeVisible()
+    await expect(page.getByTestId('paper-delete-confirm')).toBeEnabled()
+    await page.getByTestId('paper-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(1)
+    assert.equal(deletes[0], 22)
+    await expect(page.getByTestId('paper-delete-dialog')).toHaveCount(0)
+    await expect(page.getByTestId('paper-grid-card').filter({ hasText: 'Delete-me library fixture' })).toHaveCount(0)
+    await expect(page.getByTestId('paper-detail-delete')).toHaveCount(0)
+    await expect(kept).toBeVisible()
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await kept.click()
+    await expect(page.getByTestId('opened-review')).toHaveText('21')
+
+    await page.getByTitle('列表视图').click()
+    const keptRow = page.getByTestId('paper-list-row').filter({ hasText: 'Kept library fixture' })
+    await expect(keptRow).toBeVisible()
+    await expect(page.getByTestId('paper-list-row').filter({ hasText: 'Delete-me library fixture' })).toHaveCount(0)
+    await keptRow.getByTestId('paper-card-actions-trigger').click()
+    await expect(page.getByTestId('paper-card-actions-menu')).toBeVisible()
+    await expect(page.getByTestId('opened-review')).toHaveText('21')
+  })
+
   await test('Rescue recall survives close/reopen and cannot be submitted twice', async () => {
     const pending = deferred()
     let loads = 0, recalls = 0
@@ -923,5 +1030,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 11 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 12 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

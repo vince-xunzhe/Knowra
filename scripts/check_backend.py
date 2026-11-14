@@ -23,6 +23,7 @@ TESTS = (
     "tests.test_task_queue",
     "tests.test_task_executor",
     "tests.test_paper_background_dispatch",
+    "tests.test_paper_deletion",
     "tests.test_paper_extract_file_search_confirm",
     "tests.test_paper_first_page_preview",
     "tests.test_openai_api_models_after_gpt55",

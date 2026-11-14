@@ -5,11 +5,11 @@ import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
-  PanelRightOpen, PanelRightClose, Pencil, Upload, ChevronDown,
+  PanelRightOpen, PanelRightClose, Pencil, Upload, ChevronDown, MoreVertical, Trash2,
 } from 'lucide-react'
 import {
   listPapers, processAll, processPaper, retryPaper, retryFailedPapers, reprocessPaper, firstPageUrl, getStatus,
-  uploadPapers, listPaperCategories, updatePaperCategory,
+  uploadPapers, listPaperCategories, updatePaperCategory, deletePaper,
   getCachedPapers,
   type FileSearchConfirmation,
   type PaperRecord,
@@ -78,6 +78,9 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   const [papers, setPapers] = useState<PaperRecord[]>(() => getCachedPapers() ?? [])
   const [loading, setLoading] = useState(() => getCachedPapers() === null)
   const [selected, setSelected] = useState<PaperRecord | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<PaperRecord | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [pendingIds, setPendingIds] = useState<Set<number>>(new Set())
   const [status, setStatus] = useState<ProcStatus | null>(null)
   const [view, setView] = useState<ViewMode>('grid')
@@ -433,6 +436,51 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
     setSelected(paper)
   }
 
+  const requestDeletePaper = (paper: PaperRecord) => {
+    setDeleteError(null)
+    setDeleteTarget(paper)
+  }
+
+  const cancelDeletePaper = () => {
+    if (deleteBusy) return
+    setDeleteTarget(null)
+    setDeleteError(null)
+  }
+
+  const confirmDeletePaper = async () => {
+    if (!deleteTarget || deleteBusy) return
+    const target = deleteTarget
+    setDeleteBusy(true)
+    setDeleteError(null)
+    try {
+      const result = await deletePaper(target.id)
+      setPapers(prev => prev.filter(item => item.id !== target.id))
+      setSelected(prev => (prev?.id === target.id ? null : prev))
+      setPendingIds(prev => {
+        const next = new Set(prev)
+        next.delete(target.id)
+        return next
+      })
+      setCategoryDrafts(prev => {
+        const next = { ...prev }
+        delete next[target.id]
+        return next
+      })
+      setDeleteTarget(null)
+      setActionNotice({
+        tone: 'success',
+        title: result.already_deleted || result.status === 'already_deleted'
+          ? tr("论文已删除")
+          : tr("已永久删除「{0}」", { 0: target.title || target.filename }),
+        detail: tr("原始 PDF（若位于资料库管理目录内）及相关抽取、Wiki、索引和引用已移除。共用概念已保留，将在下次编译时更新。"),
+      })
+    } catch (error) {
+      setDeleteError(getErrorMessage(error) || tr("删除失败，请重试"))
+    } finally {
+      setDeleteBusy(false)
+    }
+  }
+
   const handleCategoryChange = async (paper: PaperRecord, nextValue: string) => {
     const currentValue = paper.paper_category_override || CATEGORY_INHERIT
     if (nextValue === currentValue || categorySavingIds.has(paper.id)) return
@@ -695,6 +743,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
             onProcess={() => handleProcessOne(selected)}
             onRetry={() => handleRetry(selected)}
             onReprocess={() => handleReprocess(selected)}
+            onDelete={() => requestDeletePaper(selected)}
           />
         )}
 
@@ -725,6 +774,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                     if (action?.kind === 'retry') void handleRetry(p)
                     else void handleProcessOne(p)
                   }}
+                  onDelete={() => requestDeletePaper(p)}
                   categoryOptions={categoryOptions}
                   categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
                   categorySaving={categorySavingIds.has(p.id)}
@@ -746,6 +796,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                     if (action?.kind === 'retry') void handleRetry(p)
                     else void handleProcessOne(p)
                   }}
+                  onDelete={() => requestDeletePaper(p)}
                   categoryOptions={categoryOptions}
                   categoryValue={categoryDrafts[p.id] || p.paper_category_override || CATEGORY_INHERIT}
                   categorySaving={categorySavingIds.has(p.id)}
@@ -801,7 +852,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
       )}
 
       {/* Upload confirm — review the picked PDFs before copying to ./papers. */}
-      {pendingFiles.length > 0 && (
+      {deleteTarget && (
+          <PaperDeleteDialog
+            paper={deleteTarget}
+            busy={deleteBusy}
+            error={deleteError}
+            onCancel={cancelDeletePaper}
+            onConfirm={() => void confirmDeletePaper()}
+          />
+        )}
+        {pendingFiles.length > 0 && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
           onClick={e => { if (e.target === e.currentTarget && !uploading) setPendingFiles([]) }}
@@ -863,7 +923,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 // when a paper is selected. Replaces the full-height right-column detail
 // view; the right column is now Prompt-only.
 function PaperDetailStrip({
-  paper, pending, onClose, onProcess, onRetry, onReprocess,
+  paper, pending, onClose, onProcess, onRetry, onReprocess, onDelete,
 }: {
   paper: PaperRecord
   pending: boolean
@@ -871,6 +931,7 @@ function PaperDetailStrip({
   onProcess: () => void
   onRetry: () => void
   onReprocess: () => void
+  onDelete: () => void
 }) {
   useLocale()
   const stage = inferPaperProcessMeta(paper, null, pending)
@@ -952,6 +1013,18 @@ function PaperDetailStrip({
               >
                 {pending ? <Loader2 size={11} className="animate-spin" /> : <RotateCw size={11} />} {tr("重新处理")}</button>
             )}
+            <button
+              type="button"
+              data-testid="paper-detail-delete"
+              onClick={event => {
+                event.preventDefault()
+                event.stopPropagation()
+                onDelete()
+              }}
+              className="inline-flex items-center gap-1 text-xs text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 px-2.5 py-1 rounded-md transition-colors"
+            >
+              <Trash2 size={11} /> {tr("删除")}
+            </button>
           </div>
         </div>
       </div>
@@ -1026,13 +1099,14 @@ function PaperTitle({ paper, lines }: { paper: PaperRecord; lines: 2 | 3 }) {
 }
 
 function PaperGridCard({
-  paper, active, pending, onClick, onProcessAction, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+  paper, active, pending, onClick, onProcessAction, onDelete, categoryOptions, categoryValue, categorySaving, onCategoryChange,
 }: {
   paper: PaperRecord
   active: boolean
   pending: boolean
   onClick: () => void
   onProcessAction: () => void
+  onDelete: () => void
   categoryOptions: string[]
   categoryValue: string
   categorySaving: boolean
@@ -1059,6 +1133,9 @@ function PaperGridCard({
     >
       <div className="relative aspect-[3/4] overflow-hidden rounded-t-2xl bg-[var(--surface-0b0d12)] flex items-center justify-center">
         <PaperCover key={paper.id} paper={paper} iconSize={40} />
+        <div className="absolute top-2 left-2 z-10">
+          <PaperActionsMenu paper={paper} onDelete={onDelete} />
+        </div>
         <div className="absolute top-2 right-2">
           <StatusDot pending={pending} paper={paper} />
         </div>
@@ -1090,13 +1167,14 @@ function PaperGridCard({
 }
 
 function PaperListRow({
-  paper, active, pending, onClick, onProcessAction, categoryOptions, categoryValue, categorySaving, onCategoryChange,
+  paper, active, pending, onClick, onProcessAction, onDelete, categoryOptions, categoryValue, categorySaving, onCategoryChange,
 }: {
   paper: PaperRecord
   active: boolean
   pending: boolean
   onClick: () => void
   onProcessAction: () => void
+  onDelete: () => void
   categoryOptions: string[]
   categoryValue: string
   categorySaving: boolean
@@ -1148,10 +1226,142 @@ function PaperListRow({
           <div className="flex flex-wrap items-center gap-2">
             <PaperProcessButton paper={paper} pending={pending} onProcessAction={onProcessAction} />
             <PaperProcessBadge paper={paper} pending={pending} />
+            <PaperActionsMenu paper={paper} onDelete={onDelete} />
           </div>
         </div>
       </div>
     </article>
+  )
+}
+
+
+function paperActionName(paper: PaperRecord): string {
+  return paper.title || paper.filename
+}
+
+function PaperActionsMenu({ paper, onDelete }: { paper: PaperRecord; onDelete: () => void }) {
+  useLocale()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const dismiss = useCallback(() => setOpen(false), [])
+  useDismissOnOutside(open, dismiss, rootRef)
+  return (
+    <div
+      ref={rootRef}
+      className="relative"
+      data-testid="paper-card-actions"
+      onClick={event => event.stopPropagation()}
+      onKeyDown={event => event.stopPropagation()}
+    >
+      <button
+        type="button"
+        data-testid="paper-card-actions-trigger"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={tr("{0}的操作", { 0: paperActionName(paper) })}
+        title={tr("操作")}
+        onClick={event => {
+          event.preventDefault()
+          event.stopPropagation()
+          setOpen(current => !current)
+        }}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-slate-950/70 text-slate-300 shadow-sm hover:bg-slate-800 hover:text-white focus:outline-none focus:ring-1 focus:ring-slate-500"
+      >
+        <MoreVertical size={14} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          data-testid="paper-card-actions-menu"
+          className="absolute left-0 z-30 mt-1 min-w-[9rem] rounded-md border border-slate-700 bg-slate-900 py-1 text-[11px] leading-snug text-slate-200 shadow-lg shadow-black/40"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="paper-card-delete"
+            onClick={event => {
+              event.preventDefault()
+              event.stopPropagation()
+              setOpen(false)
+              onDelete()
+            }}
+            className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-rose-300 hover:bg-rose-500/10"
+          >
+            <Trash2 size={11} /> {tr("删除")}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PaperDeleteDialog({
+  paper, busy, error, onCancel, onConfirm,
+}: {
+  paper: PaperRecord
+  busy: boolean
+  error: string | null
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  useLocale()
+  const name = paperActionName(paper)
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+      data-testid="paper-delete-dialog-backdrop"
+      onClick={event => {
+        if (event.target === event.currentTarget && !busy) onCancel()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="paper-delete-title"
+        data-testid="paper-delete-dialog"
+        className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+        onClick={event => event.stopPropagation()}
+      >
+        <h2 id="paper-delete-title" className="text-base font-semibold text-slate-100">
+          {tr("永久删除这篇论文？")}
+        </h2>
+        <p className="mt-2 text-sm font-medium leading-relaxed text-slate-200 text-safe-wrap">
+          {name}
+        </p>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">
+          {tr("将永久删除该论文记录、Knowra 管理目录内的原始 PDF、缩略图、抽取结果、论文 Wiki、检索索引和引用关系。此操作不可恢复。")}
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-slate-500">
+          {tr("其他论文仍在使用的概念会保留，并在下次概念编译时不再使用这篇已删除论文。位于管理目录外的导入源默认不会删除。")}
+        </p>
+        {error && (
+          <p data-testid="paper-delete-error" className="mt-3 rounded-md border border-rose-500/30 bg-rose-500/10 px-2.5 py-1.5 text-xs text-rose-300">
+            {error}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            data-testid="paper-delete-cancel"
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+          >
+            {tr("取消")}
+          </button>
+          <button
+            type="button"
+            data-testid="paper-delete-confirm"
+            disabled={busy}
+            onClick={onConfirm}
+            className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:cursor-wait disabled:bg-rose-900 disabled:text-rose-200"
+          >
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+            {tr("永久删除")}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 

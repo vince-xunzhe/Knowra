@@ -24,6 +24,12 @@ from database import get_db
 from services.paper_work_counts import paper_work_counts
 from logging_utils import get_logger
 from models import Paper, KnowledgeNode
+from services.paper_deletion_service import (
+    DeletedPaperSkip,
+    PaperDeletionError,
+    delete_library_paper,
+    should_skip_deleted_paper,
+)
 from config import load_config, save_config, task_model_id, task_model_name, task_reasoning_effort
 from model_gateway import get_model_entry, get_provider_entry, task_context
 from path_utils import (
@@ -294,6 +300,14 @@ def _retry_settings(cfg: dict) -> tuple[int, float, float]:
     return max_retries, base_seconds, max_seconds
 
 
+
+def _commit_if_paper_active(db: Session, paper_id: str) -> None:
+    if should_skip_deleted_paper(paper_id):
+        db.rollback()
+        raise DeletedPaperSkip(str(paper_id))
+    db.commit()
+
+
 def _set_pipeline_state(
     db: Session,
     paper: Paper,
@@ -320,7 +334,7 @@ def _set_pipeline_state(
         paper.last_error_stage = error_stage
     if error_recoverable is not None:
         paper.last_error_recoverable = bool(error_recoverable)
-    db.commit()
+    _commit_if_paper_active(db, paper.id)
 
 
 def _paper_failure_item(p: Paper) -> dict:
@@ -718,6 +732,18 @@ def get_paper(paper_id: str, db: Session = Depends(get_db)):
     return result
 
 
+
+@router.delete("/papers/{paper_id}")
+def delete_paper(paper_id: str, db: Session = Depends(get_db)):
+    """Permanently delete a library paper and its exclusive managed artifacts."""
+    try:
+        outcome = delete_library_paper(db, paper_id)
+    except PaperDeletionError as exc:
+        status = 404 if exc.code == "not_found" else 409 if exc.code in {"file_delete_failed", "index_update_failed"} else 400
+        raise HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc), **(exc.details or {})}) from exc
+    return outcome.as_dict()
+
+
 @router.get("/papers/{paper_id}/manifest")
 def get_paper_manifest(paper_id: str, db: Session = Depends(get_db)):
     if db.query(Paper.id).filter(Paper.id == paper_id).first() is None:
@@ -883,13 +909,13 @@ def _run_wiki_compile_phase(p: Paper, db: Session, cfg: dict) -> None:
         print(f"[wiki] compile after process failed for paper {p.id}: {compile_err}")
 
 
-def _process_single(paper_id: str):
+def _process_single(paper_id: str):  # DeletedPaperSkip aborts write-back
     from database import SessionLocal
 
     db = SessionLocal()
     try:
         p = db.query(Paper).filter(Paper.id == paper_id).first()
-        if not p or p.processed:
+        if not p or p.processed or should_skip_deleted_paper(paper_id):
             return
 
         cfg = load_config()
@@ -935,7 +961,7 @@ def _process_single(paper_id: str):
                 ).first()
                 if p.filepath != portable_filepath and not path_conflict:
                     p.filepath = portable_filepath
-                    db.commit()
+                    _commit_if_paper_active(db, paper_id)
 
                 # Keep the last known-good graph until a complete mutation plan
                 # can replace this paper's owned slice in one transaction.
@@ -947,7 +973,7 @@ def _process_single(paper_id: str):
                         text, num_pages = extract_text(str(pdf_path))
                         p.extracted_text = text
                         p.num_pages = num_pages
-                        db.commit()
+                        _commit_if_paper_active(db, paper_id)
                     except SQLAlchemyError:
                         # Let the outer handler roll back and classify DB errors.
                         raise
@@ -955,7 +981,7 @@ def _process_single(paper_id: str):
                         db.rollback()
 
                 if attach_first_page_preview(p):
-                    db.commit()
+                    _commit_if_paper_active(db, paper_id)
 
                 stage = PIPELINE_STATUS_EXTRACTING
                 _set_pipeline_state(
@@ -1065,7 +1091,7 @@ def _process_single(paper_id: str):
                 p.paper_category_model = derive_model_paper_category(p, extraction)
                 p.paper_team_model = derive_model_paper_team(p, extraction)
                 # Keep successful extraction even if a later graph write fails.
-                db.commit()
+                _commit_if_paper_active(db, paper_id)
                 record_extraction(
                     p,
                     cfg,
@@ -1122,7 +1148,7 @@ def _process_single(paper_id: str):
                 p.last_error_stage = None
                 p.last_error_reason = None
                 p.last_error_recoverable = None
-                db.commit()
+                _commit_if_paper_active(db, paper_id)
                 record_layer(
                     str(p.id),
                     "graph",
@@ -1235,6 +1261,9 @@ def _process_single(paper_id: str):
             processing_state["errors"] += 1
             processing_state["failed_papers"].append(_paper_failure_item(p))
             return
+    except DeletedPaperSkip:
+        db.rollback()
+        return
     finally:
         db.close()
 
