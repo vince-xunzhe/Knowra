@@ -8,7 +8,7 @@ import {
   X,
   Plus,
   ArrowRight,
-  Tags, Users2,
+  Users2,
 } from 'lucide-react'
 import GraphExplorer from '../components/GraphExplorer'
 import NodeDetail from '../components/NodeDetail'
@@ -16,6 +16,7 @@ import RejectedRescueModal from '../components/RejectedRescueModal'
 import PipelineConsole from '../components/PipelineConsole'
 import WikiKnowledgeMap from '../components/WikiKnowledgeMap'
 import CategoryComposer from '../components/CategoryComposer'
+import KnowledgePaperCategoryEditorButton from '../components/KnowledgePaperCategoryEditorButton'
 import TeamComposer from '../components/TeamComposer'
 import ConceptListView from '../components/ConceptListView'
 import CandidateReviewPanel from '../components/CandidateReviewPanel'
@@ -586,7 +587,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
 
 
       {/* Toolbar */}
-      <header className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-2.5">
+      <header data-testid="knowledge-title-bar" className="bg-[var(--surface-0f1117)] border-b border-slate-800/80 px-6 py-2.5">
         <div className="flex flex-wrap items-start gap-4">
           <div className="min-w-0 flex items-baseline gap-2">
             <h1 className="text-base font-semibold text-foreground tracking-tight">{tr("知识图谱")}</h1>
@@ -714,7 +715,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
       </header>
 
       {/* View + type filter chips */}
-      <div className={`bg-[var(--surface-0f1117)]/60 border-b border-slate-800/60 px-6 py-1.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
+      <div data-testid="knowledge-filter-bar" className={`bg-[var(--surface-0f1117)]/60 border-b border-slate-800/60 px-6 py-1.5 flex flex-wrap items-center gap-2 transition-opacity ${isEmpty ? 'opacity-40' : ''}`}>
         {/* Outer toggle — picks which graph engine to use */}
         <div className="inline-flex items-center rounded-xl border border-slate-800 bg-slate-900/60 p-1 mr-2">
           <button
@@ -803,7 +804,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
               <Filter size={11} />
               {tr("类型筛选 — 仅节点图谱")}</span>
             {viewKind === 'compiled' && (
-              <div className="ml-auto inline-flex items-center rounded-lg border border-slate-700 bg-slate-900/60 p-0.5 text-[12px]">
+              <div className="inline-flex items-center rounded-lg border border-slate-700 bg-slate-900/60 p-0.5 text-[12px]">
                 {(['category', 'team'] as const).map(m => (
                   <button
                     key={m}
@@ -821,15 +822,6 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
             )}
             {viewKind === 'compiled' && (
               <button
-                onClick={() => setComposerOpen(true)}
-                title={tr("新增/重命名/删除大类，并批量调整论文归属")}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
-              >
-                <Tags size={12} />
-                {tr("编排大类")}</button>
-            )}
-            {viewKind === 'compiled' && (
-              <button
                 onClick={() => setTeamComposerOpen(true)}
                 title={tr("按核心作者维护团队，并批量调整论文归队")}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-500/40 bg-indigo-500/10 px-3 py-1.5 text-[12px] text-indigo-200 transition-colors hover:bg-indigo-500/20"
@@ -839,6 +831,7 @@ export default function GraphPage({ lintOpen, setLintOpen }: {
             )}
           </>
         )}
+        <KnowledgePaperCategoryEditorButton onClick={() => setComposerOpen(true)} />
       </div>
 
       {/* Main canvas area — three columns:

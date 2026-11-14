@@ -1020,6 +1020,148 @@ try {
       assert.equal(recalls, 1)
     } finally { pending.release() }
   })
+
+  await test('Knowledge filter bar opens paper-category editor with confirmations', async () => {
+    const categories = [
+      { name: 'LLM', builtin: true, removable: true, count: 1 },
+      { name: 'VLM', builtin: true, removable: true, count: 0 },
+      { name: '其他', builtin: true, removable: false, count: 0 },
+    ]
+    const records = [
+      {
+        id: 31, filename: 'llm.pdf', filepath: 'fixture/llm.pdf',
+        title: 'Category fixture LLM', authors: ['Ada'], num_pages: 2,
+        processed: true, processed_at: '2026-01-02T00:00:00', processing_status: 'completed', error: null,
+        paper_category: 'LLM', paper_category_model: 'LLM', paper_category_override: null,
+        paper_category_source: 'model', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: false,
+      },
+    ]
+    const posts = []
+    const puts = []
+    const deletes = []
+    const page = await newPage('category-editor', async (route, path, request) => {
+      if (path === '/api/paper-categories' && request.method() === 'GET') {
+        await json(route, { categories })
+        return true
+      }
+      if (path === '/api/paper-categories' && request.method() === 'POST') {
+        const body = JSON.parse(request.postData() || '{}')
+        posts.push(body)
+        const name = String(body.name || '').trim()
+        if (!name) { await json(route, { detail: '分类名不能为空' }, 400); return true }
+        if (categories.some(item => item.name === name)) { await json(route, { detail: `分类已存在：${name}` }, 400); return true }
+        categories.splice(categories.length - 1, 0, { name, builtin: false, removable: true, count: 0 })
+        await json(route, { categories })
+        return true
+      }
+      const renamed = path.match(/^\/api\/paper-categories\/(.+)$/)
+      if (renamed && request.method() === 'PUT') {
+        const body = JSON.parse(request.postData() || '{}')
+        puts.push({ name: decodeURIComponent(renamed[1]), new_name: body.new_name })
+        const from = decodeURIComponent(renamed[1])
+        const to = String(body.new_name || '').trim()
+        const item = categories.find(entry => entry.name === from)
+        if (item) item.name = to
+        await json(route, { categories, migrated: 0 })
+        return true
+      }
+      if (renamed && request.method() === 'DELETE') {
+        const url = new URL(request.url())
+        const target = url.searchParams.get('target')
+        deletes.push({ name: decodeURIComponent(renamed[1]), target })
+        const from = decodeURIComponent(renamed[1])
+        const item = categories.find(entry => entry.name === from)
+        if (item && item.count > 0 && !target) {
+          await json(route, { detail: '该大类下有论文，请选择另一个已有大类用于转移后再删除。' }, 400)
+          return true
+        }
+        const index = categories.findIndex(entry => entry.name === from)
+        if (index >= 0) categories.splice(index, 1)
+        if (target && records[0]?.paper_category === from) records[0].paper_category = target
+        await json(route, { categories, migrated: item?.count || 0 })
+        return true
+      }
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
+      return false
+    })
+
+    const titleBar = page.getByTestId('knowledge-title-bar')
+    const filterBar = page.getByTestId('knowledge-filter-bar')
+    await expect(titleBar).toContainText('知识图谱')
+    await expect(titleBar).toContainText('新增概念')
+    await expect(titleBar.getByTestId('paper-category-editor')).toHaveCount(0)
+    await expect(filterBar).toContainText('节点图谱')
+    await expect(filterBar).toContainText('全部 1064')
+    await expect(filterBar.getByTestId('paper-category-editor')).toBeVisible()
+    await filterBar.getByTestId('paper-category-editor').click()
+    const panel = page.getByTestId('paper-category-editor-panel')
+    await expect(panel).toBeVisible()
+    await expect(panel).toContainText('论文大类')
+    await expect(page.getByTestId('paper-category-row-LLM')).toBeVisible()
+
+    const shotDir = process.env.KNOWRA_CATEGORY_EDITOR_EVIDENCE_DIR || join(root, 'tmp', 'paper-category-editor-visual')
+    await mkdir(shotDir, { recursive: true })
+    await page.screenshot({ path: join(shotDir, 'filter-bar-and-editor.png'), animations: 'disabled', fullPage: true })
+
+    await page.getByTestId('paper-category-add-input').fill('   ')
+    await expect(page.getByTestId('paper-category-add-submit')).toBeDisabled()
+    assert.equal(posts.length, 0)
+    await page.getByTestId('paper-category-add-input').fill('LLM')
+    await page.getByTestId('paper-category-add-submit').click()
+    await expect(panel).toContainText('分类已存在')
+    assert.equal(posts.length, 0)
+    await page.getByTestId('paper-category-add-input').fill('具身数据')
+    await page.getByTestId('paper-category-add-submit').click()
+    await expect.poll(() => posts.length).toBe(1)
+    await expect(page.getByTestId('paper-category-row-具身数据')).toBeVisible()
+
+    await page.getByTestId('paper-category-row-VLM').getByLabel('重命名 VLM').click()
+    await page.getByLabel('新的大类名称').fill('视觉语言模型')
+    await page.getByLabel('提出重命名').click()
+    const renameDialog = page.getByTestId('paper-category-rename-dialog')
+    await expect(renameDialog).toBeVisible()
+    await expect(renameDialog).toContainText('VLM')
+    await expect(renameDialog).toContainText('视觉语言模型')
+    await page.getByTestId('paper-category-rename-cancel').click()
+    await expect(renameDialog).toHaveCount(0)
+    assert.equal(puts.length, 0)
+    await expect(page.getByTestId('paper-category-row-VLM')).toBeVisible()
+    await expect(page.getByLabel('新的大类名称')).toBeVisible()
+
+    await page.getByLabel('提出重命名').click()
+    await expect(page.getByTestId('paper-category-rename-dialog')).toBeVisible()
+    await page.getByTestId('paper-category-rename-confirm').click()
+    await expect.poll(() => puts.length).toBe(1)
+    await expect(page.getByTestId('paper-category-row-视觉语言模型')).toBeVisible()
+
+    await page.getByTestId('paper-category-delete-具身数据').click()
+    const deleteDialog = page.getByTestId('paper-category-delete-dialog')
+    await expect(deleteDialog).toBeVisible()
+    await expect(deleteDialog).toContainText('不会删除任何论文')
+    await page.getByTestId('paper-category-delete-cancel').click()
+    await expect(deleteDialog).toHaveCount(0)
+    assert.equal(deletes.length, 0)
+    await expect(page.getByTestId('paper-category-row-具身数据')).toBeVisible()
+    await page.getByTestId('paper-category-delete-具身数据').click()
+    await page.getByTestId('paper-category-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(1)
+    assert.equal(deletes[0].name, '具身数据')
+    await expect(page.getByTestId('paper-category-row-具身数据')).toHaveCount(0)
+
+    await page.getByTestId('paper-category-delete-LLM').click()
+    await expect(page.getByTestId('paper-category-delete-dialog')).toBeVisible()
+    await expect(page.getByTestId('paper-category-delete-dialog')).toContainText('必须先选择另一个已有大类')
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeDisabled()
+    await page.getByTestId('paper-category-delete-target').selectOption('视觉语言模型')
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
+    await page.getByTestId('paper-category-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(2)
+    assert.equal(deletes[1].name, 'LLM')
+    assert.equal(deletes[1].target, '视觉语言模型')
+    await expect(page.getByTestId('paper-category-row-LLM')).toHaveCount(0)
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
@@ -1030,5 +1172,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 12 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 13 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

@@ -21,6 +21,7 @@ import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
 import { inferPaperProcessMeta, paperCardProcessAction, summarizePaperError } from '../components/paperProcessMeta'
+import { PAPER_CATEGORIES_CHANGED_EVENT } from '../lib/paperCategoryEvents'
 
 interface ProcStatus {
   running: boolean
@@ -149,13 +150,22 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 
   useEffect(() => {
     let cancelled = false
-    listPaperCategories()
-      .then(items => {
-        if (!cancelled && items.length > 0) setCategoryOptions(items.map(item => item.name))
-      })
-      .catch(error => console.error('Failed to load paper categories', error))
-    return () => { cancelled = true }
-  }, [])
+    const refreshCategories = (reloadPapers = false) => {
+      listPaperCategories()
+        .then(items => {
+          if (!cancelled && items.length > 0) setCategoryOptions(items.map(item => item.name))
+        })
+        .catch(error => console.error('Failed to load paper categories', error))
+      if (reloadPapers) void load()
+    }
+    refreshCategories()
+    const onCategoriesChanged = () => refreshCategories(true)
+    window.addEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    }
+  }, [load])
 
   useEffect(() => {
     let cancelled = false

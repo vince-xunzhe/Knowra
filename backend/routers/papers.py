@@ -96,6 +96,10 @@ from services.paper_category_service import (
     paper_category_source,
     sync_paper_category_fields,
     normalize_paper_category,
+    PaperCategoryEditError,
+    add_taxonomy_category,
+    rename_taxonomy_category,
+    delete_taxonomy_category,
 )
 from services.paper_team_service import (
     TEAM_OTHER,
@@ -1826,14 +1830,10 @@ def list_paper_categories(db: Session = Depends(get_db)):
 
 @router.post("/paper-categories")
 def add_paper_category(body: CategoryNameInput, db: Session = Depends(get_db)):
-    name = (body.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="分类名不能为空")
-    active = get_active_categories()
-    if name in active:
-        raise HTTPException(status_code=400, detail=f"分类已存在：{name}")
-    # Keep "其他" last.
-    set_active_categories([c for c in active if c != PAPER_CATEGORY_OTHER] + [name])
+    try:
+        add_taxonomy_category(body.name)
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     return _category_payload(db)
 
 
@@ -1841,70 +1841,36 @@ def add_paper_category(body: CategoryNameInput, db: Session = Depends(get_db)):
 def rename_paper_category(
     name: str, body: CategoryRenameInput, db: Session = Depends(get_db)
 ):
-    new_name = (body.new_name or "").strip()
-    active = get_active_categories()
-    if name == PAPER_CATEGORY_OTHER:
-        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能重命名")
-    if name not in active:
-        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
-    if not new_name:
-        raise HTTPException(status_code=400, detail="新分类名不能为空")
-    if new_name != name and new_name in active:
-        raise HTTPException(status_code=400, detail=f"目标分类已存在：{new_name}")
-    if new_name == name:
-        return {**_category_payload(db), "migrated": 0}
-
-    rename_category_canvas(db, name, new_name)
-    set_active_categories([new_name if c == name else c for c in active])
-    # Migrate both manual override and model-assigned values so the rename
-    # carries through regardless of how a paper got that category.
-    migrated = 0
-    for p in db.query(Paper).all():
-        changed = False
-        if (p.paper_category_override or "") == name:
-            p.paper_category_override = new_name
-            changed = True
-        if (p.paper_category_model or "") == name:
-            p.paper_category_model = new_name
-            changed = True
-        if changed:
-            migrated += 1
-    db.commit()
-    for p in db.query(Paper).all():
-        if (p.paper_category_override or "") == new_name or (
-            p.paper_category_model or ""
-        ) == new_name:
-            sync_record_from_paper(p, event="category_rename")
-    return {**_category_payload(db), "migrated": migrated}
+    try:
+        result = rename_taxonomy_category(
+            db,
+            name,
+            body.new_name,
+            rename_canvas=rename_category_canvas,
+            sync_record=sync_record_from_paper,
+        )
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return {**_category_payload(db), **result}
 
 
 @router.delete("/paper-categories/{name}")
-def delete_paper_category(name: str, db: Session = Depends(get_db)):
-    active = get_active_categories()
-    if name == PAPER_CATEGORY_OTHER:
-        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
-    if name not in active:
-        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
-    delete_category_canvas(db, name)
-    set_active_categories([c for c in active if c != name])
-    # Affected papers fall back (override/model cleared → effective re-derives).
-    migrated = 0
-    affected: list = []
-    for p in db.query(Paper).all():
-        changed = False
-        if (p.paper_category_override or "") == name:
-            p.paper_category_override = None
-            changed = True
-        if (p.paper_category_model or "") == name:
-            p.paper_category_model = None
-            changed = True
-        if changed:
-            migrated += 1
-            affected.append(p.id)
-    db.commit()
-    for p in db.query(Paper).filter(Paper.id.in_([str(i) for i in affected])).all():
-        sync_record_from_paper(p, event="category_delete")
-    return {**_category_payload(db), "migrated": migrated}
+def delete_paper_category(
+    name: str,
+    target: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = delete_taxonomy_category(
+            db,
+            name,
+            target,
+            delete_canvas=delete_category_canvas,
+            sync_record=sync_record_from_paper,
+        )
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return {**_category_payload(db), **result}
 
 
 @router.post("/papers/bulk-category")
