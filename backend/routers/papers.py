@@ -96,6 +96,13 @@ from services.paper_category_service import (
     paper_category_source,
     sync_paper_category_fields,
     normalize_paper_category,
+    PaperCategoryEditError,
+    add_taxonomy_category,
+    rename_taxonomy_category,
+    delete_taxonomy_category,
+    papers_assigned_to_category,
+    category_deletion_preview,
+    retry_pending_category_cleanup,
 )
 from services.paper_team_service import (
     TEAM_OTHER,
@@ -1826,14 +1833,10 @@ def list_paper_categories(db: Session = Depends(get_db)):
 
 @router.post("/paper-categories")
 def add_paper_category(body: CategoryNameInput, db: Session = Depends(get_db)):
-    name = (body.name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="分类名不能为空")
-    active = get_active_categories()
-    if name in active:
-        raise HTTPException(status_code=400, detail=f"分类已存在：{name}")
-    # Keep "其他" last.
-    set_active_categories([c for c in active if c != PAPER_CATEGORY_OTHER] + [name])
+    try:
+        add_taxonomy_category(body.name)
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     return _category_payload(db)
 
 
@@ -1841,70 +1844,110 @@ def add_paper_category(body: CategoryNameInput, db: Session = Depends(get_db)):
 def rename_paper_category(
     name: str, body: CategoryRenameInput, db: Session = Depends(get_db)
 ):
-    new_name = (body.new_name or "").strip()
-    active = get_active_categories()
-    if name == PAPER_CATEGORY_OTHER:
-        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能重命名")
-    if name not in active:
-        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
-    if not new_name:
-        raise HTTPException(status_code=400, detail="新分类名不能为空")
-    if new_name != name and new_name in active:
-        raise HTTPException(status_code=400, detail=f"目标分类已存在：{new_name}")
-    if new_name == name:
-        return {**_category_payload(db), "migrated": 0}
+    try:
+        result = rename_taxonomy_category(
+            db,
+            name,
+            body.new_name,
+            rename_canvas=rename_category_canvas,
+            sync_record=sync_record_from_paper,
+        )
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    return {**_category_payload(db), **result}
 
-    rename_category_canvas(db, name, new_name)
-    set_active_categories([new_name if c == name else c for c in active])
-    # Migrate both manual override and model-assigned values so the rename
-    # carries through regardless of how a paper got that category.
-    migrated = 0
-    for p in db.query(Paper).all():
-        changed = False
-        if (p.paper_category_override or "") == name:
-            p.paper_category_override = new_name
-            changed = True
-        if (p.paper_category_model or "") == name:
-            p.paper_category_model = new_name
-            changed = True
-        if changed:
-            migrated += 1
-    db.commit()
-    for p in db.query(Paper).all():
-        if (p.paper_category_override or "") == new_name or (
-            p.paper_category_model or ""
-        ) == new_name:
-            sync_record_from_paper(p, event="category_rename")
-    return {**_category_payload(db), "migrated": migrated}
+
+
+def serialize_category_deletion_preview(preview: dict) -> dict:
+    research = preview.get("research") or {}
+    items = research.get("items") or []
+    canvases = preview.get("canvases") or {}
+    canvas_items = canvases.get("items") or []
+    return {
+        "name": preview.get("name"),
+        "exists": preview.get("exists"),
+        "fingerprint": preview.get("fingerprint"),
+        "papers": {"count": (preview.get("papers") or {}).get("count") or 0},
+        "research": {
+            "count": research.get("count") or 0,
+            "fingerprint": preview.get("fingerprint") or research.get("fingerprint"),
+            "items": [
+                {
+                    "boardId": item.get("boardId") or item.get("board_id"),
+                    "name": item.get("name"),
+                    "keywords": item.get("keywords") or [],
+                    "paperCards": item.get("paperCards", item.get("paper_cards", 0)),
+                    "runs": item.get("runs") or [],
+                    "jobs": item.get("jobs") or [],
+                    "willDelete": item.get("willDelete") or item.get("will_delete") or [],
+                    "willRetain": item.get("willRetain") or item.get("will_retain") or [],
+                }
+                for item in items
+            ],
+        },
+        "canvases": {
+            "count": canvases.get("count") or 0,
+            "contentfulCount": canvases.get("contentfulCount", canvases.get("contentful_count") or 0),
+            "items": [
+                {
+                    "boardId": item.get("boardId") or item.get("board_id"),
+                    "name": item.get("name"),
+                    "nodes": item.get("nodes") or 0,
+                    "edges": item.get("edges") or 0,
+                    "contentful": bool(item.get("contentful")),
+                    "placeholder": bool(item.get("placeholder")),
+                    "willDelete": item.get("willDelete") or item.get("will_delete") or [],
+                }
+                for item in canvas_items
+            ],
+        },
+    }
+
+
+@router.get("/paper-categories/{name}/deletion-preview")
+def preview_paper_category_deletion(name: str, db: Session = Depends(get_db)):
+    if name == PAPER_CATEGORY_OTHER:
+        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
+    return serialize_category_deletion_preview(category_deletion_preview(db, name))
 
 
 @router.delete("/paper-categories/{name}")
-def delete_paper_category(name: str, db: Session = Depends(get_db)):
-    active = get_active_categories()
-    if name == PAPER_CATEGORY_OTHER:
-        raise HTTPException(status_code=400, detail="“其他”是保留分类，不能删除")
-    if name not in active:
-        raise HTTPException(status_code=404, detail=f"分类不存在：{name}")
-    delete_category_canvas(db, name)
-    set_active_categories([c for c in active if c != name])
-    # Affected papers fall back (override/model cleared → effective re-derives).
-    migrated = 0
-    affected: list = []
-    for p in db.query(Paper).all():
-        changed = False
-        if (p.paper_category_override or "") == name:
-            p.paper_category_override = None
-            changed = True
-        if (p.paper_category_model or "") == name:
-            p.paper_category_model = None
-            changed = True
-        if changed:
-            migrated += 1
-            affected.append(p.id)
-    db.commit()
-    for p in db.query(Paper).filter(Paper.id.in_([str(i) for i in affected])).all():
-        sync_record_from_paper(p, event="category_delete")
-    return {**_category_payload(db), "migrated": migrated}
+def delete_paper_category(
+    name: str,
+    target: Optional[str] = Query(None),
+    confirm_research: bool = Query(False),
+    confirm_canvases: bool = Query(False),
+    research_fingerprint: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        result = delete_taxonomy_category(
+            db,
+            name,
+            target,
+            delete_canvas=delete_category_canvas,
+            sync_record=sync_record_from_paper,
+            confirm_research=confirm_research,
+            confirm_canvases=confirm_canvases,
+            research_fingerprint=research_fingerprint,
+        )
+    except PaperCategoryEditError as error:
+        payload = error.detail
+        if error.details:
+            details = dict(error.details)
+            if isinstance(details.get("preview"), dict):
+                details["preview"] = serialize_category_deletion_preview(details["preview"])
+            payload = {"message": error.detail, **details}
+        raise HTTPException(status_code=error.status_code, detail=payload) from error
+    return {**_category_payload(db), **result}
+
+
+@router.post("/paper-categories/pending-cleanups/{cleanup_id}/retry")
+def retry_paper_category_pending_cleanup(cleanup_id: str, db: Session = Depends(get_db)):
+    try:
+        return retry_pending_category_cleanup(db, cleanup_id)
+    except PaperCategoryEditError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
 
 
 @router.post("/papers/bulk-category")

@@ -157,11 +157,25 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: #8ea0b6;
 }
 
-/* Library card category trigger/menu. Unlayered so font-size wins over `button { font: inherit }`. */
+/* Library card category trigger/menu. Unlayered so font-size wins over `button { font: inherit }`.
+   The menu may be portaled to document.body, so it carries its own class. */
 .paper-card-category-control,
-.paper-card-category-control button {
+.paper-card-category-control button,
+.paper-card-category-menu,
+.paper-card-category-menu button {
   font-size: 11px;
   line-height: 1.375;
+}
+
+.paper-card-category-menu {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.paper-card-category-menu button {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .text-safe-wrap {

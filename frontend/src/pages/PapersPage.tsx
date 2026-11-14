@@ -1,7 +1,8 @@
 import { getFormattingLocale } from '../i18n/store'
 import { t as tr, matchesMessage } from '../i18n/catalog'
 import { useLocale } from '../i18n/preferences'
-import { useEffect, useState, useRef, useMemo, useCallback } from 'react'
+import { useEffect, useState, useRef, useMemo, useCallback, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import {
   CheckCircle2, XCircle, Clock, RefreshCw, Play, FileText,
   RotateCw, Loader2, Search, LayoutGrid, List as ListIcon, AlertTriangle,
@@ -17,10 +18,12 @@ import {
 import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
 import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import { useDismissOnOutside } from '../hooks/useDismissOnOutside'
+import { useAnchoredMenu } from '../hooks/useAnchoredMenu'
 import PromptPanel from '../components/PromptPanel'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
 import { inferPaperProcessMeta, paperCardProcessAction, summarizePaperError } from '../components/paperProcessMeta'
+import { PAPER_CATEGORIES_CHANGED_EVENT } from '../lib/paperCategoryEvents'
 import {
   createPaperDeleteSuccessNoticeController,
   isCurrentDeleteSuccessNotice,
@@ -159,13 +162,22 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
 
   useEffect(() => {
     let cancelled = false
-    listPaperCategories()
-      .then(items => {
-        if (!cancelled && items.length > 0) setCategoryOptions(items.map(item => item.name))
-      })
-      .catch(error => console.error('Failed to load paper categories', error))
-    return () => { cancelled = true }
-  }, [])
+    const refreshCategories = (reloadPapers = false) => {
+      listPaperCategories()
+        .then(items => {
+          if (!cancelled && items.length > 0) setCategoryOptions(items.map(item => item.name))
+        })
+        .catch(error => console.error('Failed to load paper categories', error))
+      if (reloadPapers) void load()
+    }
+    refreshCategories()
+    const onCategoriesChanged = () => refreshCategories(true)
+    window.addEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    }
+  }, [load])
 
   useEffect(() => {
     let cancelled = false
@@ -1404,8 +1416,15 @@ function InlinePaperCategoryEditor({
   useLocale()
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLUListElement>(null)
+  const focusOnOpenRef = useRef(0)
   const dismiss = useCallback(() => setOpen(false), [])
-  useDismissOnOutside(open, dismiss, rootRef)
+  useDismissOnOutside(open, dismiss, rootRef, menuRef)
+  const { style: menuStyle, placement } = useAnchoredMenu(open, triggerRef, menuRef, dismiss)
+  const choices = [CATEGORY_INHERIT, ...options]
+  const selectedIndex = Math.max(0, choices.indexOf(value))
+  const [activeIndex, setActiveIndex] = useState(selectedIndex)
   const label = visibleCategoryLabel(paper, value)
   const sourceHint = categorySourceHint(value)
   const triggerId = `paper-category-${variant}-${paper.id}`
@@ -1413,10 +1432,59 @@ function InlinePaperCategoryEditor({
   const effectiveSwatch = value === CATEGORY_INHERIT
     ? (paper.paper_category_model || paper.paper_category || tr("未设置"))
     : value
+  const optionLabel = (choice: string) => (
+    choice === CATEGORY_INHERIT ? inheritedCategoryOptionLabel(paper) : choice
+  )
+  const openMenu = () => {
+    focusOnOpenRef.current = selectedIndex
+    setActiveIndex(selectedIndex)
+    setOpen(true)
+  }
   const choose = (next: string) => {
     setOpen(false)
+    triggerRef.current?.focus()
     onChange(next)
   }
+  const moveActive = (next: number) => {
+    const index = (next + choices.length) % choices.length
+    setActiveIndex(index)
+    const option = menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[index]
+    option?.scrollIntoView({ block: 'nearest' })
+    option?.focus()
+  }
+  const onMenuKeyDown = (event: KeyboardEvent) => {
+    event.stopPropagation()
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveActive(activeIndex + 1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveActive(activeIndex - 1)
+    } else if (event.key === 'Home') {
+      event.preventDefault()
+      moveActive(0)
+    } else if (event.key === 'End') {
+      event.preventDefault()
+      moveActive(choices.length - 1)
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      choose(choices[activeIndex] ?? CATEGORY_INHERIT)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    } else if (event.key === 'Tab') {
+      setOpen(false)
+    }
+  }
+  useEffect(() => {
+    if (!open) return
+    const frame = window.requestAnimationFrame(() => {
+      const option = menuRef.current?.querySelectorAll<HTMLElement>('[role="option"]')[focusOnOpenRef.current]
+      ;(option ?? menuRef.current)?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [open])
   return (
     <div
       ref={rootRef}
@@ -1427,6 +1495,7 @@ function InlinePaperCategoryEditor({
     >
       <button
         type="button"
+        ref={triggerRef}
         id={triggerId}
         data-testid="paper-card-category-label"
         aria-haspopup="listbox"
@@ -1438,7 +1507,14 @@ function InlinePaperCategoryEditor({
         onClick={event => {
           event.preventDefault()
           event.stopPropagation()
-          setOpen(current => !current)
+          if (open) setOpen(false)
+          else openMenu()
+        }}
+        onKeyDown={event => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            if (!open) openMenu()
+          }
         }}
         className="flex w-full min-w-0 max-w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[11px] leading-snug text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 focus:outline-none focus:ring-1 focus:ring-slate-500 disabled:cursor-wait disabled:opacity-60"
       >
@@ -1455,39 +1531,47 @@ function InlinePaperCategoryEditor({
           <ChevronDown size={10} className={`shrink-0 text-slate-500 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
         )}
       </button>
-      {open && (
+      {open && createPortal(
         <ul
+          ref={menuRef}
           id={menuId}
           role="listbox"
+          tabIndex={-1}
           data-testid="paper-card-category-menu"
+          data-placement={placement}
           aria-labelledby={triggerId}
-          className="absolute left-0 right-0 z-30 mt-1 max-h-48 overflow-y-auto rounded-md border border-slate-700 bg-slate-900 py-1 text-[11px] leading-snug text-slate-200 shadow-lg shadow-black/40"
+          aria-activedescendant={`${menuId}-option-${activeIndex}`}
+          style={menuStyle}
+          onKeyDown={onMenuKeyDown}
+          onClick={event => event.stopPropagation()}
+          className="paper-card-category-menu rounded-md border border-slate-700 bg-slate-900 py-1 text-[11px] leading-snug text-slate-200 shadow-lg shadow-black/40"
         >
-          <li role="presentation">
-            <button
-              type="button"
-              role="option"
-              aria-selected={value === CATEGORY_INHERIT}
-              onClick={() => choose(CATEGORY_INHERIT)}
-              className={`flex w-full px-2 py-1 text-left hover:bg-slate-800 ${value === CATEGORY_INHERIT ? 'bg-slate-800/80 text-slate-50' : ''}`}
-            >
-              {inheritedCategoryOptionLabel(paper)}
-            </button>
-          </li>
-          {options.map(option => (
-            <li key={option} role="presentation">
+          {choices.map((choice, index) => (
+            <li key={choice} role="presentation">
               <button
                 type="button"
+                id={`${menuId}-option-${index}`}
                 role="option"
-                aria-selected={value === option}
-                onClick={() => choose(option)}
-                className={`flex w-full px-2 py-1 text-left hover:bg-slate-800 ${value === option ? 'bg-slate-800/80 text-slate-50' : ''}`}
+                tabIndex={index === activeIndex ? 0 : -1}
+                aria-selected={value === choice}
+                title={optionLabel(choice)}
+                onMouseDown={event => event.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={event => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  choose(choice)
+                }}
+                className={`flex w-full px-2 py-1 text-left hover:bg-slate-800 ${
+                  value === choice ? 'bg-slate-800/80 text-slate-50' : ''
+                } ${index === activeIndex ? 'ring-1 ring-inset ring-slate-500/70' : ''}`}
               >
-                {option}
+                {optionLabel(choice)}
               </button>
             </li>
           ))}
-        </ul>
+        </ul>,
+        document.body,
       )}
     </div>
   )

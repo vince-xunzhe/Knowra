@@ -498,15 +498,90 @@ export const renamePaperCategory = (name: string, newName: string) =>
       notifyPaperCategoriesChanged()
       return r.data
     })
-export const deletePaperCategory = (name: string) =>
+export interface CategoryDeletionResearchItem {
+  boardId: string
+  name: string
+  keywords: string[]
+  paperCards: number
+  runs: { id: string; status: string; created?: string | null }[]
+  jobs: { job_id?: string; kind: string; status: string }[]
+  willDelete: string[]
+  willRetain: string[]
+}
+export interface CategoryDeletionCanvasItem {
+  boardId: string
+  name: string
+  nodes: number
+  edges: number
+  contentful: boolean
+  placeholder: boolean
+  willDelete: string[]
+}
+export interface CategoryDeletionPreview {
+  name: string
+  exists: boolean
+  fingerprint?: string
+  papers: { count: number }
+  research: {
+    count: number
+    fingerprint: string
+    items: CategoryDeletionResearchItem[]
+  }
+  canvases?: {
+    count: number
+    contentfulCount: number
+    items: CategoryDeletionCanvasItem[]
+  }
+}
+export interface CategoryDeleteResult {
+  categories: PaperCategoryItem[]
+  migrated: number
+  already_deleted?: boolean
+  cleanup_status?: 'complete' | 'incomplete'
+  pending_cleanup?: {
+    id: string
+    status: string
+    remaining_assets?: string[]
+    failed_assets?: { id: string; reason: string }[]
+    skipped_assets?: { id: string; reason: string }[]
+  } | null
+  warnings?: string[]
+}
+export const previewPaperCategoryDeletion = (name: string) =>
   api
-    .delete<{ categories: PaperCategoryItem[]; migrated: number }>(
+    .get<CategoryDeletionPreview>(`/paper-categories/${encodeURIComponent(name)}/deletion-preview`)
+    .then(r => r.data)
+export const deletePaperCategory = (
+  name: string,
+  target?: string | null,
+  options?: {
+    confirmResearch?: boolean
+    confirmCanvases?: boolean
+    researchFingerprint?: string | null
+  },
+) =>
+  api
+    .delete<CategoryDeleteResult>(
       `/paper-categories/${encodeURIComponent(name)}`,
+      {
+        params: {
+          ...(target ? { target } : {}),
+          ...(options?.confirmResearch ? { confirm_research: true } : {}),
+          ...(options?.confirmCanvases ? { confirm_canvases: true } : {}),
+          ...(options?.researchFingerprint ? { research_fingerprint: options.researchFingerprint } : {}),
+        },
+      },
     )
     .then(r => {
       notifyPaperCategoriesChanged()
       return r.data
     })
+export const retryPaperCategoryCleanup = (cleanupId: string) =>
+  api
+    .post<{ cleanup_status?: string; pending_cleanup?: CategoryDeleteResult['pending_cleanup']; warnings?: string[] }>(
+      `/paper-categories/pending-cleanups/${encodeURIComponent(cleanupId)}/retry`,
+    )
+    .then(r => r.data)
 export const bulkSetPaperCategory = (paperIds: (string | number)[], category: string | null) =>
   api
     .post<{ updated: number; category: string | null }>('/papers/bulk-category', {

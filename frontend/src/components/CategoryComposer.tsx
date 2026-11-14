@@ -7,16 +7,27 @@ import {
 } from 'lucide-react'
 import {
   listPaperCategories, addPaperCategory, renamePaperCategory, deletePaperCategory,
-  bulkSetPaperCategory, listPapers,
-  type PaperCategoryItem, type PaperRecord,
+  previewPaperCategoryDeletion, retryPaperCategoryCleanup, bulkSetPaperCategory, listPapers,
+  type PaperCategoryItem, type PaperRecord, type CategoryDeletionPreview,
 } from '../api/client'
 
 // Sentinel for "follow the model" (clears the manual override).
 const INHERIT = '__inherit__'
 
 function apiErr(e: unknown): string {
-  const x = e as { response?: { data?: { detail?: string } }; message?: string }
-  return x?.response?.data?.detail || x?.message || String(e)
+  const x = e as { response?: { data?: { detail?: unknown } }; message?: string }
+  const detail = x?.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof (detail as { message?: unknown }).message === 'string') {
+    return (detail as { message: string }).message
+  }
+  return x?.message || String(e)
+}
+
+function previewFromError(e: unknown): CategoryDeletionPreview | null {
+  const detail = (e as { response?: { data?: { detail?: { preview?: CategoryDeletionPreview; research?: CategoryDeletionPreview['research'] } } } })?.response?.data?.detail
+  if (detail && typeof detail === 'object' && detail.preview?.research) return detail.preview
+  return null
 }
 
 /**
@@ -47,7 +58,14 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   const [newName, setNewName] = useState('')
   const [editing, setEditing] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [renameConfirm, setRenameConfirm] = useState<{ from: string; to: string } | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ name: string; count: number } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState('')
+  const [deletePreview, setDeletePreview] = useState<CategoryDeletionPreview | null>(null)
+  const [confirmResearch, setConfirmResearch] = useState(false)
+  const [confirmCanvases, setConfirmCanvases] = useState(false)
+  const [cleanupWarning, setCleanupWarning] = useState<string | null>(null)
+  const [pendingCleanupId, setPendingCleanupId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     const [c, p] = await Promise.all([listPaperCategories(), listPapers()])
@@ -69,6 +87,14 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   }, [])
 
   const catNames = useMemo(() => cats.map(c => c.name), [cats])
+  const normalizedKey = (value: string) => value.trim().toLowerCase().replace(/[\s_/-]+/g, '')
+  const conflictName = (value: string, exclude?: string) => {
+    const cleaned = value.trim()
+    if (!cleaned) return tr("分类名不能为空")
+    const key = normalizedKey(cleaned)
+    const found = cats.find(item => item.name !== exclude && (item.name === cleaned || normalizedKey(item.name) === key))
+    return found ? tr("分类已存在：{0}", { 0: found.name }) : null
+  }
 
   // The displayed (possibly-staged) category for a paper.
   const shownCategory = useCallback(
@@ -185,13 +211,19 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-0b0d12)]">
+    <div
+      className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-0b0d12)]"
+      data-testid="paper-category-editor-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="paper-category-editor-title"
+    >
       {/* header */}
       <header className="flex items-center gap-3 border-b border-slate-800 bg-[var(--surface-0f1117)] px-5 py-3">
         <Tags size={15} className="text-indigo-300" />
-        <h2 className="text-sm font-semibold text-foreground">{tr("编排大类")}</h2>
+        <h2 id="paper-category-editor-title" className="text-sm font-semibold text-foreground">{tr("大类编辑")}</h2>
         <span className="text-[11px] text-slate-500">
-          {tr("左侧管理大类；右侧选中论文卡片，移到目标大类，保存后生效")}</span>
+          {tr("编辑的是论文大类，不是节点类型。左侧管理大类；右侧调整论文归属不会删除论文。")}</span>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => setPending(new Map())}
@@ -222,6 +254,33 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
           {error}
         </div>
       )}
+      {cleanupWarning && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 px-5 py-2 text-[12px] text-amber-100" data-testid="paper-category-cleanup-warning">
+          <p>{cleanupWarning}</p>
+          {pendingCleanupId && (
+            <button
+              type="button"
+              data-testid="paper-category-cleanup-retry"
+              disabled={busy === 'cleanup-retry'}
+              onClick={() =>
+                void runManage('cleanup-retry', async () => {
+                  const result = await retryPaperCategoryCleanup(pendingCleanupId)
+                  if (result.cleanup_status === 'incomplete') {
+                    setCleanupWarning((result.warnings && result.warnings.join(' ')) || cleanupWarning)
+                    setPendingCleanupId(result.pending_cleanup?.id ?? pendingCleanupId)
+                    return
+                  }
+                  setCleanupWarning(null)
+                  setPendingCleanupId(null)
+                })
+              }
+              className="mt-2 rounded-md bg-amber-600 px-2 py-1 text-[11px] text-white hover:bg-amber-500 disabled:opacity-40"
+            >
+              {tr("重试未完成的本地文件清理")}
+            </button>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-1 items-center justify-center text-slate-500">
@@ -241,6 +300,7 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                 return (
                   <div
                     key={cat.name}
+                    data-testid={`paper-category-row-${cat.name}`}
                     className="rounded-lg border border-slate-800 bg-slate-900/30 px-2.5 py-2"
                   >
                     <div className="flex items-center gap-2">
@@ -248,32 +308,37 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                         <>
                           <input
                             autoFocus
+                            aria-label={tr("新的大类名称")}
                             value={editName}
                             onChange={e => setEditName(e.target.value)}
                             onKeyDown={e => {
-                              if (e.key === 'Enter' && editName.trim() && editName.trim() !== cat.name)
-                                void runManage(`rename:${cat.name}`, async () => {
-                                  await renamePaperCategory(cat.name, editName.trim())
-                                  setEditing(null)
-                                })
+                              if (e.key === 'Enter') {
+                                const to = editName.trim()
+                                if (!to || to === cat.name) return
+                                const conflict = conflictName(to, cat.name)
+                                if (conflict) { setError(conflict); return }
+                                setRenameConfirm({ from: cat.name, to })
+                              }
                               if (e.key === 'Escape') setEditing(null)
                             }}
                             className="min-w-0 flex-1 rounded border border-indigo-500/50 bg-slate-950/70 px-1.5 py-0.5 text-[12px] text-slate-100 focus:outline-none"
                           />
                           <button
-                            onClick={() =>
-                              void runManage(`rename:${cat.name}`, async () => {
-                                if (editName.trim() && editName.trim() !== cat.name)
-                                  await renamePaperCategory(cat.name, editName.trim())
-                                setEditing(null)
-                              })
-                            }
+                            type="button"
+                            aria-label={tr("提出重命名")}
+                            onClick={() => {
+                              const to = editName.trim()
+                              if (!to || to === cat.name) { setEditing(null); return }
+                              const conflict = conflictName(to, cat.name)
+                              if (conflict) { setError(conflict); return }
+                              setRenameConfirm({ from: cat.name, to })
+                            }}
                             disabled={rowBusy}
                             className="text-emerald-300 hover:text-emerald-200"
                           >
                             {rowBusy ? <Loader2 size={12} className="animate-spin" /> : <Check size={13} />}
                           </button>
-                          <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-slate-300">
+                          <button type="button" aria-label={tr("取消重命名")} onClick={() => setEditing(null)} className="text-slate-500 hover:text-slate-300">
                             <X size={13} />
                           </button>
                         </>
@@ -287,40 +352,39 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                           {cat.removable && (
                             <>
                               <button
+                                type="button"
+                                aria-label={tr("重命名 {0}", { 0: cat.name })}
                                 onClick={() => {
                                   setEditing(cat.name)
                                   setEditName(cat.name)
                                 }}
-                                title={tr("重命名（迁移该类所有论文）")}
+                                title={tr("重命名（需确认旧名与新名；该类论文会一并更新）")}
                                 className="text-slate-500 hover:text-indigo-200"
                               >
                                 <Pencil size={11} />
                               </button>
-                              {confirmDelete === cat.name ? (
-                                <span className="flex items-center gap-1">
-                                  <button
-                                    onClick={() =>
-                                      void runManage(`delete:${cat.name}`, async () => {
-                                        await deletePaperCategory(cat.name)
-                                        setConfirmDelete(null)
-                                      })
-                                    }
-                                    disabled={rowBusy}
-                                    className="text-[10px] text-rose-300 hover:text-rose-200"
-                                  >
-                                    {tr("确认")}</button>
-                                  <button onClick={() => setConfirmDelete(null)} className="text-[10px] text-slate-500">
-                                    {tr("取消")}</button>
-                                </span>
-                              ) : (
-                                <button
-                                  onClick={() => setConfirmDelete(cat.name)}
-                                  title={tr("删除（该类论文回退为跟随模型）")}
-                                  className="text-slate-500 hover:text-rose-300"
-                                >
-                                  <Trash2 size={11} />
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                data-testid={`paper-category-delete-${cat.name}`}
+                                aria-label={tr("删除大类 {0}", { 0: cat.name })}
+                                onClick={() => {
+                                  const count = cat.count ?? grouped.get(cat.name)?.length ?? 0
+                                  setDeleteTarget('')
+                                  setConfirmResearch(false)
+                                  setConfirmCanvases(false)
+                                  setDeletePreview(null)
+                                  setDeleteConfirm({ name: cat.name, count })
+                                  void runManage(`preview:${cat.name}`, async () => {
+                                    const preview = await previewPaperCategoryDeletion(cat.name)
+                                    setDeletePreview(preview)
+                                    setDeleteConfirm({ name: cat.name, count: preview.papers.count })
+                                  })
+                                }}
+                                title={tr("删除大类（不会删除论文；有论文时需先转移到其他大类）")}
+                                className="text-slate-500 hover:text-rose-300"
+                              >
+                                <Trash2 size={11} />
+                              </button>
                             </>
                           )}
                         </>
@@ -336,25 +400,36 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
             <div className="border-t border-slate-800/70 p-2">
               <div className="flex items-center gap-1.5">
                 <input
+                  data-testid="paper-category-add-input"
+                  aria-label={tr("新增大类名称")}
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter' && newName.trim())
+                    if (e.key === 'Enter' && newName.trim()) {
+                      const conflict = conflictName(newName)
+                      if (conflict) { setError(conflict); return }
                       void runManage('add', async () => {
                         await addPaperCategory(newName.trim())
                         setNewName('')
                       })
+                    }
+                    if (e.key === 'Escape') setNewName('')
                   }}
                   placeholder={tr("新增大类…")}
                   className="min-w-0 flex-1 rounded border border-slate-700 bg-slate-950/70 px-2 py-1 text-[12px] text-slate-100 focus:border-indigo-500/60 focus:outline-none"
                 />
                 <button
-                  onClick={() =>
+                  type="button"
+                  data-testid="paper-category-add-submit"
+                  aria-label={tr("新增大类")}
+                  onClick={() => {
+                    const conflict = conflictName(newName)
+                    if (conflict) { setError(conflict); return }
                     void runManage('add', async () => {
                       await addPaperCategory(newName.trim())
                       setNewName('')
                     })
-                  }
+                  }}
                   disabled={busy === 'add' || !newName.trim()}
                   className="inline-flex items-center gap-1 rounded bg-indigo-500 px-2 py-1 text-[12px] text-white hover:bg-indigo-400 disabled:opacity-50"
                 >
@@ -467,6 +542,274 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
           </main>
         </div>
       )}
+      {renameConfirm && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4"
+          data-testid="paper-category-rename-dialog-backdrop"
+          onClick={event => {
+            if (event.target === event.currentTarget && busy !== `rename:${renameConfirm.from}`) {
+              setRenameConfirm(null)
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="paper-category-rename-title"
+            data-testid="paper-category-rename-dialog"
+            className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+            onClick={event => event.stopPropagation()}
+            onKeyDown={event => {
+              if (event.key === 'Escape') setRenameConfirm(null)
+            }}
+          >
+            <h3 id="paper-category-rename-title" className="text-base font-semibold text-slate-100">
+              {tr("确认重命名论文大类？")}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-slate-300">
+              {tr("将「{0}」重命名为「{1}」。该大类下的论文会一并更新，论文本身不会被删除。", { 0: renameConfirm.from, 1: renameConfirm.to })}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="paper-category-rename-cancel"
+                disabled={busy === `rename:${renameConfirm.from}`}
+                onClick={() => setRenameConfirm(null)}
+                className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+              >
+                {tr("取消")}
+              </button>
+              <button
+                type="button"
+                data-testid="paper-category-rename-confirm"
+                disabled={busy === `rename:${renameConfirm.from}`}
+                onClick={() =>
+                  void runManage(`rename:${renameConfirm.from}`, async () => {
+                    await renamePaperCategory(renameConfirm.from, renameConfirm.to)
+                    setEditing(null)
+                    setRenameConfirm(null)
+                  })
+                }
+                className="inline-flex items-center gap-1 rounded-md bg-indigo-500 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-400 disabled:opacity-40"
+              >
+                {busy === `rename:${renameConfirm.from}` ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                {tr("确认重命名")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deleteConfirm && (() => {
+        const alternatives = cats.filter(item => item.name !== deleteConfirm.name)
+        const paperCount = deletePreview?.papers.count ?? deleteConfirm.count
+        const researchCount = deletePreview?.research.count ?? 0
+        const canvasCount = deletePreview?.canvases?.count ?? 0
+        const contentfulCanvasCount = deletePreview?.canvases?.contentfulCount ?? 0
+        const canDeleteEmpty = paperCount === 0 && researchCount === 0 && canvasCount === 0
+        const canMigrate = paperCount > 0 && alternatives.length > 0 && Boolean(deleteTarget)
+        const blocked = paperCount > 0 && alternatives.length === 0
+        const researchBlocked = researchCount > 0 && !confirmResearch
+        const canvasBlocked = contentfulCanvasCount > 0 && !confirmCanvases
+        const previewBusy = busy === `preview:${deleteConfirm.name}`
+        const rowBusy = busy === `delete:${deleteConfirm.name}` || previewBusy
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4"
+            data-testid="paper-category-delete-dialog-backdrop"
+            onClick={event => {
+              if (event.target === event.currentTarget && !rowBusy) {
+                setDeleteConfirm(null)
+                setDeletePreview(null)
+                setConfirmResearch(false)
+                setConfirmCanvases(false)
+                setDeleteTarget('')
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="paper-category-delete-title"
+              data-testid="paper-category-delete-dialog"
+              className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+              onClick={event => event.stopPropagation()}
+              onKeyDown={event => {
+                if (event.key === 'Escape' && !rowBusy) {
+                  setDeleteConfirm(null)
+                  setDeletePreview(null)
+                  setConfirmResearch(false)
+                  setConfirmCanvases(false)
+                  setDeleteTarget('')
+                }
+              }}
+            >
+              <h3 id="paper-category-delete-title" className="text-base font-semibold text-slate-100">
+                {tr("删除论文大类？")}
+              </h3>
+              <p className="mt-2 text-sm font-medium text-slate-200">{deleteConfirm.name}</p>
+              {canDeleteEmpty && !previewBusy && (
+                <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                  {tr("该大类目前没有论文，也没有识途调研或索骥画布。确认后只删除这个大类，不会删除任何论文。")}
+                </p>
+              )}
+              {paperCount > 0 && !blocked && (
+                <>
+                  <p className="mt-2 text-sm leading-relaxed text-slate-400">
+                    {tr("该大类下有 {0} 篇论文。必须先选择另一个已有大类，确认转移后再删除。这不会删除论文，也不会自动创建新的目标大类。", { 0: paperCount })}
+                  </p>
+                  <label className="mt-3 block text-xs text-slate-400" htmlFor="paper-category-delete-target">
+                    {tr("论文转移到")}
+                  </label>
+                  <select
+                    id="paper-category-delete-target"
+                    data-testid="paper-category-delete-target"
+                    value={deleteTarget}
+                    onChange={e => setDeleteTarget(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-sm text-slate-100 focus:border-indigo-500/60 focus:outline-none"
+                  >
+                    <option value="">{tr("请选择已有大类")}</option>
+                    {alternatives.map(item => (
+                      <option key={item.name} value={item.name}>{item.name}</option>
+                    ))}
+                  </select>
+                </>
+              )}
+              {blocked && (
+                <p className="mt-2 text-sm leading-relaxed text-amber-200">
+                  {tr("没有其他可用大类。请先新增大类，再将论文转移后删除。不会擅自创建目标大类。")}
+                </p>
+              )}
+              {previewBusy && (
+                <p className="mt-2 inline-flex items-center gap-2 text-sm text-slate-400">
+                  <Loader2 size={13} className="animate-spin" /> {tr("正在检查关联的识途调研和索骥画布…")}
+                </p>
+              )}
+              {researchCount > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2" data-testid="paper-category-delete-research">
+                  <p className="text-sm leading-relaxed text-amber-100">
+                    {tr("该大类还关联 {0} 项识途调研。确认删除后会一并清理这些调研的本地结果；取消则保留大类和调研。不会删除资料库已入库论文。", { 0: researchCount })}
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {deletePreview?.research.items.map(item => (
+                      <li key={item.boardId} className="text-[12px] leading-relaxed text-slate-200" data-testid={`paper-category-delete-research-${item.boardId}`}>
+                        <span className="font-medium">{item.name}</span>
+                        {item.keywords.length > 0 && (
+                          <span className="text-slate-400"> · {tr("关键词")} {item.keywords.join('、')}</span>
+                        )}
+                        <span className="text-slate-400"> · {tr("画布卡片")} {item.paperCards}</span>
+                        <ul className="mt-1 list-disc pl-4 text-[11px] text-slate-400">
+                          {item.willDelete.map(line => <li key={line}>{line}</li>)}
+                        </ul>
+                        <p className="mt-1 text-[11px] text-slate-500">{tr("将保留：")}{item.willRetain.join(tr("；"))}</p>
+                      </li>
+                    ))}
+                  </ul>
+                  <label className="mt-2 flex items-start gap-2 text-[12px] text-slate-100">
+                    <input
+                      type="checkbox"
+                      data-testid="paper-category-delete-research-confirm"
+                      checked={confirmResearch}
+                      onChange={e => setConfirmResearch(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>{tr("确认删除以上识途调研及其本地副本。不会迁移调研，也不会删除资料库论文。")}</span>
+                  </label>
+                </div>
+              )}
+              {canvasCount > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2" data-testid="paper-category-delete-canvases">
+                  <p className="text-sm leading-relaxed text-amber-100">
+                    {tr("该大类还关联 {0} 个索骥画布。确认删除后这些画布（含手工连线）会一并删除；取消则保留大类和画布。", { 0: canvasCount })}
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {deletePreview?.canvases?.items.map(item => (
+                      <li key={item.boardId} className="text-[12px] leading-relaxed text-slate-200" data-testid={`paper-category-delete-canvas-${item.boardId}`}>
+                        <span className="font-medium">{item.name}</span>
+                        <span className="text-slate-400"> · {tr("节点")} {item.nodes} · {tr("连线")} {item.edges}</span>
+                        <ul className="mt-1 list-disc pl-4 text-[11px] text-slate-400">
+                          {item.willDelete.map(line => <li key={line}>{line}</li>)}
+                        </ul>
+                      </li>
+                    ))}
+                  </ul>
+                  {contentfulCanvasCount > 0 && (
+                    <label className="mt-2 flex items-start gap-2 text-[12px] text-slate-100">
+                      <input
+                        type="checkbox"
+                        data-testid="paper-category-delete-canvas-confirm"
+                        checked={confirmCanvases}
+                        onChange={e => setConfirmCanvases(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>{tr("确认删除以上索骥画布（含节点和手工连线）。不会删除资料库论文。")}</span>
+                    </label>
+                  )}
+                </div>
+              )}
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-testid="paper-category-delete-cancel"
+                  disabled={rowBusy}
+                  onClick={() => {
+                    setDeleteConfirm(null)
+                    setDeletePreview(null)
+                    setConfirmResearch(false)
+                    setConfirmCanvases(false)
+                  }}
+                  className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+                >
+                  {tr("取消")}
+                </button>
+                <button
+                  type="button"
+                  data-testid="paper-category-delete-confirm"
+                  disabled={rowBusy || blocked || researchBlocked || canvasBlocked || (paperCount > 0 && !canMigrate) || !deletePreview}
+                  onClick={() =>
+                    void runManage(`delete:${deleteConfirm.name}`, async () => {
+                      try {
+                        const result = await deletePaperCategory(
+                          deleteConfirm.name,
+                          paperCount > 0 ? deleteTarget : undefined,
+                          {
+                            confirmResearch: researchCount > 0,
+                            confirmCanvases: contentfulCanvasCount > 0,
+                            researchFingerprint: deletePreview?.research.fingerprint,
+                          },
+                        )
+                        setDeleteConfirm(null)
+                        setDeleteTarget('')
+                        setConfirmResearch(false)
+                        setConfirmCanvases(false)
+                        setDeletePreview(null)
+                        if (result.cleanup_status === 'incomplete') {
+                          setCleanupWarning((result.warnings && result.warnings.join(' ')) || tr("大类已删除，但部分本地文件尚未清理。这次没有回滚。请重试文件清理。"))
+                          setPendingCleanupId(result.pending_cleanup?.id ?? null)
+                        } else {
+                          setCleanupWarning(null)
+                          setPendingCleanupId(null)
+                        }
+                      } catch (error) {
+                        const next = previewFromError(error)
+                        if (next) {
+                          setDeletePreview(next)
+                          setConfirmResearch(false)
+                          setConfirmCanvases(false)
+                        }
+                        throw error
+                      }
+                    })
+                  }
+                  className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-rose-900 disabled:text-rose-200"
+                >
+                  {rowBusy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  {tr("删除大类")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

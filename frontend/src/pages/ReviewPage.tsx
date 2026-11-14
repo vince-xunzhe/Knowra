@@ -27,6 +27,7 @@ import {
   type PaperLearningStatus,
   type ChatState, type ChatMessage, type PaperSourceEvidencePage,
 } from '../api/client'
+import { PAPER_CATEGORIES_CHANGED_EVENT } from '../lib/paperCategoryEvents'
 import { CANCELLED_EXTRACTION_NOTICE } from '../api/paperExtractConfirm'
 import { useFileSearchConfirmation } from '../hooks/useFileSearchConfirmation'
 import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
@@ -383,6 +384,14 @@ export default function ReviewPage({ initialPaperId = null }: ReviewPageProps) {
   )
   useEffect(() => {
     void reloadCategories()
+    const onCategoriesChanged = () => {
+      void reloadCategories()
+      listPapers()
+        .then(setPapers)
+        .catch(err => console.error('[ReviewPage] listPapers failed:', err))
+    }
+    window.addEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
+    return () => window.removeEventListener(PAPER_CATEGORIES_CHANGED_EVENT, onCategoriesChanged)
   }, [reloadCategories])
 
   useEffect(() => {
