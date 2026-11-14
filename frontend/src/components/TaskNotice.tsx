@@ -12,6 +12,7 @@ interface TaskNoticeProps {
   onRetry?: () => void
   retryLabel?: string
   className?: string
+  testId?: string
 }
 
 const TONE_CLASS: Record<TaskNoticeTone, string> = {
@@ -38,10 +39,11 @@ export default function TaskNotice({
   onRetry,
   retryLabel = tr("重试"),
   className = '',
+  testId,
 }: TaskNoticeProps) {
   useLocale()
   return (
-    <div className={`rounded-xl border px-3 py-2 ${TONE_CLASS[tone]} ${className}`}>
+    <div data-testid={testId} className={`rounded-xl border px-3 py-2 ${TONE_CLASS[tone]} ${className}`}>
       <div className="flex items-start gap-2">
         <span className="mt-0.5 shrink-0">
           <ToneIcon tone={tone} busy={busy} />
