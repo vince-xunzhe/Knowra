@@ -1,7 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import ReviewPage from '../src/pages/ReviewPage'
 import { FileSearchConfirmationProvider } from '../src/hooks/useFileSearchConfirmation'
-import { AskHarness, RescueHarness, BackgroundTasksHarness, LibraryPapersHarness } from './lifecycle-components'
+import { AskHarness, RescueHarness, BackgroundTasksHarness, LibraryPapersHarness, KnowledgeCategoryEditorHarness } from './lifecycle-components'
 import '../src/index.css'
 
 const target = new URLSearchParams(location.search).get('component')
@@ -14,5 +14,5 @@ createRoot(document.getElementById('root')!).render(
     <BackgroundTasksHarness />
   ) : target === 'library' ? (
     <LibraryPapersHarness />
-  ) : target === 'rescue' ? <RescueHarness /> : <AskHarness />,
+  ) : target === 'rescue' ? <RescueHarness /> : target === 'category-editor' ? <KnowledgeCategoryEditorHarness /> : <AskHarness />,
 )

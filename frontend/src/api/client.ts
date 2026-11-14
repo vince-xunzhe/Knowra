@@ -498,10 +498,11 @@ export const renamePaperCategory = (name: string, newName: string) =>
       notifyPaperCategoriesChanged()
       return r.data
     })
-export const deletePaperCategory = (name: string) =>
+export const deletePaperCategory = (name: string, target?: string | null) =>
   api
-    .delete<{ categories: PaperCategoryItem[]; migrated: number }>(
+    .delete<{ categories: PaperCategoryItem[]; migrated: number; already_deleted?: boolean }>(
       `/paper-categories/${encodeURIComponent(name)}`,
+      { params: target ? { target } : {} },
     )
     .then(r => {
       notifyPaperCategoriesChanged()
