@@ -11,7 +11,8 @@ function isInside(root: EventTarget | null | undefined, target: EventTarget | nu
 
 /** Bind document-level dismiss listeners and return an unbind function. */
 export function bindOutsideDismiss(options: {
-  root: EventTarget | null | undefined
+  root?: EventTarget | null
+  roots?: Array<EventTarget | null | undefined>
   onDismiss: () => void
   eventTarget?: ListenerTarget | null
   closeOnEscape?: boolean
@@ -19,10 +20,13 @@ export function bindOutsideDismiss(options: {
 }): () => void {
   const eventTarget = options.eventTarget ?? (typeof document === 'undefined' ? null : document)
   if (!eventTarget) return () => {}
+  const roots = [...(options.roots ?? []), options.root].filter(
+    (item): item is EventTarget => item != null,
+  )
   const capture = options.capture !== false
   const closeOnEscape = options.closeOnEscape !== false
   const onPointerDown = (event: Event) => {
-    if (isInside(options.root, event.target)) return
+    if (roots.some(root => isInside(root, event.target))) return
     options.onDismiss()
   }
   const onKeyDown = (event: Event) => {
@@ -36,14 +40,19 @@ export function bindOutsideDismiss(options: {
   }
 }
 
-/** Close an open popover when pressing outside its root, or Escape. */
+/** Close an open popover when pressing outside its roots, or Escape. */
 export function useDismissOnOutside(
   open: boolean,
   onDismiss: () => void,
   rootRef: RefObject<HTMLElement | null>,
+  extraRef?: RefObject<HTMLElement | null>,
 ) {
+  const extra = extraRef ?? null
   useEffect(() => {
     if (!open) return
-    return bindOutsideDismiss({ root: rootRef.current, onDismiss })
-  }, [open, onDismiss, rootRef])
+    return bindOutsideDismiss({
+      roots: [rootRef.current, extra?.current],
+      onDismiss,
+    })
+  }, [open, onDismiss, rootRef, extra])
 }

@@ -1416,6 +1416,311 @@ try {
     assert.equal(deletes[0].confirm_canvases, 'true')
     await expect(page.getByTestId('paper-category-row-具身智能数据')).toHaveCount(0)
   })
+
+  await test('Library card category menus escape overflow clipping and stay interactive', async () => {
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    const longLastCategory = '末项-很长的分类名称用于滚动点击验证-XYZ'
+    const categories = [
+      'LLM', 'VLM', 'VLA', '三维重建-静态', '三维重建-动态', '世界模型', '其他',
+      '分类-08', '分类-09', '分类-10', '分类-11', '分类-12', '分类-13',
+      '分类-14', '分类-15', '分类-16', '分类-17', '分类-18', '分类-19',
+      longLastCategory,
+    ]
+    const records = Array.from({ length: 8 }, (_, index) => ({
+      id: 101 + index,
+      filename: `menu-overflow-${index + 1}.pdf`,
+      filepath: `fixture/menu-overflow-${index + 1}.pdf`,
+      title: `Menu overflow fixture ${index + 1}`,
+      authors: ['Synthetic Author'],
+      num_pages: 3,
+      processed: true,
+      processed_at: '2026-01-02T00:00:00',
+      processing_status: 'completed',
+      error: null,
+      paper_category: null,
+      paper_category_model: null,
+      paper_category_override: null,
+      paper_category_source: 'none',
+      paper_team: null,
+      paper_team_model: null,
+      paper_team_override: null,
+      paper_team_source: 'none',
+      learning_status: 'not_started',
+      year: 2026,
+      created_at: '2026-01-01',
+      has_first_page_image: true,
+    }))
+    const categoryPuts = []
+    const page = await newPage('library', async (route, path, request) => {
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
+      if (path === '/api/paper-categories') {
+        await json(route, { categories: categories.map(name => ({ name, builtin: name.length <= 8, removable: name.length > 8, count: 1 })) })
+        return true
+      }
+      if (path === '/api/status') { await json(route, { running: false, total: 0, done: 0, errors: 0, current: '' }); return true }
+      if (path === '/api/papers/extract-route') {
+        await json(route, {
+          provider_id: 'codex-cli', provider_type: 'codex_cli', provider_label: 'Codex',
+          model_id: 'codex-cli/gpt-6-astra', model_label: 'Codex', surface: 'codex_cli_hierarchy',
+          file_search_api: null, requires_file_search_confirmation: false,
+          route_fingerprint: 'fp-codex-fixture', supported: true, unsupported_reason: null,
+          has_custom_base_url: false, pricing_url: '/tests/lifecycle-harness.html',
+          file_search_guide_url: '/tests/lifecycle-harness.html',
+        })
+        return true
+      }
+      const firstPage = path.match(/^\/api\/papers\/(\d+)\/first_page$/)
+      if (firstPage) {
+        await route.fulfill({ status: 200, contentType: 'image/png', body: tinyPng })
+        return true
+      }
+      const category = path.match(/^\/api\/papers\/(\d+)\/category$/)
+      if (category && request.method() === 'PUT') {
+        const id = Number(category[1])
+        const body = JSON.parse(request.postData() || '{}')
+        const row = records.find(item => item.id === id)
+        categoryPuts.push({ id, category: body.category ?? null })
+        if (row) {
+          if (body.category == null) {
+            row.paper_category_override = null
+            row.paper_category_source = row.paper_category_model ? 'model' : 'none'
+            row.paper_category = row.paper_category_model
+          } else {
+            row.paper_category_override = body.category
+            row.paper_category_source = 'manual'
+            row.paper_category = body.category
+          }
+        }
+        await json(route, row || { id, ...body })
+        return true
+      }
+      return false
+    })
+
+    const shotDir = process.env.KNOWRA_LIBRARY_CARD_EVIDENCE_DIR || join(root, 'tmp', 'library-card-visual')
+    await mkdir(shotDir, { recursive: true })
+
+    const inspectMenu = () => page.evaluate(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      const trigger = document.querySelector('[data-testid="paper-card-category-label"][aria-expanded="true"]')
+      if (!menu || !trigger) return { open: false }
+      const card = trigger.closest('[data-testid="paper-grid-card"], [data-testid="paper-list-row"]')
+      const menuBox = menu.getBoundingClientRect()
+      const triggerBox = trigger.getBoundingClientRect()
+      const cardBox = card ? card.getBoundingClientRect() : null
+      let clippedByAncestor = false
+      const overflowAncestors = []
+      let node = trigger.parentElement
+      while (node && node !== document.body && node !== document.documentElement) {
+        const cs = getComputedStyle(node)
+        if (/(auto|scroll|hidden|clip)/.test(`${cs.overflow}${cs.overflowX}${cs.overflowY}`)) {
+          overflowAncestors.push({
+            testid: node.getAttribute('data-testid'),
+            overflow: `${cs.overflow}/${cs.overflowX}/${cs.overflowY}`,
+            className: typeof node.className === 'string' ? node.className.slice(0, 120) : '',
+          })
+          if (node.contains(menu)) clippedByAncestor = true
+        }
+        node = node.parentElement
+      }
+      const hits = [...menu.querySelectorAll('[role="option"]')].map(option => {
+        const box = option.getBoundingClientRect()
+        const x = Math.min(Math.max(box.left + 12, menuBox.left + 4), menuBox.right - 4)
+        const y = box.top + box.height / 2
+        const inMenuViewport = y >= menuBox.top + 1 && y <= menuBox.bottom - 1 && y >= 1 && y <= window.innerHeight - 1
+        const hit = document.elementFromPoint(x, y)
+        let hitKind = 'none'
+        if (hit && option.contains(hit)) hitKind = 'option'
+        else if (hit?.closest('[data-testid="paper-grid-card"], [data-testid="paper-list-row"]')) hitKind = 'card'
+        else if (hit) hitKind = hit.getAttribute('data-testid') || hit.tagName
+        return { text: (option.textContent || '').trim(), inMenuViewport, hitKind, y }
+      })
+      return {
+        open: true,
+        position: getComputedStyle(menu).position,
+        parentIsBody: menu.parentElement === document.body,
+        clippedByAncestor,
+        overflowAncestors,
+        placement: menu.getAttribute('data-placement'),
+        menuBox: { top: menuBox.top, left: menuBox.left, right: menuBox.right, bottom: menuBox.bottom, height: menuBox.height, width: menuBox.width },
+        triggerBox: { top: triggerBox.top, bottom: triggerBox.bottom, left: triggerBox.left, right: triggerBox.right },
+        cardBox: cardBox ? { top: cardBox.top, bottom: cardBox.bottom } : null,
+        inViewport: menuBox.top >= -0.5 && menuBox.left >= -0.5 && menuBox.right <= window.innerWidth + 0.5 && menuBox.bottom <= window.innerHeight + 0.5,
+        hits,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      }
+    })
+
+    const assertMenuFree = (info, label) => {
+      assert.equal(info.open, true, `${label}: menu should be open`)
+      assert.equal(info.position, 'fixed', `${label}: expected fixed, got ${JSON.stringify(info)}`)
+      assert.equal(info.parentIsBody, true, `${label}: menu must be portaled to document.body ${JSON.stringify(info.overflowAncestors)}`)
+      assert.equal(info.clippedByAncestor, false, `${label}: menu is still inside an overflow ancestor ${JSON.stringify(info.overflowAncestors)}`)
+      assert.ok(info.inViewport, `${label}: menu leaves the viewport ${JSON.stringify(info.menuBox)} in ${JSON.stringify(info.viewport)}`)
+      assert.ok(info.overflowAncestors.length > 0, `${label}: fixture must include overflow ancestors, got ${JSON.stringify(info.overflowAncestors)}`)
+      const visibleHits = info.hits.filter(item => item.inMenuViewport)
+      assert.ok(visibleHits.length >= 2, `${label}: expected multiple visible options, got ${JSON.stringify(info.hits)}`)
+      const missed = visibleHits.filter(item => item.hitKind !== 'option')
+      assert.equal(missed.length, 0, `${label}: visible options were clipped or covered ${JSON.stringify(missed)} card=${JSON.stringify(info.cardBox)}`)
+      if (info.placement === 'bottom') {
+        assert.ok(info.menuBox.top >= info.triggerBox.bottom - 0.5, `${label}: bottom menu overlaps trigger ${JSON.stringify(info)}`)
+      } else {
+        assert.ok(info.menuBox.bottom <= info.triggerBox.top + 0.5, `${label}: top menu overlaps trigger ${JSON.stringify(info)}`)
+      }
+    }
+
+    const firstCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Menu overflow fixture 1' })
+    const lastCard = page.getByTestId('paper-grid-card').filter({ hasText: 'Menu overflow fixture 8' })
+    await expect(page.getByTestId('paper-grid-card')).toHaveCount(8)
+    await firstCard.getByTestId('paper-card-category-label').click()
+    const menu = page.getByTestId('paper-card-category-menu')
+    await expect(menu).toBeVisible()
+    await expect(menu.getByRole('option', { name: /跟随/ })).toBeVisible()
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      return menu && getComputedStyle(menu).visibility !== 'hidden' && menu.getBoundingClientRect().height > 8
+    })
+    const firstInfo = await inspectMenu()
+    assertMenuFree(firstInfo, 'grid first row')
+    let coveredBySibling = firstInfo.hits.filter(item => item.inMenuViewport && item.y > (firstInfo.cardBox?.bottom ?? 0) + 1)
+    if (coveredBySibling.length < 1) {
+      await page.keyboard.press('Escape')
+      await page.setViewportSize({ width: 980, height: 1100 })
+      await firstCard.getByTestId('paper-card-category-label').click()
+      await expect(menu).toBeVisible()
+      await page.waitForFunction(() => {
+        const node = document.querySelector('[data-testid="paper-card-category-menu"]')
+        return node && getComputedStyle(node).visibility !== 'hidden' && node.getBoundingClientRect().height > 8
+      })
+      const retryInfo = await inspectMenu()
+      assertMenuFree(retryInfo, 'grid first row after narrowing')
+      coveredBySibling = retryInfo.hits.filter(item => item.inMenuViewport && item.y > (retryInfo.cardBox?.bottom ?? 0) + 1)
+      firstInfo.hits = retryInfo.hits
+      firstInfo.cardBox = retryInfo.cardBox
+    }
+    assert.ok(coveredBySibling.length >= 1, `fixture should extend the menu past the first card onto a later row: ${JSON.stringify({ hits: firstInfo.hits, card: firstInfo.cardBox })}`)
+    await page.screenshot({ path: join(shotDir, 'category-menu-grid-first-row-open.png'), animations: 'disabled' })
+
+    await page.evaluate(() => {
+      const scroller = document.querySelector('.overflow-y-auto')
+      if (scroller) scroller.scrollTop += 36
+    })
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      const trigger = document.querySelector('[data-testid="paper-card-category-label"][aria-expanded="true"]')
+      if (!menu || !trigger) return false
+      const menuBox = menu.getBoundingClientRect()
+      const triggerBox = trigger.getBoundingClientRect()
+      const placement = menu.getAttribute('data-placement')
+      return placement === 'top'
+        ? Math.abs(menuBox.bottom - (triggerBox.top - 4)) <= 2
+        : Math.abs(menuBox.top - (triggerBox.bottom + 4)) <= 2
+    })
+    assertMenuFree(await inspectMenu(), 'grid after container scroll')
+
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await lastCard.scrollIntoViewIfNeeded()
+    await lastCard.getByTestId('paper-card-category-label').evaluate(node => {
+      const scroller = node.closest('.overflow-y-auto')
+      if (!scroller) return
+      const box = node.getBoundingClientRect()
+      scroller.scrollTop += box.bottom - (window.innerHeight - 36)
+    })
+    await lastCard.getByTestId('paper-card-category-label').click()
+    await expect(menu).toBeVisible()
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      return menu && getComputedStyle(menu).visibility !== 'hidden' && menu.getBoundingClientRect().height > 8
+    })
+    const lastInfo = await inspectMenu()
+    assertMenuFree(lastInfo, 'grid last row / viewport bottom')
+    assert.equal(lastInfo.placement, 'top', `last-row menu should flip up, got ${JSON.stringify(lastInfo)}`)
+    await page.screenshot({ path: join(shotDir, 'category-menu-grid-last-row-flipped.png'), animations: 'disabled' })
+
+    const lastOption = menu.getByRole('option', { name: longLastCategory, exact: true })
+    await lastOption.evaluate(node => node.scrollIntoView({ block: 'nearest' }))
+    await expect(lastOption).toBeVisible()
+    const lastOptionHit = await lastOption.evaluate(node => {
+      const box = node.getBoundingClientRect()
+      const hit = document.elementFromPoint(box.left + Math.min(12, box.width / 2), box.top + box.height / 2)
+      return { hit: !!(hit && node.contains(hit)), top: box.top, bottom: box.bottom, height: box.height }
+    })
+    assert.ok(lastOptionHit.hit, `scrolled last option is not clickable: ${JSON.stringify(lastOptionHit)}`)
+    await page.screenshot({ path: join(shotDir, 'category-menu-grid-long-list-scrolled.png'), animations: 'disabled' })
+    await lastOption.click()
+    await expect.poll(() => categoryPuts.length).toBe(1)
+    assert.equal(categoryPuts[0].id, 108)
+    assert.equal(categoryPuts[0].category, longLastCategory)
+    await expect(menu).toHaveCount(0)
+    await expect(lastCard.getByTestId('paper-card-category-label')).toHaveText(longLastCategory)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await lastCard.getByTestId('paper-card-category-label').click()
+    await expect(menu).toBeVisible()
+    await page.mouse.click(24, 24)
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await firstCard.scrollIntoViewIfNeeded()
+    await firstCard.getByTestId('paper-card-category-label').click()
+    await expect(menu).toBeVisible()
+    await menu.focus()
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => categoryPuts.length).toBe(2)
+    assert.equal(categoryPuts[1].id, 101)
+    assert.equal(categoryPuts[1].category, 'LLM')
+    await expect(firstCard.getByTestId('paper-card-category-label')).toHaveText('LLM')
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await firstCard.getByTestId('paper-card-category-label').click()
+    await menu.getByRole('option', { name: /跟随/ }).click()
+    await expect.poll(() => categoryPuts.length).toBe(3)
+    assert.equal(categoryPuts[2].category, null)
+    await expect(firstCard.getByTestId('paper-card-category-label')).toHaveText(/跟随/)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+
+    await page.setViewportSize({ width: 390, height: 800 })
+    await firstCard.scrollIntoViewIfNeeded()
+    await firstCard.getByTestId('paper-card-category-label').click()
+    await expect(menu).toBeVisible()
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      return menu && getComputedStyle(menu).visibility !== 'hidden' && menu.getBoundingClientRect().height > 8
+    })
+    const narrowInfo = await inspectMenu()
+    assertMenuFree(narrowInfo, '390px grid')
+    await page.screenshot({ path: join(shotDir, 'category-menu-grid-narrow-390.png'), animations: 'disabled' })
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+
+    await page.setViewportSize({ width: 1800, height: 1100 })
+    await page.getByTitle('列表视图').click()
+    await expect(page.getByTestId('paper-list-row')).toHaveCount(8)
+    const listRow = page.getByTestId('paper-list-row').filter({ hasText: 'Menu overflow fixture 8' })
+    await listRow.scrollIntoViewIfNeeded()
+    await listRow.getByTestId('paper-card-category-label').evaluate(node => {
+      const scroller = node.closest('.overflow-y-auto')
+      if (!scroller) return
+      const box = node.getBoundingClientRect()
+      scroller.scrollTop += box.bottom - (window.innerHeight - 36)
+    })
+    await listRow.getByTestId('paper-card-category-label').click()
+    await expect(menu).toBeVisible()
+    await page.waitForFunction(() => {
+      const menu = document.querySelector('[data-testid="paper-card-category-menu"]')
+      return menu && getComputedStyle(menu).visibility !== 'hidden' && menu.getBoundingClientRect().height > 8
+    })
+    const listInfo = await inspectMenu()
+    assertMenuFree(listInfo, 'list last row')
+    await page.screenshot({ path: join(shotDir, 'category-menu-list-open.png'), animations: 'disabled' })
+    await page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(page.getByTestId('opened-review')).toHaveText('')
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
@@ -1426,5 +1731,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 15 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 16 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

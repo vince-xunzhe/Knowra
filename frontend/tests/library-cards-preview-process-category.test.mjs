@@ -61,6 +61,8 @@ describe('library cards preview, process action and category', () => {
     const staticCopy = editor.includes('paper-card-category-label') && editor.includes('<p') && editor.includes('<select')
     assert.equal(staticCopy, false)
     assert.match(editor, /paper-card-category-control/)
+    assert.match(editor, /createPortal/)
+    assert.match(editor, /useAnchoredMenu/)
     const css = read('src/index.css')
     assert.match(css, /\.paper-card-category-control[\s\S]*font-size:\s*11px/)
   })
