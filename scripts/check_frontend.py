@@ -188,7 +188,7 @@ modules.syncBuiltinESMExports();
         "NODE_OPTIONS": "--require " + json.dumps(str(snapshot / "offline.cjs"), ensure_ascii=False),
     }
     commands = [
-        ("unit", [node, "--test", "tests/polling.test.mjs", "tests/domain-layout.test.mjs", "tests/domain-geometry.test.mjs", "tests/domain-layout-metrics.test.mjs", "tests/file-search-confirmation.test.mjs", "tests/extract-details-collapse.test.mjs", "tests/background-tasks-outside-dismiss.test.mjs", "tests/library-cards-preview-process-category.test.mjs", "tests/library-paper-delete.test.mjs", "tests/library-paper-category-editor.test.mjs", "tests/anchored-menu.test.mjs"]),
+        ("unit", [node, "--test", "tests/polling.test.mjs", "tests/domain-layout.test.mjs", "tests/domain-geometry.test.mjs", "tests/domain-layout-metrics.test.mjs", "tests/file-search-confirmation.test.mjs", "tests/extract-details-collapse.test.mjs", "tests/background-tasks-outside-dismiss.test.mjs", "tests/library-cards-preview-process-category.test.mjs", "tests/library-paper-delete.test.mjs", "tests/library-paper-category-editor.test.mjs", "tests/anchored-menu.test.mjs", "tests/library-delete-success-notice.test.mjs"]),
         ("types", [node, "node_modules/typescript/bin/tsc", "-b"]),
         ("build", [node, "build-check.mjs"]),
         ("lint", [node, "node_modules/eslint/bin/eslint.js", ".", "--max-warnings", "0", "--format", "json", "--output-file", "lint.json"]),

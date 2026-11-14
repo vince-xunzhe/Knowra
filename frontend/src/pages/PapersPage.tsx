@@ -24,6 +24,10 @@ import TaskNotice, { type TaskNoticeTone } from '../components/TaskNotice'
 import PaperProcessBadge from '../components/PaperProcessBadge'
 import { inferPaperProcessMeta, paperCardProcessAction, summarizePaperError } from '../components/paperProcessMeta'
 import { PAPER_CATEGORIES_CHANGED_EVENT } from '../lib/paperCategoryEvents'
+import {
+  createPaperDeleteSuccessNoticeController,
+  isCurrentDeleteSuccessNotice,
+} from './paperDeleteSuccessNotice'
 
 interface ProcStatus {
   running: boolean
@@ -69,6 +73,7 @@ interface ActionNotice {
   tone: TaskNoticeTone
   title: string
   detail?: string
+  autoDismissId?: number
 }
 
 interface PapersPageProps {
@@ -104,6 +109,11 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
   // edit the extraction prompt every visit; surface it on demand.
   const [promptOpen, setPromptOpen] = useState(false)
   const wasRunningRef = useRef(false)
+  const deleteSuccessNotice = useRef(createPaperDeleteSuccessNoticeController())
+
+  useEffect(() => () => {
+    deleteSuccessNotice.current.dispose()
+  }, [])
 
   const requestExtractConfirmation = useCallback(async (): Promise<FileSearchConfirmation | false | undefined> => {
     const decision = await confirmIfNeeded()
@@ -479,13 +489,16 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
         return next
       })
       setDeleteTarget(null)
-      setActionNotice({
-        tone: 'success',
-        title: result.already_deleted || result.status === 'already_deleted'
-          ? tr("论文已删除")
-          : tr("已永久删除「{0}」", { 0: target.title || target.filename }),
-        detail: tr("原始 PDF（若位于资料库管理目录内）及相关抽取、Wiki、索引和引用已移除。共用概念已保留，将在下次编译时更新。"),
-      })
+      deleteSuccessNotice.current.show(
+        {
+          title: result.already_deleted || result.status === 'already_deleted'
+            ? tr("论文已删除")
+            : tr("已永久删除「{0}」", { 0: target.title || target.filename }),
+          detail: tr("原始 PDF（若位于资料库管理目录内）及相关抽取、Wiki、索引和引用已移除。共用概念已保留，将在下次编译时更新。"),
+        },
+        setActionNotice,
+        id => setActionNotice(previous => isCurrentDeleteSuccessNotice(previous, id) ? null : previous),
+      )
     } catch (error) {
       setDeleteError(getErrorMessage(error) || tr("删除失败，请重试"))
     } finally {
@@ -609,6 +622,7 @@ export default function PapersPage({ onOpenReview }: PapersPageProps) {
                   title={actionNotice.title}
                   detail={actionNotice.detail}
                   className="max-w-md"
+                  testId={actionNotice.autoDismissId != null ? 'paper-delete-success-notice' : undefined}
                 />
               )}
               <div className="relative">

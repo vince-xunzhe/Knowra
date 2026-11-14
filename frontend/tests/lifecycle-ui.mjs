@@ -978,6 +978,10 @@ try {
     await expect(page.getByTestId('paper-delete-dialog')).toHaveCount(0)
     await expect(page.getByTestId('paper-grid-card').filter({ hasText: 'Delete-me library fixture' })).toHaveCount(0)
     await expect(page.getByTestId('paper-detail-delete')).toHaveCount(0)
+    const deleteSuccess = page.getByTestId('paper-delete-success-notice')
+    await expect(deleteSuccess).toBeVisible()
+    await expect(deleteSuccess).toContainText('已永久删除')
+    await expect(deleteSuccess).toContainText('Delete-me library fixture')
     await expect(kept).toBeVisible()
     await expect(page.getByTestId('opened-review')).toHaveText('')
 
