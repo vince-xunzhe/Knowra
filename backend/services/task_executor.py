@@ -85,8 +85,12 @@ def process_papers(ctx, payload):
             if requires_model:
                 ensure_file_search_execution_allowed(cfg)
                 preflight_task_runtime(cfg, 'paper_extract')
+        from services.paper_deletion_service import should_skip_deleted_paper
         for pid in ids:
             key = 'paper:' + str(pid)
+            if should_skip_deleted_paper(pid):
+                papers.processing_state['done'] += 1
+                continue
             if key in ctx.checkpoints:
                 papers.processing_state['done'] += 1
                 papers.processing_state['succeeded'] += 1
@@ -94,8 +98,8 @@ def process_papers(ctx, payload):
             def run_one():
                 with SessionLocal() as db:
                     paper = db.query(Paper).filter(Paper.id == pid).first()
-                    if not paper:
-                        raise ValueError('Paper no longer exists: ' + str(pid))
+                    if not paper or should_skip_deleted_paper(pid):
+                        return 'skipped-deleted'
                     if payload.get('force') and 'prepared:' + str(pid) not in ctx.checkpoints:
                         papers._prepare_reprocess(
                             db,
@@ -113,7 +117,9 @@ def process_papers(ctx, payload):
                     raise RuntimeError(papers.processing_state['failed_papers'][-1]['reason'])
                 return True
             try:
-                ctx.step(key, run_one)
+                result = ctx.step(key, run_one)
+                if result == 'skipped-deleted':
+                    papers.processing_state['done'] += 1
             except Exception as exc:
                 if not any(str(x['id']) == str(pid) for x in papers.processing_state['failed_papers']):
                     papers._record_unhandled_processing_failure(pid, exc)

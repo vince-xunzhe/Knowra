@@ -416,9 +416,34 @@ export const retryFailedPapers = (confirmation?: FileSearchConfirmation) =>
   ).then(r => r.data)
 export const reprocessPaper = (id: number | string, confirmation?: FileSearchConfirmation) =>
   api.post(`/papers/${id}/reprocess`, withFileSearchConfirmation(confirmation)).then(r => r.data)
+
+export interface PaperDeleteResult {
+  status: 'deleted' | 'already_deleted'
+  paper_id: string
+  title?: string | null
+  filename?: string | null
+  deleted?: Record<string, unknown>
+  retained?: Record<string, unknown>
+  stale_concepts?: Array<{ id: string; title?: string }>
+  warnings?: string[]
+  provider_cleanup?: {
+    attempted?: boolean
+    verified?: boolean
+    deleted?: unknown[]
+    errors?: unknown[]
+    skipped?: string[]
+  }
+  already_deleted?: boolean
+}
+
 let paperListRequest: Promise<PaperRecord[]> | null = null
 let cachedPapers: PaperRecord[] | null = null
 export const getCachedPapers = () => cachedPapers
+export const deletePaper = (id: number | string) =>
+  api.delete<PaperDeleteResult>(`/papers/${id}`).then(r => {
+    if (cachedPapers) cachedPapers = cachedPapers.filter(item => String(item.id) !== String(id))
+    return r.data
+  })
 export const listPapers = () => {
   // Share in-flight reads across pages and polling; never cache a rejected request.
   if (!paperListRequest) {
