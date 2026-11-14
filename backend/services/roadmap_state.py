@@ -59,6 +59,9 @@ def check(run_id):
         run = db.get(RoadmapRun, run_id)
         if not run or run.status != "pending":
             raise Cancelled()
+        from services.roadmap_category_cleanup import should_skip_deleted_roadmap_board
+        if should_skip_deleted_roadmap_board(run.board_id):
+            raise Cancelled()
 
 
 def fail_run(run_id, error):
@@ -79,6 +82,9 @@ def persist_preview(run_id, proposal, papers):
         begin_write(db)
         run = db.get(RoadmapRun, run_id)
         if not run or run.status != "pending":
+            raise Cancelled()
+        from services.roadmap_category_cleanup import should_skip_deleted_roadmap_board
+        if should_skip_deleted_roadmap_board(run.board_id):
             raise Cancelled()
         if board["id"] != run.board_id:
             raise ValueError("Research proposal changed its board")

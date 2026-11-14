@@ -38,6 +38,7 @@ from services.paper_category_service import (  # noqa: E402
     refresh_active_categories,
     rename_taxonomy_category,
     sync_paper_category_fields,
+    category_deletion_preview,
 )
 
 
@@ -86,13 +87,22 @@ class PaperCategoryTaxonomyTests(unittest.TestCase):
         self.db.refresh(paper)
         return paper
 
-    def _delete(self, name, target=None, delete_canvas=None):
+    def _delete(self, name, target=None, delete_canvas=None, **kwargs):
+        if "research_fingerprint" not in kwargs or "confirm_canvases" not in kwargs:
+            preview = category_deletion_preview(self.db, name)
+            if "research_fingerprint" not in kwargs and (
+                preview["papers"]["count"] or preview["research"]["count"] or (preview.get("canvases") or {}).get("count")
+            ):
+                kwargs["research_fingerprint"] = preview["fingerprint"]
+            if "confirm_canvases" not in kwargs and (preview.get("canvases") or {}).get("contentful_count"):
+                kwargs["confirm_canvases"] = True
         return delete_taxonomy_category(
             self.db,
             name,
             target,
             delete_canvas=delete_canvas or self.canvas_delete,
             sync_record=self.sync_record,
+            **kwargs,
         )
 
     def _rename(self, name, new_name, rename_canvas=None):
@@ -322,7 +332,12 @@ class PaperCategoryTaxonomyRouteTests(unittest.TestCase):
         self.assertIn("机器人", names)
         blocked = self.client.delete("/api/paper-categories/LLM")
         self.assertEqual(blocked.status_code, 400)
-        moved = self.client.delete("/api/paper-categories/LLM", params={"target": "VLM"})
+        preview = self.client.get("/api/paper-categories/LLM/deletion-preview")
+        self.assertEqual(preview.status_code, 200)
+        moved = self.client.delete(
+            "/api/paper-categories/LLM",
+            params={"target": "VLM", "research_fingerprint": preview.json()["fingerprint"]},
+        )
         self.assertEqual(moved.status_code, 200)
         names = [item["name"] for item in moved.json()["categories"]]
         self.assertNotIn("LLM", names)

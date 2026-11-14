@@ -26,6 +26,10 @@ _last_request = None
 logger = logging.getLogger(__name__)
 
 
+class CancelledImport(Exception):
+    pass
+
+
 def wait_for_arxiv_slot():
     """Respect arXiv's serial request cadence, including failed requests."""
     global _last_request
@@ -137,14 +141,17 @@ def download_arxiv(arxiv_id, directory):
             temporary.unlink(missing_ok=True)
 
 
-def import_paper(paper_id):
+def import_paper(paper_id, board_id=None):
     from config import load_config
     from path_utils import PAPERS_DIR, portable_data_path, resolve_papers_directory
     from sqlalchemy.exc import IntegrityError
 
     from services.paper_record_service import sync_record_from_paper
     from services.pdf_service import compute_hash
+    from services.roadmap_category_cleanup import should_skip_deleted_roadmap_board
 
+    if board_id and should_skip_deleted_roadmap_board(board_id):
+        raise CancelledImport()
     with SessionLocal() as db:
         catalog = db.get(RoadmapPaper, paper_id)
         if catalog is None:
@@ -158,8 +165,25 @@ def import_paper(paper_id):
             return {"status": "skipped", "libraryPaperId": str(existing.id)}
     cfg = load_config()
     directory = resolve_papers_directory(cfg.get("scan_directory") or str(PAPERS_DIR))
+    if board_id and should_skip_deleted_roadmap_board(board_id):
+        raise CancelledImport()
     downloaded = download_arxiv(aid, directory)
     digest = compute_hash(str(downloaded))
+    if board_id and should_skip_deleted_roadmap_board(board_id):
+        # If this download has not been adopted as a library paper, remove only
+        # the just-written managed file so a later directory scan cannot import it.
+        try:
+            from services.paper_deletion_service import is_managed_data_path
+            from path_utils import DATA_DIR
+            with SessionLocal() as db:
+                claimed = db.query(Paper).filter(
+                    (Paper.filepath == portable_data_path(downloaded)) | (Paper.file_hash == digest)
+                ).first()
+            if claimed is None and is_managed_data_path(Path(downloaded), DATA_DIR) and not Path(downloaded).is_symlink():
+                Path(downloaded).unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise CancelledImport()
     storage_path = portable_data_path(downloaded)
     with SessionLocal() as db:
         catalog = db.get(RoadmapPaper, paper_id)
@@ -206,7 +230,13 @@ def import_paper(paper_id):
 
 
 def import_board(ctx, payload):
+    from services.roadmap_category_cleanup import should_skip_deleted_roadmap_board
+
+    board_id = payload.get("board_id")
     ids = list(dict.fromkeys(payload["paper_ids"]))
+    if board_id and should_skip_deleted_roadmap_board(board_id):
+        return {"label": "技术方向已删除，已取消下载。", "total": len(ids), "done": 0,
+                "imported": 0, "skipped": 0, "failed": 0, "cancelled": True, "items": []}
     with SessionLocal() as db:
         rows = {p.id: deepcopy(p.data) for p in db.query(RoadmapPaper).filter(RoadmapPaper.id.in_(ids)).all()}
     items = [{"paperId": pid, "arxivId": rows.get(pid, {}).get("arxivId"),
@@ -231,11 +261,27 @@ def import_board(ctx, payload):
                 catalog = db.get(RoadmapPaper, pid)
                 exists = library_match(catalog, library_index(db)) if catalog else None
             checkpoint = "import:" + pid
+            if board_id and should_skip_deleted_roadmap_board(board_id):
+                item.update(status="failed", error="技术方向已删除，已取消下载。")
+                state["failed"] += 1
+                state["done"] += 1
+                state["label"] = "技术方向已删除，已取消后续下载。"
+                state["cancelled"] = True
+                publish()
+                break
             if exists is None:
                 ctx.checkpoints.pop(checkpoint, None)
-            result = ctx.step(checkpoint, lambda pid=pid: import_paper(pid))
+            result = ctx.step(checkpoint, lambda pid=pid, board_id=board_id: import_paper(pid, board_id=board_id))
             item.update(result)
             state[item["status"]] += 1
+        except CancelledImport:
+            item.update(status="failed", error="技术方向已删除，已取消下载。")
+            state["failed"] += 1
+            state["cancelled"] = True
+            state["label"] = "技术方向已删除，已取消后续下载。"
+            state["done"] += 1
+            publish()
+            break
         except Exception as exc:  # noqa: BLE001 - partial failures are recorded per downloaded paper
             item.update(status="failed", error=str(exc)[:1000])
             state["failed"] += 1

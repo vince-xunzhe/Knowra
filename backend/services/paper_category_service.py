@@ -207,10 +207,11 @@ def paper_category_source(paper: Any) -> str:
 class PaperCategoryEditError(Exception):
     """Authoritative taxonomy edit failure with an HTTP-like status code."""
 
-    def __init__(self, status_code: int, detail: str):
+    def __init__(self, status_code: int, detail: str, details: Optional[dict] = None):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+        self.details = details or {}
 
 
 def _parse_extraction(raw: Any) -> Optional[dict[str, Any]]:
@@ -428,6 +429,194 @@ def rename_taxonomy_category(
     return {"migrated": len(touched), "already_applied": False}
 
 
+def category_deletion_preview(db: Any, name: str, *, store=None) -> dict[str, Any]:
+    import hashlib
+    import json
+
+    from services.domain_categories import collect_category_domain_canvases
+    from services.roadmap_category_cleanup import collect_category_research
+
+    assigned = papers_assigned_to_category(db, name)
+    research = collect_category_research(db, name, store=store)
+    canvases = collect_category_domain_canvases(db, name)
+    payload = {
+        "category": name,
+        "paper_ids": sorted(str(getattr(paper, "id")) for paper in assigned),
+        "research_fingerprint": research["fingerprint"],
+        "research_board_ids": research.get("board_ids") or [],
+        "canvas_revision": canvases.get("revision"),
+        "canvas_boards": [
+            {
+                "board_id": item["board_id"],
+                "name": item["name"],
+                "nodes": item["nodes"],
+                "edges": item["edges"],
+                "contentful": item["contentful"],
+            }
+            for item in canvases.get("items") or []
+        ],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "name": name,
+        "exists": name in get_active_categories(),
+        "papers": {"count": len(assigned), "ids": payload["paper_ids"]},
+        "research": research,
+        "canvases": canvases,
+        "fingerprint": fingerprint,
+    }
+
+
+def _preview_has_associations(preview: dict[str, Any]) -> bool:
+    canvases = preview.get("canvases") or {}
+    return bool(
+        preview["research"]["count"]
+        or preview["papers"]["count"]
+        or canvases.get("count")
+    )
+
+
+def _require_deletion_fingerprint(preview: dict[str, Any], research_fingerprint: Optional[str]) -> None:
+    if _preview_has_associations(preview):
+        if research_fingerprint != preview["fingerprint"]:
+            raise PaperCategoryEditError(
+                409,
+                "大类关联的论文、识途调研或索骥画布已变化，请重新确认后再删除。不会静默扩大删除范围。",
+                details={"code": "research_changed", "preview": preview},
+            )
+
+
+def _research_plan_or_raise(
+    db: Any,
+    name: str,
+    *,
+    confirm_research: bool,
+    research_fingerprint: Optional[str],
+    store=None,
+) -> dict[str, Any]:
+    from services.roadmap_category_cleanup import RoadmapCleanupError, plan_category_research_cleanup
+
+    try:
+        return plan_category_research_cleanup(
+            db,
+            name,
+            confirm=confirm_research,
+            fingerprint=research_fingerprint,
+            store=store,
+        )
+    except RoadmapCleanupError as error:
+        details = {"code": error.code, **error.details}
+        if error.code in {"research_changed", "research_confirmation_required"}:
+            details["preview"] = category_deletion_preview(db, name, store=store)
+        status = 409 if error.code in {
+            "research_changed",
+            "research_confirmation_required",
+        } else 400
+        raise PaperCategoryEditError(status, error.args[0], details=details) from error
+
+
+def _finish_committed_cleanup(
+    db: Any,
+    *,
+    plan: dict[str, Any],
+    pending: Optional[dict[str, Any]],
+    store=None,
+    data_root=None,
+) -> dict[str, Any]:
+    from services.roadmap_category_cleanup import (
+        finish_pending_file_cleanup,
+        find_pending_cleanup_for_category,
+    )
+
+    record = pending
+    if record is None and plan.get("category"):
+        record = find_pending_cleanup_for_category(plan["category"], data_root=data_root)
+    if record is None:
+        return {
+            "cleanup_status": "complete",
+            "pending_cleanup": None,
+            "deleted_assets": [],
+            "skipped_assets": [],
+            "failed_assets": [],
+            "cancelled_jobs": [],
+            "warnings": plan.get("warnings") or [],
+            "retryable": False,
+        }
+    finished = finish_pending_file_cleanup(db, record, store=store, data_root=data_root)
+    warnings = list(plan.get("warnings") or []) + list(finished.get("warnings") or [])
+    finished["warnings"] = warnings
+    return finished
+
+
+def _commit_delete_and_cleanup(
+    db: Any,
+    *,
+    name: str,
+    plan: dict[str, Any],
+    store=None,
+    data_root=None,
+    after_prepare,
+    persist,
+) -> dict[str, Any]:
+    """Apply DB mutations, persist config, then unlink exclusive files.
+
+    Irreversible file cleanup runs only after canvas CAS, commit, and taxonomy
+    persistence succeed. A failed commit or canvas conflict leaves every
+    original report image in place. Tombstones written as late-write barriers
+    are removed if the transaction rolls back.
+    """
+    from services.roadmap_category_cleanup import (
+        apply_category_research_db,
+        build_pending_cleanup_record,
+        remove_pending_cleanup,
+        revert_research_barriers,
+        write_pending_cleanup,
+        write_research_barriers,
+    )
+
+    barriers: list = []
+    pending = None
+    pending_written = False
+    try:
+        barriers = write_research_barriers(plan, data_root=data_root)
+        apply_category_research_db(db, plan)
+        result = after_prepare()
+        pending = build_pending_cleanup_record(plan, category=name)
+        if pending is not None:
+            write_pending_cleanup(pending, data_root=data_root)
+            pending_written = True
+        db.commit()
+    except Exception:
+        db.rollback()
+        revert_research_barriers(barriers)
+        if pending_written and pending is not None:
+            remove_pending_cleanup(pending["id"], data_root=data_root)
+        raise
+
+    try:
+        persist()
+    except Exception:
+        # Category change is already committed. Keep tombstones and the
+        # pending file-cleanup record; do not delete any original images.
+        raise
+
+    finished = _finish_committed_cleanup(
+        db,
+        plan=plan,
+        pending=pending,
+        store=store,
+        data_root=data_root,
+    )
+    result = dict(result)
+    result["research"] = {**plan, **{k: finished[k] for k in finished}}
+    result["cleanup_status"] = finished["cleanup_status"]
+    result["pending_cleanup"] = finished.get("pending_cleanup")
+    result["warnings"] = finished.get("warnings") or []
+    return result
+
+
 def delete_taxonomy_category(
     db: Any,
     name: str,
@@ -435,6 +624,11 @@ def delete_taxonomy_category(
     *,
     delete_canvas,
     sync_record=None,
+    confirm_research: bool = False,
+    confirm_canvases: bool = False,
+    research_fingerprint: Optional[str] = None,
+    store=None,
+    data_root=None,
 ) -> dict[str, Any]:
     old = str(name or "")
     target_name = str(target or "").strip() or None
@@ -444,26 +638,79 @@ def delete_taxonomy_category(
 
     assigned = papers_assigned_to_category(db, old)
     alternatives = [item for item in active if item != old]
+    preview = category_deletion_preview(db, old, store=store)
+    canvases = preview.get("canvases") or {}
+    if preview["research"]["count"] and not confirm_research:
+        raise PaperCategoryEditError(
+            409,
+            "该大类关联了识途调研工作。请确认后一并删除调研结果及本地副本；取消则保留大类，本次不做任何修改。",
+            details={"code": "research_confirmation_required", "preview": preview},
+        )
+    if canvases.get("contentful_count") and not confirm_canvases:
+        raise PaperCategoryEditError(
+            409,
+            "该大类关联了有内容的索骥画布（可能含手工连线）。请确认后一并删除这些画布；取消则保留大类和画布。不会删除资料库论文。",
+            details={"code": "canvas_confirmation_required", "preview": preview},
+        )
 
-    if old not in active:
-        if not assigned:
-            return {"migrated": 0, "already_deleted": True}
-        if not target_name or target_name not in get_active_categories() or target_name == old:
-            raise PaperCategoryEditError(
-                409,
-                "分类已从列表移除，但仍有论文使用旧名称。请指定一个现有大类以完成转移。",
+    def _run(already_deleted: bool, destination: Optional[str], persist_list: list):
+        plan = _research_plan_or_raise(
+            db,
+            old,
+            confirm_research=confirm_research,
+            research_fingerprint=preview["research"]["fingerprint"] if confirm_research else research_fingerprint,
+            store=store,
+        )
+        plan["category"] = old
+
+        def after_prepare():
+            if already_deleted and not assigned:
+                delete_canvas(db, old)
+                return {"migrated": 0, "already_deleted": True}
+            delete_canvas(db, old)
+            touched = retarget_paper_categories(db, old, destination) if assigned else []
+            if sync_record:
+                # Defer until after successful commit via closure result.
+                pass
+            return {"migrated": len(touched), "already_deleted": already_deleted, "touched": touched}
+
+        def persist():
+            if already_deleted and not assigned:
+                return
+            persist_taxonomy(
+                persist_list,
+                redirect_category_name(get_category_redirects(), old, destination or PAPER_CATEGORY_OTHER),
             )
-        delete_canvas(db, old)
-        touched = retarget_paper_categories(db, old, target_name)
-        db.commit()
-        persist_taxonomy(
-            get_active_categories(),
-            redirect_category_name(get_category_redirects(), old, target_name),
+
+        result = _commit_delete_and_cleanup(
+            db,
+            name=old,
+            plan=plan,
+            store=store,
+            data_root=data_root,
+            after_prepare=after_prepare,
+            persist=persist,
         )
         if sync_record:
-            for paper in touched:
+            for paper in result.pop("touched", []) or []:
                 sync_record(paper, event="category_delete")
-        return {"migrated": len(touched), "already_deleted": True}
+        else:
+            result.pop("touched", None)
+        return result
+
+    if old not in active:
+        if assigned:
+            if not target_name or target_name not in get_active_categories() or target_name == old:
+                raise PaperCategoryEditError(
+                    409,
+                    "分类已从列表移除，但仍有论文使用旧名称。请指定一个现有大类以完成转移。",
+                )
+        _require_deletion_fingerprint(preview, research_fingerprint)
+        return _run(
+            True,
+            target_name,
+            get_active_categories(),
+        )
 
     if assigned:
         if not alternatives:
@@ -497,15 +744,21 @@ def delete_taxonomy_category(
         else:
             destination = PAPER_CATEGORY_OTHER
 
-    delete_canvas(db, old)
-    touched = retarget_paper_categories(db, old, destination) if assigned else []
-    db.commit()
-    persist_taxonomy(
-        [item for item in active if item != old],
-        redirect_category_name(get_category_redirects(), old, destination),
-    )
-    if sync_record:
-        for paper in touched:
-            sync_record(paper, event="category_delete")
-    return {"migrated": len(touched), "already_deleted": False}
+    _require_deletion_fingerprint(preview, research_fingerprint)
+    return _run(False, destination, [item for item in active if item != old])
 
+
+def retry_pending_category_cleanup(
+    db: Any,
+    cleanup_id: str,
+    *,
+    store=None,
+    data_root=None,
+) -> dict[str, Any]:
+    """Retry remaining local file cleanup only. Never repeats category or paper deletion."""
+    from services.roadmap_category_cleanup import finish_pending_file_cleanup, load_pending_cleanup
+
+    record = load_pending_cleanup(cleanup_id, data_root=data_root)
+    if record is None:
+        raise PaperCategoryEditError(404, "没有可重试的本地文件清理任务。")
+    return finish_pending_file_cleanup(db, record, store=store, data_root=data_root)
