@@ -157,6 +157,13 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: #8ea0b6;
 }
 
+/* Library card category trigger/menu. Unlayered so font-size wins over `button { font: inherit }`. */
+.paper-card-category-control,
+.paper-card-category-control button {
+  font-size: 11px;
+  line-height: 1.375;
+}
+
 .text-safe-wrap {
   overflow-wrap: anywhere;
   word-break: break-word;
