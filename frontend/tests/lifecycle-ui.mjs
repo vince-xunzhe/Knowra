@@ -1056,6 +1056,21 @@ try {
         await json(route, { categories })
         return true
       }
+      const previewPath = path.match(/^\/api\/paper-categories\/(.+)\/deletion-preview$/)
+      if (previewPath && request.method() === 'GET') {
+        const name = decodeURIComponent(previewPath[1])
+        const item = categories.find(entry => entry.name === name)
+        const paperCount = item?.count || 0
+        const fingerprint = `fp:${name}:${paperCount}`
+        await json(route, {
+          name,
+          exists: Boolean(item),
+          fingerprint,
+          papers: { count: paperCount },
+          research: { count: 0, fingerprint, items: [] },
+        })
+        return true
+      }
       const renamed = path.match(/^\/api\/paper-categories\/(.+)$/)
       if (renamed && request.method() === 'PUT') {
         const body = JSON.parse(request.postData() || '{}')
@@ -1070,7 +1085,12 @@ try {
       if (renamed && request.method() === 'DELETE') {
         const url = new URL(request.url())
         const target = url.searchParams.get('target')
-        deletes.push({ name: decodeURIComponent(renamed[1]), target })
+        deletes.push({
+          name: decodeURIComponent(renamed[1]),
+          target,
+          confirm_research: url.searchParams.get('confirm_research'),
+          research_fingerprint: url.searchParams.get('research_fingerprint'),
+        })
         const from = decodeURIComponent(renamed[1])
         const item = categories.find(entry => entry.name === from)
         if (item && item.count > 0 && !target) {
@@ -1140,11 +1160,13 @@ try {
     const deleteDialog = page.getByTestId('paper-category-delete-dialog')
     await expect(deleteDialog).toBeVisible()
     await expect(deleteDialog).toContainText('不会删除任何论文')
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
     await page.getByTestId('paper-category-delete-cancel').click()
     await expect(deleteDialog).toHaveCount(0)
     assert.equal(deletes.length, 0)
     await expect(page.getByTestId('paper-category-row-具身数据')).toBeVisible()
     await page.getByTestId('paper-category-delete-具身数据').click()
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
     await page.getByTestId('paper-category-delete-confirm').click()
     await expect.poll(() => deletes.length).toBe(1)
     assert.equal(deletes[0].name, '具身数据')
@@ -1162,6 +1184,146 @@ try {
     assert.equal(deletes[1].target, '视觉语言模型')
     await expect(page.getByTestId('paper-category-row-LLM')).toHaveCount(0)
   })
+
+  await test('Category delete lists 识途 research and refuses unconfirmed cleanup', async () => {
+    const categories = [
+      { name: 'LLM', builtin: true, removable: true, count: 1 },
+      { name: '具身智能数据', builtin: false, removable: true, count: 0 },
+      { name: '其他', builtin: true, removable: false, count: 0 },
+    ]
+    const records = [
+      {
+        id: 41, filename: 'llm.pdf', filepath: 'fixture/llm.pdf',
+        title: 'Category fixture LLM', authors: ['Ada'], num_pages: 2,
+        processed: true, processed_at: '2026-01-02T00:00:00', processing_status: 'completed', error: null,
+        paper_category: 'LLM', paper_category_model: 'LLM', paper_category_override: null,
+        paper_category_source: 'model', paper_team: null, paper_team_model: null, paper_team_override: null,
+        paper_team_source: 'none', learning_status: 'not_started', year: 2026, created_at: '2026-01-01',
+        has_first_page_image: false,
+      },
+    ]
+    const research = {
+      '具身智能数据': {
+        count: 1,
+        fingerprint: 'fp-research-v1',
+        items: [{
+          boardId: 'b-ego',
+          name: '具身智能数据 · ego',
+          keywords: ['ego数据'],
+          paperCards: 3,
+          runs: [{ id: 'run-ego', status: 'applied' }],
+          jobs: [],
+          willDelete: ['识途画布、关注关键词和该方向上的论文卡片布局'],
+          willRetain: ['资料库已入库论文及其原始 PDF'],
+        }],
+      },
+    }
+    const deletes = []
+    const page = await newPage('category-editor', async (route, path, request) => {
+      if (path === '/api/paper-categories' && request.method() === 'GET') {
+        await json(route, { categories })
+        return true
+      }
+      const previewPath = path.match(/^\/api\/paper-categories\/(.+)\/deletion-preview$/)
+      if (previewPath && request.method() === 'GET') {
+        const name = decodeURIComponent(previewPath[1])
+        const item = categories.find(entry => entry.name === name)
+        const paperCount = item?.count || 0
+        const entry = research[name] || { count: 0, fingerprint: `fp:${name}`, items: [] }
+        const fingerprint = `${entry.fingerprint}:${paperCount}`
+        await json(route, {
+          name,
+          exists: Boolean(item),
+          fingerprint,
+          papers: { count: paperCount },
+          research: { ...entry, fingerprint },
+        })
+        return true
+      }
+      const renamed = path.match(/^\/api\/paper-categories\/(.+)$/)
+      if (renamed && request.method() === 'DELETE') {
+        const url = new URL(request.url())
+        const from = decodeURIComponent(renamed[1])
+        const target = url.searchParams.get('target')
+        const confirm = url.searchParams.get('confirm_research')
+        const fingerprint = url.searchParams.get('research_fingerprint')
+        deletes.push({ name: from, target, confirm_research: confirm, research_fingerprint: fingerprint })
+        const current = research[from]
+        if (current?.count && confirm !== 'true') {
+          await json(route, { detail: { message: '请确认删除识途调研', code: 'research_confirmation_required' } }, 409)
+          return true
+        }
+        if (current?.count && fingerprint === 'fp-research-v1:0') {
+          current.fingerprint = 'fp-research-v2'
+          current.items = [{
+            ...current.items[0],
+            name: '具身智能数据 · ego 更新',
+            keywords: ['ego数据', '新增并发调研'],
+          }]
+          const item = categories.find(entry => entry.name === from)
+          const paperCount = item?.count || 0
+          const nextFingerprint = `${current.fingerprint}:${paperCount}`
+          await json(route, {
+            detail: {
+              message: '识途调研关联已变化',
+              code: 'research_changed',
+              preview: {
+                name: from,
+                exists: true,
+                fingerprint: nextFingerprint,
+                papers: { count: paperCount },
+                research: { ...current, fingerprint: nextFingerprint },
+              },
+            },
+          }, 409)
+          return true
+        }
+        const index = categories.findIndex(entry => entry.name === from)
+        if (index >= 0) categories.splice(index, 1)
+        if (target && records[0]?.paper_category === from) records[0].paper_category = target
+        await json(route, { categories, migrated: 0 })
+        return true
+      }
+      if (path === '/api/papers' && request.method() === 'GET') { await json(route, records); return true }
+      return false
+    })
+
+    await page.getByTestId('paper-category-editor').click()
+    await page.getByTestId('paper-category-delete-具身智能数据').click()
+    const dialog = page.getByTestId('paper-category-delete-dialog')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).not.toContainText('也没有识途调研')
+    await expect(page.getByTestId('paper-category-delete-research')).toBeVisible()
+    await expect(page.getByTestId('paper-category-delete-research-b-ego')).toContainText('具身智能数据 · ego')
+    await expect(page.getByTestId('paper-category-delete-research-b-ego')).toContainText('ego数据')
+    await expect(dialog).toContainText('将保留')
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeDisabled()
+    await page.getByTestId('paper-category-delete-cancel').click()
+    await expect(dialog).toHaveCount(0)
+    assert.equal(deletes.length, 0)
+    await expect(page.getByTestId('paper-category-row-具身智能数据')).toBeVisible()
+
+    await page.getByTestId('paper-category-delete-具身智能数据').click()
+    await expect(page.getByTestId('paper-category-delete-research-confirm')).toBeVisible()
+    await page.getByTestId('paper-category-delete-research-confirm').check()
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
+    await page.getByTestId('paper-category-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(1)
+    assert.equal(deletes[0].confirm_research, 'true')
+    await expect(page.getByTestId('paper-category-delete-research-b-ego')).toContainText('新增并发调研')
+    await expect(page.getByTestId('paper-category-delete-research-confirm')).not.toBeChecked()
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeDisabled()
+    await expect(page.getByTestId('paper-category-row-具身智能数据')).toBeVisible()
+
+    await page.getByTestId('paper-category-delete-research-confirm').check()
+    await expect(page.getByTestId('paper-category-delete-confirm')).toBeEnabled()
+    await page.getByTestId('paper-category-delete-confirm').click()
+    await expect.poll(() => deletes.length).toBe(2)
+    assert.equal(deletes[1].confirm_research, 'true')
+    assert.equal(deletes[1].research_fingerprint, 'fp-research-v2:0')
+    await expect(page.getByTestId('paper-category-row-具身智能数据')).toHaveCount(0)
+    await expect(page.getByTestId('paper-category-row-LLM')).toBeVisible()
+  })
 } catch (error) {
   console.error(error)
   process.exitCode = 1
@@ -1172,5 +1334,5 @@ try {
   // context.close() and server.close() must both finish to report success.
   const result = { tests, requests, violations, cleanupConfirmed }
   await writeFile(join(root, 'lifecycle-results.json'), JSON.stringify(result, null, 2) + '\n')
-  if (tests.length !== 13 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
+  if (tests.length !== 14 || tests.some(test => test.status !== 'passed') || violations.length || !cleanupConfirmed) process.exitCode = 1
 }

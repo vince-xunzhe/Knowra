@@ -498,11 +498,46 @@ export const renamePaperCategory = (name: string, newName: string) =>
       notifyPaperCategoriesChanged()
       return r.data
     })
-export const deletePaperCategory = (name: string, target?: string | null) =>
+export interface CategoryDeletionResearchItem {
+  boardId: string
+  name: string
+  keywords: string[]
+  paperCards: number
+  runs: { id: string; status: string; created?: string | null }[]
+  jobs: { job_id?: string; kind: string; status: string }[]
+  willDelete: string[]
+  willRetain: string[]
+}
+export interface CategoryDeletionPreview {
+  name: string
+  exists: boolean
+  fingerprint?: string
+  papers: { count: number }
+  research: {
+    count: number
+    fingerprint: string
+    items: CategoryDeletionResearchItem[]
+  }
+}
+export const previewPaperCategoryDeletion = (name: string) =>
+  api
+    .get<CategoryDeletionPreview>(`/paper-categories/${encodeURIComponent(name)}/deletion-preview`)
+    .then(r => r.data)
+export const deletePaperCategory = (
+  name: string,
+  target?: string | null,
+  options?: { confirmResearch?: boolean; researchFingerprint?: string | null },
+) =>
   api
     .delete<{ categories: PaperCategoryItem[]; migrated: number; already_deleted?: boolean }>(
       `/paper-categories/${encodeURIComponent(name)}`,
-      { params: target ? { target } : {} },
+      {
+        params: {
+          ...(target ? { target } : {}),
+          ...(options?.confirmResearch ? { confirm_research: true } : {}),
+          ...(options?.researchFingerprint ? { research_fingerprint: options.researchFingerprint } : {}),
+        },
+      },
     )
     .then(r => {
       notifyPaperCategoriesChanged()

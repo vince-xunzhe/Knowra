@@ -207,10 +207,11 @@ def paper_category_source(paper: Any) -> str:
 class PaperCategoryEditError(Exception):
     """Authoritative taxonomy edit failure with an HTTP-like status code."""
 
-    def __init__(self, status_code: int, detail: str):
+    def __init__(self, status_code: int, detail: str, details: Optional[dict] = None):
         super().__init__(detail)
         self.status_code = status_code
         self.detail = detail
+        self.details = details or {}
 
 
 def _parse_extraction(raw: Any) -> Optional[dict[str, Any]]:
@@ -428,6 +429,75 @@ def rename_taxonomy_category(
     return {"migrated": len(touched), "already_applied": False}
 
 
+def category_deletion_preview(db: Any, name: str, *, store=None) -> dict[str, Any]:
+    import hashlib
+    import json
+
+    from services.roadmap_category_cleanup import collect_category_research
+
+    assigned = papers_assigned_to_category(db, name)
+    research = collect_category_research(db, name, store=store)
+    payload = {
+        "category": name,
+        "paper_ids": sorted(str(getattr(paper, "id")) for paper in assigned),
+        "research_fingerprint": research["fingerprint"],
+        "research_board_ids": research.get("board_ids") or [],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "name": name,
+        "exists": name in get_active_categories(),
+        "papers": {"count": len(assigned), "ids": payload["paper_ids"]},
+        "research": research,
+        "fingerprint": fingerprint,
+    }
+
+
+def _require_deletion_fingerprint(preview: dict[str, Any], research_fingerprint: Optional[str]) -> None:
+    if preview["research"]["count"] or preview["papers"]["count"]:
+        if research_fingerprint != preview["fingerprint"]:
+            raise PaperCategoryEditError(
+                409,
+                "大类关联的论文或识途调研已变化，请重新确认后再删除。不会静默扩大删除范围。",
+                details={"code": "research_changed", "preview": preview},
+            )
+
+
+def _cleanup_research_or_raise(
+    db: Any,
+    name: str,
+    *,
+    confirm_research: bool,
+    research_fingerprint: Optional[str],
+    store=None,
+    data_root=None,
+) -> dict[str, Any]:
+    from services.roadmap_category_cleanup import RoadmapCleanupError, cleanup_category_research
+
+    try:
+        return cleanup_category_research(
+            db,
+            name,
+            confirm=confirm_research,
+            fingerprint=research_fingerprint,
+            store=store,
+            data_root=data_root,
+        )
+    except RoadmapCleanupError as error:
+        db.rollback()
+        details = {"code": error.code, **error.details}
+        if error.code in {"research_changed", "research_confirmation_required"}:
+            details["preview"] = category_deletion_preview(db, name, store=store)
+        status = 409 if error.code in {
+            "research_changed",
+            "research_confirmation_required",
+            "file_delete_failed",
+        } else 400
+        raise PaperCategoryEditError(status, error.args[0], details=details) from error
+
+
 def delete_taxonomy_category(
     db: Any,
     name: str,
@@ -435,6 +505,10 @@ def delete_taxonomy_category(
     *,
     delete_canvas,
     sync_record=None,
+    confirm_research: bool = False,
+    research_fingerprint: Optional[str] = None,
+    store=None,
+    data_root=None,
 ) -> dict[str, Any]:
     old = str(name or "")
     target_name = str(target or "").strip() or None
@@ -444,15 +518,34 @@ def delete_taxonomy_category(
 
     assigned = papers_assigned_to_category(db, old)
     alternatives = [item for item in active if item != old]
+    preview = category_deletion_preview(db, old, store=store)
+    if preview["research"]["count"] and not confirm_research:
+        raise PaperCategoryEditError(
+            409,
+            "该大类关联了识途调研工作。请确认后一并删除调研结果及本地副本；取消则保留大类，本次不做任何修改。",
+            details={"code": "research_confirmation_required", "preview": preview},
+        )
 
     if old not in active:
+        if assigned:
+            if not target_name or target_name not in get_active_categories() or target_name == old:
+                raise PaperCategoryEditError(
+                    409,
+                    "分类已从列表移除，但仍有论文使用旧名称。请指定一个现有大类以完成转移。",
+                )
+        _require_deletion_fingerprint(preview, research_fingerprint)
+        research = _cleanup_research_or_raise(
+            db,
+            old,
+            confirm_research=confirm_research,
+            research_fingerprint=preview["research"]["fingerprint"] if confirm_research else research_fingerprint,
+            store=store,
+            data_root=data_root,
+        )
         if not assigned:
-            return {"migrated": 0, "already_deleted": True}
-        if not target_name or target_name not in get_active_categories() or target_name == old:
-            raise PaperCategoryEditError(
-                409,
-                "分类已从列表移除，但仍有论文使用旧名称。请指定一个现有大类以完成转移。",
-            )
+            delete_canvas(db, old)
+            db.commit()
+            return {"migrated": 0, "already_deleted": True, "research": research}
         delete_canvas(db, old)
         touched = retarget_paper_categories(db, old, target_name)
         db.commit()
@@ -463,7 +556,7 @@ def delete_taxonomy_category(
         if sync_record:
             for paper in touched:
                 sync_record(paper, event="category_delete")
-        return {"migrated": len(touched), "already_deleted": True}
+        return {"migrated": len(touched), "already_deleted": True, "research": research}
 
     if assigned:
         if not alternatives:
@@ -497,6 +590,15 @@ def delete_taxonomy_category(
         else:
             destination = PAPER_CATEGORY_OTHER
 
+    _require_deletion_fingerprint(preview, research_fingerprint)
+    research = _cleanup_research_or_raise(
+        db,
+        old,
+        confirm_research=confirm_research,
+        research_fingerprint=preview["research"]["fingerprint"] if confirm_research else research_fingerprint,
+        store=store,
+        data_root=data_root,
+    )
     delete_canvas(db, old)
     touched = retarget_paper_categories(db, old, destination) if assigned else []
     db.commit()
@@ -507,5 +609,5 @@ def delete_taxonomy_category(
     if sync_record:
         for paper in touched:
             sync_record(paper, event="category_delete")
-    return {"migrated": len(touched), "already_deleted": False}
+    return {"migrated": len(touched), "already_deleted": False, "research": research}
 

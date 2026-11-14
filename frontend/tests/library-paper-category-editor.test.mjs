@@ -26,8 +26,13 @@ describe('knowledge paper category editor', () => {
 
   it('sends a transfer target when deleting an occupied paper category', () => {
     const client = read('src/api/client.ts')
-    assert.match(client, /export const deletePaperCategory = \(name: string, target\?: string \| null\)/)
-    assert.match(client, /params: target \? \{ target \} : \{\}/)
+    assert.match(client, /export const deletePaperCategory = \(/)
+    assert.match(client, /confirmResearch/)
+    assert.match(client, /researchFingerprint/)
+    assert.match(client, /confirm_research/)
+    assert.match(client, /research_fingerprint/)
+    assert.match(client, /previewPaperCategoryDeletion/)
+    assert.match(client, /deletion-preview/)
   })
 
   it('confirms rename with old and new names and does not treat category delete as paper delete', () => {
@@ -44,6 +49,18 @@ describe('knowledge paper category editor', () => {
     assert.match(composer, /role="dialog"/)
     assert.match(composer, /aria-modal="true"/)
     assert.match(composer, /PAPER_CATEGORIES_CHANGED_EVENT|notifyPaperCategoriesChanged|deletePaperCategory\(\s*deleteConfirm\.name/)
+  })
+
+  it('lists 识途 research in the delete preview and requires an explicit cleanup confirmation', () => {
+    const composer = read('src/components/CategoryComposer.tsx')
+    assert.match(composer, /previewPaperCategoryDeletion/)
+    assert.match(composer, /data-testid="paper-category-delete-research"/)
+    assert.match(composer, /data-testid="paper-category-delete-research-confirm"/)
+    assert.match(composer, /confirmResearch: researchCount > 0/)
+    assert.match(composer, /researchFingerprint: deletePreview\?\.research\.fingerprint/)
+    assert.match(composer, /也没有识途调研/)
+    assert.match(composer, /确认删除以上识途调研及其本地副本/)
+    assert.match(composer, /researchCount > 0 && !confirmResearch/)
   })
 
   it('reloads library and review category views when the taxonomy changes', () => {

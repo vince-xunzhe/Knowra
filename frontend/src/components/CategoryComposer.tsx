@@ -7,16 +7,27 @@ import {
 } from 'lucide-react'
 import {
   listPaperCategories, addPaperCategory, renamePaperCategory, deletePaperCategory,
-  bulkSetPaperCategory, listPapers,
-  type PaperCategoryItem, type PaperRecord,
+  previewPaperCategoryDeletion, bulkSetPaperCategory, listPapers,
+  type PaperCategoryItem, type PaperRecord, type CategoryDeletionPreview,
 } from '../api/client'
 
 // Sentinel for "follow the model" (clears the manual override).
 const INHERIT = '__inherit__'
 
 function apiErr(e: unknown): string {
-  const x = e as { response?: { data?: { detail?: string } }; message?: string }
-  return x?.response?.data?.detail || x?.message || String(e)
+  const x = e as { response?: { data?: { detail?: unknown } }; message?: string }
+  const detail = x?.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof (detail as { message?: unknown }).message === 'string') {
+    return (detail as { message: string }).message
+  }
+  return x?.message || String(e)
+}
+
+function previewFromError(e: unknown): CategoryDeletionPreview | null {
+  const detail = (e as { response?: { data?: { detail?: { preview?: CategoryDeletionPreview; research?: CategoryDeletionPreview['research'] } } } })?.response?.data?.detail
+  if (detail && typeof detail === 'object' && detail.preview?.research) return detail.preview
+  return null
 }
 
 /**
@@ -50,6 +61,8 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
   const [renameConfirm, setRenameConfirm] = useState<{ from: string; to: string } | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<{ name: string; count: number } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState('')
+  const [deletePreview, setDeletePreview] = useState<CategoryDeletionPreview | null>(null)
+  const [confirmResearch, setConfirmResearch] = useState(false)
 
   const reload = useCallback(async () => {
     const [c, p] = await Promise.all([listPaperCategories(), listPapers()])
@@ -327,7 +340,14 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                                 onClick={() => {
                                   const count = cat.count ?? grouped.get(cat.name)?.length ?? 0
                                   setDeleteTarget('')
+                                  setConfirmResearch(false)
+                                  setDeletePreview(null)
                                   setDeleteConfirm({ name: cat.name, count })
+                                  void runManage(`preview:${cat.name}`, async () => {
+                                    const preview = await previewPaperCategoryDeletion(cat.name)
+                                    setDeletePreview(preview)
+                                    setDeleteConfirm({ name: cat.name, count: preview.papers.count })
+                                  })
                                 }}
                                 title={tr("删除大类（不会删除论文；有论文时需先转移到其他大类）")}
                                 className="text-slate-500 hover:text-rose-300"
@@ -550,16 +570,25 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
       )}
       {deleteConfirm && (() => {
         const alternatives = cats.filter(item => item.name !== deleteConfirm.name)
-        const canDeleteEmpty = deleteConfirm.count === 0
-        const canMigrate = deleteConfirm.count > 0 && alternatives.length > 0 && Boolean(deleteTarget)
-        const blocked = deleteConfirm.count > 0 && alternatives.length === 0
-        const rowBusy = busy === `delete:${deleteConfirm.name}`
+        const paperCount = deletePreview?.papers.count ?? deleteConfirm.count
+        const researchCount = deletePreview?.research.count ?? 0
+        const canDeleteEmpty = paperCount === 0 && researchCount === 0
+        const canMigrate = paperCount > 0 && alternatives.length > 0 && Boolean(deleteTarget)
+        const blocked = paperCount > 0 && alternatives.length === 0
+        const researchBlocked = researchCount > 0 && !confirmResearch
+        const previewBusy = busy === `preview:${deleteConfirm.name}`
+        const rowBusy = busy === `delete:${deleteConfirm.name}` || previewBusy
         return (
           <div
             className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 px-4"
             data-testid="paper-category-delete-dialog-backdrop"
             onClick={event => {
-              if (event.target === event.currentTarget && !rowBusy) setDeleteConfirm(null)
+              if (event.target === event.currentTarget && !rowBusy) {
+                setDeleteConfirm(null)
+                setDeletePreview(null)
+                setConfirmResearch(false)
+                setDeleteTarget('')
+              }
             }}
           >
             <div
@@ -567,25 +596,30 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
               aria-modal="true"
               aria-labelledby="paper-category-delete-title"
               data-testid="paper-category-delete-dialog"
-              className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-black/50"
+              className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl shadow-black/50"
               onClick={event => event.stopPropagation()}
               onKeyDown={event => {
-                if (event.key === 'Escape' && !rowBusy) setDeleteConfirm(null)
+                if (event.key === 'Escape' && !rowBusy) {
+                  setDeleteConfirm(null)
+                  setDeletePreview(null)
+                  setConfirmResearch(false)
+                  setDeleteTarget('')
+                }
               }}
             >
               <h3 id="paper-category-delete-title" className="text-base font-semibold text-slate-100">
                 {tr("删除论文大类？")}
               </h3>
               <p className="mt-2 text-sm font-medium text-slate-200">{deleteConfirm.name}</p>
-              {canDeleteEmpty && (
+              {canDeleteEmpty && !previewBusy && (
                 <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                  {tr("该大类目前没有论文。确认后只删除这个大类，不会删除任何论文。")}
+                  {tr("该大类目前没有论文，也没有识途调研。确认后只删除这个大类，不会删除任何论文。")}
                 </p>
               )}
-              {deleteConfirm.count > 0 && !blocked && (
+              {paperCount > 0 && !blocked && (
                 <>
                   <p className="mt-2 text-sm leading-relaxed text-slate-400">
-                    {tr("该大类下有 {0} 篇论文。必须先选择另一个已有大类，确认转移后再删除。这不会删除论文，也不会自动创建新的目标大类。", { 0: deleteConfirm.count })}
+                    {tr("该大类下有 {0} 篇论文。必须先选择另一个已有大类，确认转移后再删除。这不会删除论文，也不会自动创建新的目标大类。", { 0: paperCount })}
                   </p>
                   <label className="mt-3 block text-xs text-slate-400" htmlFor="paper-category-delete-target">
                     {tr("论文转移到")}
@@ -609,12 +643,53 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                   {tr("没有其他可用大类。请先新增大类，再将论文转移后删除。不会擅自创建目标大类。")}
                 </p>
               )}
+              {previewBusy && (
+                <p className="mt-2 inline-flex items-center gap-2 text-sm text-slate-400">
+                  <Loader2 size={13} className="animate-spin" /> {tr("正在检查关联的识途调研…")}
+                </p>
+              )}
+              {researchCount > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2" data-testid="paper-category-delete-research">
+                  <p className="text-sm leading-relaxed text-amber-100">
+                    {tr("该大类还关联 {0} 项识途调研。确认删除后会一并清理这些调研的本地结果；取消则保留大类和调研。不会删除资料库已入库论文。", { 0: researchCount })}
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {deletePreview?.research.items.map(item => (
+                      <li key={item.boardId} className="text-[12px] leading-relaxed text-slate-200" data-testid={`paper-category-delete-research-${item.boardId}`}>
+                        <span className="font-medium">{item.name}</span>
+                        {item.keywords.length > 0 && (
+                          <span className="text-slate-400"> · {tr("关键词")} {item.keywords.join('、')}</span>
+                        )}
+                        <span className="text-slate-400"> · {tr("画布卡片")} {item.paperCards}</span>
+                        <ul className="mt-1 list-disc pl-4 text-[11px] text-slate-400">
+                          {item.willDelete.map(line => <li key={line}>{line}</li>)}
+                        </ul>
+                        <p className="mt-1 text-[11px] text-slate-500">{tr("将保留：")}{item.willRetain.join(tr("；"))}</p>
+                      </li>
+                    ))}
+                  </ul>
+                  <label className="mt-2 flex items-start gap-2 text-[12px] text-slate-100">
+                    <input
+                      type="checkbox"
+                      data-testid="paper-category-delete-research-confirm"
+                      checked={confirmResearch}
+                      onChange={e => setConfirmResearch(e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span>{tr("确认删除以上识途调研及其本地副本。不会迁移调研，也不会删除资料库论文。")}</span>
+                  </label>
+                </div>
+              )}
               <div className="mt-4 flex justify-end gap-2">
                 <button
                   type="button"
                   data-testid="paper-category-delete-cancel"
                   disabled={rowBusy}
-                  onClick={() => setDeleteConfirm(null)}
+                  onClick={() => {
+                    setDeleteConfirm(null)
+                    setDeletePreview(null)
+                    setConfirmResearch(false)
+                  }}
                   className="rounded-md px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 disabled:opacity-40"
                 >
                   {tr("取消")}
@@ -622,15 +697,30 @@ export default function CategoryComposer({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   data-testid="paper-category-delete-confirm"
-                  disabled={rowBusy || blocked || (deleteConfirm.count > 0 && !canMigrate)}
+                  disabled={rowBusy || blocked || researchBlocked || (paperCount > 0 && !canMigrate) || !deletePreview}
                   onClick={() =>
                     void runManage(`delete:${deleteConfirm.name}`, async () => {
-                      await deletePaperCategory(
-                        deleteConfirm.name,
-                        deleteConfirm.count > 0 ? deleteTarget : undefined,
-                      )
-                      setDeleteConfirm(null)
-                      setDeleteTarget('')
+                      try {
+                        await deletePaperCategory(
+                          deleteConfirm.name,
+                          paperCount > 0 ? deleteTarget : undefined,
+                          {
+                            confirmResearch: researchCount > 0,
+                            researchFingerprint: deletePreview?.research.fingerprint,
+                          },
+                        )
+                        setDeleteConfirm(null)
+                        setDeleteTarget('')
+                        setConfirmResearch(false)
+                        setDeletePreview(null)
+                      } catch (error) {
+                        const next = previewFromError(error)
+                        if (next) {
+                          setDeletePreview(next)
+                          setConfirmResearch(false)
+                        }
+                        throw error
+                      }
                     })
                   }
                   className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:bg-rose-900 disabled:text-rose-200"
